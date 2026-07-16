@@ -64,9 +64,10 @@ fmt_duration() { # seconds -> "6m12s" | "42s"
 #   2. sha7 • commit subject • duration
 #   3. pulse (deploy #N • M days stable) or next action on failure
 # Pulse counters come ONLY from deploys.log.
-render_card() { # render_card <kind> <app> <sha7> <duration> <subject> <extra>
-  local kind=$1 app=$2 sha7=$3 duration=$4 subject=$5 extra=$6
-  local line1 line2 line3
+render_card() { # render_card <kind> <app> <sha7> <duration> <subject> <extra> [reason]
+  local kind=$1 app=$2 sha7=$3 duration=$4 subject=$5 extra=$6 reason=${7:-}
+  local line1 line2 line3 cname
+  cname=$(app_container "$app"); cname=${cname:-$app}   # fallback: container may be gone
   line2="${sha7} • ${subject:-no commit subject} • ${duration}"
   case "$kind" in
     ok)
@@ -74,11 +75,15 @@ render_card() { # render_card <kind> <app> <sha7> <duration> <subject> <extra>
       line3="$(render_pulse "$app")"
       ;;
     rollback)
-      line1="⏪ ${app} rolled back to ${extra}"
-      line3="$(printf "$S_CARD_FAIL_HINT" "$(app_container "$app")")"
+      line1="⏪ ${app} rolled back to ${extra}${reason:+ — ${reason}}"
+      line3="$(printf "$S_CARD_FAIL_HINT" "$cname")"
+      ;;
+    rollback-fail)
+      line1="❌ ${app} health failed${reason:+ (${reason})} and rollback to ${extra} failed too"
+      line3="$(printf "$S_CARD_FAIL_HINT" "$cname")"
       ;;
     first-fail)
-      line1="❌ ${app} first deploy failed — app stopped"
+      line1="❌ ${app} first deploy failed — app stopped${reason:+ — ${reason}}"
       line3="$(printf "$S_CARD_FIRST_FAIL_HINT" "$(basename "$(app_dir "$app")")")"
       ;;
   esac
@@ -87,7 +92,8 @@ render_card() { # render_card <kind> <app> <sha7> <duration> <subject> <extra>
 
 render_pulse() { # deploy counter + days since last fail/rollback, from deploys.log only
   local app=$1 n last_bad_ts days
-  n=$(grep -c "] ${app}@[0-9a-f]* deploy " "$LOG_FILE" 2>/dev/null || true)
+  # count successful deploys only: "Deploy #5" must not include failed attempts
+  n=$(grep -c "] ${app}@[0-9a-f]* deploy ok " "$LOG_FILE" 2>/dev/null || true)
   if (( n <= 1 )); then printf 'First deploy'; return; fi
   last_bad_ts=$(grep -E "] ${app}@[0-9a-f]+ (deploy|rollback) (fail|ok)" "$LOG_FILE" \
     | grep -E ' (deploy fail|rollback ok)' | tail -1 | sed -E 's/^\[([^]]+)\].*/\1/' || true)
@@ -101,14 +107,16 @@ render_pulse() { # deploy counter + days since last fail/rollback, from deploys.
 
 send_card() { # send_card <app> <text>; logs `notify ok|skip|fail` to the journal
   local app=$1 text=$2 resp
-  if [ ! -f "$TELEGRAM_ENV" ]; then
-    log_line "$app" "-" notify skip 0
-    return 0
-  fi
   local TG_TOKEN="" TG_CHAT_ID=""
-  TG_TOKEN=$(awk -F= '$1=="TG_TOKEN"{print substr($0, index($0,"=")+1)}' "$TELEGRAM_ENV")
-  TG_CHAT_ID=$(awk -F= '$1=="TG_CHAT_ID"{print substr($0, index($0,"=")+1)}' "$TELEGRAM_ENV")
+  if [ -f "$TELEGRAM_ENV" ]; then
+    TG_TOKEN=$(awk -F= '$1=="TG_TOKEN"{print substr($0, index($0,"=")+1)}' "$TELEGRAM_ENV")
+    TG_CHAT_ID=$(awk -F= '$1=="TG_CHAT_ID"{print substr($0, index($0,"=")+1)}' "$TELEGRAM_ENV")
+  fi
   if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHAT_ID" ]; then
+    # no credentials yet: keep the rendered card on record so the exact text
+    # of every card is verifiable even before delivery is enabled
+    printf '[%s] %s skipped (no telegram.env), rendered card:\n%s\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$app" "$text" >> "$TELEGRAM_LOG"
     log_line "$app" "-" notify skip 0
     return 0
   fi
@@ -230,7 +238,11 @@ cmd_deploy() {
     t_end=$(date -u +%s)
     duration_s=$(( t_end - ${start:-$t0} ))
     duration=$(fmt_duration "$duration_s")
-    state_set "$dir" "$tag" "${prev:-}"
+    # idempotent redeploy of the same sha must NOT move the rollback target
+    # (an evaluator rerun once collapsed current==previous, losing the target)
+    if [ "${prev:-}" != "$tag" ]; then
+      state_set "$dir" "$tag" "${prev:-}"
+    fi
     log_line "$app" "$sha7" deploy ok "$(( t_end - t0 ))"
     echo "$S_HEALTH_OK — ${app}@${sha7} live (${duration})"
     send_card "$app" "$(render_card ok "$app" "$sha7" "$duration" "$subject" "")"
@@ -240,6 +252,11 @@ cmd_deploy() {
   # health gate failed
   t_end=$(date -u +%s)
   duration=$(fmt_duration $(( t_end - ${start:-$t0} )))
+  local reason
+  case "$profile" in
+    bot) reason="container unhealthy (functional healthcheck)" ;;
+    *)   reason="no HTTP 200 on :${port}${path} within ${HEALTH_TIMEOUT}s" ;;
+  esac
   log_line "$app" "$sha7" deploy fail "$(( t_end - t0 ))"
   echo "$S_HEALTH_FAIL" >&2
 
@@ -250,15 +267,16 @@ cmd_deploy() {
     if health_gate "$profile" "$port" "$path"; then
       log_line "$app" "$prev7" rollback ok "$(( $(date -u +%s) - t_end ))"
       echo "$S_ROLLED_BACK (${prev7})" >&2
+      send_card "$app" "$(render_card rollback "$app" "$sha7" "$duration" "$subject" "$prev7" "$reason")"
     else
       log_line "$app" "$prev7" rollback fail "$(( $(date -u +%s) - t_end ))"
+      send_card "$app" "$(render_card rollback-fail "$app" "$sha7" "$duration" "$subject" "$prev7" "$reason")"
     fi
-    send_card "$app" "$(render_card rollback "$app" "$sha7" "$duration" "$subject" "$prev7")"
   else
     docker compose -f "$dir/docker-compose.yml" stop app >/dev/null 2>&1 || true
     log_line "$app" "$sha7" stop ok 0
     echo "$S_FIRST_FAIL" >&2
-    send_card "$app" "$(render_card first-fail "$app" "$sha7" "$duration" "$subject" "")"
+    send_card "$app" "$(render_card first-fail "$app" "$sha7" "$duration" "$subject" "" "$reason")"
   fi
   exit 1
 }
@@ -282,7 +300,9 @@ cmd_rollback() {
   compose_up "$dir" "${image}:${tag}"
   if health_gate "$profile" "$port" "$path"; then
     local cur; cur=$(state_get "$dir" current)
-    state_set "$dir" "$tag" "${cur:-}"
+    if [ "${cur:-}" != "$tag" ]; then
+      state_set "$dir" "$tag" "${cur:-}"
+    fi
     log_line "$app" "$sha7" rollback ok "$(( $(date -u +%s) - t0 ))"
     echo "$S_ROLLED_BACK (${sha7})"
   else
