@@ -1,0 +1,16 @@
+# /opt/<app>/app.conf — read by the deploy runner on every deploy.
+# Written by onboard.sh; edit by hand only if you know why.
+#
+# profile: how the health gate decides the app is alive
+#   static  — nginx/file server; gate = curl on 127.0.0.1:<port><health_path>
+#   service — HTTP backend;      gate = same curl (use a real health endpoint)
+#   bot     — no ports;          gate = the container's own healthcheck
+#             (functional, e.g. Telegram getMe) must report "healthy"
+# port: host port bound to 127.0.0.1 (static/service only; bots have none)
+# health_path: URL path the gate curls (static/service only)
+# image: GHCR image (no tag; the runner appends :sha-<commit>)
+
+profile=static
+port=9001
+health_path=/
+image=ghcr.io/dreamsarereal/portfolio
