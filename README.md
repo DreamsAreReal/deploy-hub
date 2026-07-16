@@ -83,7 +83,9 @@ Profile comes from `app.conf`:
 - `static`/`service` — `curl` on `127.0.0.1:<port><health_path>` from the VPS,
   up to 90 s;
 - `bot` — the container's own healthcheck (functional: Telegram `getMe` with
-  the app token) must report `healthy`.
+  the app token) must report `healthy`. A ready-made `getMe` block ships
+  commented out in `server/compose-template.yml`: put `BOT_TOKEN` into
+  `/opt/<app>/.env`, uncomment the block, make sure the image has wget/curl.
 
 Gate failed → redeploy the previous sha and send a ⏪ card. No previous sha
 (first deploy) → stop the app, send a ❌ card; other apps are not touched.

@@ -21,6 +21,16 @@ services:
       - "127.0.0.1:__PORT__:__CPORT__"   # bot profile: delete the ports block
     # app secrets, chmod 600, never in git; delete if the app has none
     # env_file: .env
+    # bot profile: the health gate trusts this healthcheck, so it must verify
+    # REAL work, not "process is up" — e.g. Telegram getMe with the app token
+    # from .env ($$ keeps the variable for the container, not for compose).
+    # Requires wget or curl inside the image.
+    # healthcheck:
+    #   test: ["CMD-SHELL", "wget -qO- https://api.telegram.org/bot$${BOT_TOKEN}/getMe | grep -q '\"ok\":true'"]
+    #   interval: 30s
+    #   timeout: 10s
+    #   retries: 3
+    #   start_period: 10s
     logging:
       driver: json-file
       options:

@@ -65,7 +65,12 @@ jobs:
           OWNER="$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
           IMAGE="ghcr.io/${OWNER}/${APP}"
           TAG="sha-${GITHUB_SHA}"
-          docker build -t "$IMAGE:$TAG" -t "$IMAGE:latest" .
+          # GIT_SHA/BUILD_TIME serve Dockerfiles that declare these ARGs
+          # (version-stamped pages); harmless for those that do not
+          docker build \
+            --build-arg GIT_SHA="$GITHUB_SHA" \
+            --build-arg BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -t "$IMAGE:$TAG" -t "$IMAGE:latest" .
           docker push "$IMAGE:$TAG"
           docker push "$IMAGE:latest"
 
