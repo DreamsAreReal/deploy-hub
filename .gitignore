@@ -1,0 +1,5 @@
+# local hub config (Telegram credentials for onboard.sh) — never in git
+.env-hub
+# keys
+*.pem
+id_*

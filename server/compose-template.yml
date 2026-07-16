@@ -1,0 +1,28 @@
+# Per-app compose template. A rendered copy lives in /opt/<app>/docker-compose.yml.
+# Placeholders (__NAME__, __PORT__, __CPORT__, __MEM_LIMIT__) are filled by
+# onboard.sh (F3); until then rendered by hand.
+#
+# Invariants (do not weaken):
+# - ports bind to 127.0.0.1 ONLY: docker publishes 0.0.0.0 straight past UFW
+#   (proven on this VPS); bot-profile apps have no ports at all
+# - mem_limit is mandatory: 961 MiB total RAM, the VPN must survive any app
+# - log rotation is mandatory: disk is at 69%
+# - restart: unless-stopped: apps must come back after a reboot
+#
+# DEPLOY_IMAGE is set by the deploy runner (image:sha-tag); the current value
+# is persisted in /opt/<app>/.deploy-state.
+services:
+  app:
+    image: ${DEPLOY_IMAGE:?set by deploy runner, see /opt/<app>/.deploy-state}
+    container_name: __NAME__
+    restart: unless-stopped
+    mem_limit: __MEM_LIMIT__
+    ports:
+      - "127.0.0.1:__PORT__:__CPORT__"   # bot profile: delete the ports block
+    # app secrets, chmod 600, never in git; delete if the app has none
+    # env_file: .env
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

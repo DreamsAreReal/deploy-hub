@@ -1,0 +1,112 @@
+# Reusable deploy workflow: build image in CI, push to GHCR, trigger the
+# deploy runner on the VPS over SSH (forced-command key, see server/runner.sh).
+#
+# Caller stub (in the app repo) is ~8 lines:
+#
+#   on:
+#     push: {branches: [main]}
+#   permissions: {contents: read, packages: write}
+#   jobs:
+#     deploy:
+#       uses: DreamsAreReal/deploy-hub/.github/workflows/deploy.yml@main
+#       with: {app: myapp}
+#       secrets: inherit
+#
+# Required caller secrets: VPS_SSH_KEY (deploy key private part).
+# Optional: TG_TOKEN, TG_CHAT_ID (CI-side failure card; the runner sends
+# success/rollback cards itself from the VPS).
+
+name: deploy
+
+on:
+  workflow_call:
+    inputs:
+      app:
+        description: App name, must match a line in /opt/deploy-hub/apps.list on the VPS
+        required: true
+        type: string
+
+env:
+  VPS_HOST: 192.3.94.42
+  VPS_USER: deploy
+  # Public host key of the VPS, pinned (not a secret; protects against MITM).
+  VPS_HOST_KEY: 192.3.94.42 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAF9Gn795UXl0G01WWVsfcCqvBPEIs/bwX7cAU1DEQoi
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate app name
+        env:
+          APP: ${{ inputs.app }}
+        run: |
+          # App name feeds shell commands and the image path: keep it strict.
+          echo "$APP" | grep -Eq '^[a-z0-9][a-z0-9._-]{0,40}$' \
+            || { echo "invalid app name: $APP"; exit 1; }
+
+      - name: Record start time
+        id: start
+        run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        env:
+          APP: ${{ inputs.app }}
+        run: |
+          OWNER="$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+          IMAGE="ghcr.io/${OWNER}/${APP}"
+          TAG="sha-${GITHUB_SHA}"
+          docker build -t "$IMAGE:$TAG" -t "$IMAGE:latest" .
+          docker push "$IMAGE:$TAG"
+          docker push "$IMAGE:latest"
+
+      - name: Deploy on VPS
+        env:
+          APP: ${{ inputs.app }}
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          START_EPOCH: ${{ steps.start.outputs.epoch }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$VPS_HOST_KEY" >> ~/.ssh/known_hosts
+          SUBJECT="$(git log -1 --pretty=%s | tr -d '\r\n' | cut -c1-120)"
+          # Runner protocol: command carries only verb+app+tag; everything else
+          # (ephemeral GITHUB_TOKEN for GHCR pull, metadata) goes via stdin so
+          # it never appears in argv, shell history or the SSH command string.
+          {
+            printf 'token=%s\n' "$GH_TOKEN"
+            printf 'actor=%s\n'  "$ACTOR"
+            printf 'subject=%s\n' "$SUBJECT"
+            printf 'start=%s\n'  "$START_EPOCH"
+          } | ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes \
+                "$VPS_USER@$VPS_HOST" "deploy $APP sha-${GITHUB_SHA}"
+
+      - name: Failure card (CI side)
+        # The runner reports deploys that reached the VPS; this catches
+        # build/push/ssh failures that never got there. Skips silently when
+        # TG secrets are not configured.
+        if: failure()
+        env:
+          APP: ${{ inputs.app }}
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          [ -n "$TG_TOKEN" ] && [ -n "$TG_CHAT_ID" ] || { echo "TG secrets not set, skipping card"; exit 0; }
+          SHA7="$(echo "$GITHUB_SHA" | cut -c1-7)"
+          TEXT="$(printf '❌ %s CI failed before deploy\n%s • see Actions log\n%s' "$APP" "$SHA7" "$RUN_URL")"
+          curl -sS -m 10 "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TG_CHAT_ID}" \
+            --data-urlencode "text=${TEXT}" >/dev/null || true

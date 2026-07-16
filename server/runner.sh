@@ -1,0 +1,354 @@
+#!/bin/bash
+# deploy-hub runner — the single SSH entry point on the VPS.
+#
+# Installed as the forced command of the `deploy` user
+# (authorized_keys: command="/opt/deploy-hub/bin/runner.sh",no-pty,...),
+# so whatever the client asks for lands in $SSH_ORIGINAL_COMMAND and is
+# dispatched here. Anything that is not a known verb is refused.
+#
+# Verbs:
+#   deploy <app> <tag>     pull image, restart the app container, health-gate,
+#                          rollback on failure; metadata comes on stdin
+#   rollback <app> [tag]   redeploy the previous (or given) sha
+#   status                 one line per app: app | sha | health | last deploy
+#
+# stdin protocol for `deploy` (key=value lines; keeps the ephemeral
+# GITHUB_TOKEN out of argv and logs):
+#   token=<GITHUB_TOKEN>   required for GHCR pull (docker login -> pull -> logout)
+#   actor=<github login>   docker login username
+#   subject=<commit line>  first line of the commit message, for the card
+#   start=<epoch seconds>  workflow start, for full push->healthy duration
+#
+# App registry: /opt/deploy-hub/apps.list, one app per line: `<app> <dir>`
+# (dir defaults to /opt/<app>; the pilot lives in /opt/portfolio-new).
+# Per-app config: <dir>/app.conf with profile=, port=, health_path=, image=.
+set -euo pipefail
+
+HUB_DIR="${HUB_DIR:-/opt/deploy-hub}"   # overridable for tests
+APPS_LIST="$HUB_DIR/apps.list"
+LOG_FILE="$HUB_DIR/deploys.log"
+LOCK_FILE="$HUB_DIR/deploy.lock"
+TELEGRAM_ENV="$HUB_DIR/telegram.env"   # optional: TG_TOKEN=, TG_CHAT_ID= (600, owner deploy)
+TELEGRAM_LOG="$HUB_DIR/telegram.log"
+REGISTRY=ghcr.io
+HEALTH_TIMEOUT=90      # seconds; contract: never below 60 (guardrail from the brief)
+HEALTH_INTERVAL=5
+LOCK_WAIT=600          # a deploy behind a slow one waits up to 10 min
+
+# --- user-facing strings (en) -------------------------------------------------
+S_REFUSED="refused: only 'deploy <app> <tag>', 'rollback <app> [tag]', 'status' are accepted"
+S_UNKNOWN_APP="refused: app not in allowlist"
+S_BAD_TAG="refused: tag must match ^sha-[0-9a-f]{7,40}\$"
+S_NO_CONF="error: app.conf not found for app"
+S_LOCK_BUSY="error: another deploy holds the lock (waited ${LOCK_WAIT}s)"
+S_PULL_FAIL="error: image pull failed"
+S_HEALTH_OK="health: ok"
+S_HEALTH_FAIL="health: no HTTP 200 within ${HEALTH_TIMEOUT}s"
+S_ROLLED_BACK="rolled back to previous sha"
+S_FIRST_FAIL="first deploy failed, app stopped (no rollback target)"
+S_CARD_FIRST_FAIL_HINT="Check /opt/%s/.env and app logs, then push a fix"
+S_CARD_FAIL_HINT="Run: ssh vpn 'docker logs %s --tail 50'"
+
+log_line() { # log_line <app> <sha7> <action> <result> <duration_s>
+  printf '[%s] %s@%s %s %s %ss\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" "$3" "$4" "$5" >> "$LOG_FILE"
+}
+
+fmt_duration() { # seconds -> "6m12s" | "42s"
+  local s=$1
+  if (( s >= 60 )); then printf '%dm%02ds' $((s / 60)) $((s % 60)); else printf '%ds' "$s"; fi
+}
+
+# --- Telegram card (signature element) ----------------------------------------
+# Single render point: tournament winner "system pulse", 3 lines:
+#   1. status emoji + app + outcome
+#   2. sha7 • commit subject • duration
+#   3. pulse (deploy #N • M days stable) or next action on failure
+# Pulse counters come ONLY from deploys.log.
+render_card() { # render_card <kind> <app> <sha7> <duration> <subject> <extra>
+  local kind=$1 app=$2 sha7=$3 duration=$4 subject=$5 extra=$6
+  local line1 line2 line3
+  line2="${sha7} • ${subject:-no commit subject} • ${duration}"
+  case "$kind" in
+    ok)
+      line1="✅ ${app} live"
+      line3="$(render_pulse "$app")"
+      ;;
+    rollback)
+      line1="⏪ ${app} rolled back to ${extra}"
+      line3="$(printf "$S_CARD_FAIL_HINT" "$(app_container "$app")")"
+      ;;
+    first-fail)
+      line1="❌ ${app} first deploy failed — app stopped"
+      line3="$(printf "$S_CARD_FIRST_FAIL_HINT" "$(basename "$(app_dir "$app")")")"
+      ;;
+  esac
+  printf '%s\n%s\n%s' "$line1" "$line2" "$line3"
+}
+
+render_pulse() { # deploy counter + days since last fail/rollback, from deploys.log only
+  local app=$1 n last_bad_ts days
+  n=$(grep -c "] ${app}@[0-9a-f]* deploy " "$LOG_FILE" 2>/dev/null || true)
+  if (( n <= 1 )); then printf 'First deploy'; return; fi
+  last_bad_ts=$(grep -E "] ${app}@[0-9a-f]+ (deploy|rollback) (fail|ok)" "$LOG_FILE" \
+    | grep -E ' (deploy fail|rollback ok)' | tail -1 | sed -E 's/^\[([^]]+)\].*/\1/' || true)
+  if [ -z "$last_bad_ts" ]; then
+    # no incident on record: stable since the first deploy
+    last_bad_ts=$(head -1 "$LOG_FILE" | sed -E 's/^\[([^]]+)\].*/\1/')
+  fi
+  days=$(( ($(date -u +%s) - $(date -u -d "$last_bad_ts" +%s 2>/dev/null || date -u +%s)) / 86400 ))
+  printf 'Deploy #%d • %d days stable' "$n" "$days"
+}
+
+send_card() { # send_card <app> <text>; logs `notify ok|skip|fail` to the journal
+  local app=$1 text=$2 resp
+  if [ ! -f "$TELEGRAM_ENV" ]; then
+    log_line "$app" "-" notify skip 0
+    return 0
+  fi
+  local TG_TOKEN="" TG_CHAT_ID=""
+  TG_TOKEN=$(awk -F= '$1=="TG_TOKEN"{print substr($0, index($0,"=")+1)}' "$TELEGRAM_ENV")
+  TG_CHAT_ID=$(awk -F= '$1=="TG_CHAT_ID"{print substr($0, index($0,"=")+1)}' "$TELEGRAM_ENV")
+  if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHAT_ID" ]; then
+    log_line "$app" "-" notify skip 0
+    return 0
+  fi
+  resp=$(curl -sS -m 10 "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+    --data-urlencode "chat_id=${TG_CHAT_ID}" \
+    --data-urlencode "text=${text}" 2>&1) || true
+  printf '[%s] %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$app" "$resp" >> "$TELEGRAM_LOG"
+  if printf '%s' "$resp" | grep -q '"ok":true'; then
+    log_line "$app" "-" notify ok 0
+  else
+    log_line "$app" "-" notify fail 0
+  fi
+}
+
+# --- app registry --------------------------------------------------------------
+app_dir() { awk -v a="$1" '$1==a {print ($2 != "" ? $2 : "/opt/" a); exit}' "$APPS_LIST"; }
+
+conf_get() { # conf_get <dir> <key>
+  awk -F= -v k="$2" '$1==k {print substr($0, index($0,"=")+1); exit}' "$1/app.conf"
+}
+
+app_container() { # container name = compose service `app` in the app dir
+  local dir; dir=$(app_dir "$1")
+  docker compose -f "$dir/docker-compose.yml" ps -a --format '{{.Name}}' app 2>/dev/null | head -1
+}
+
+state_get() { # state_get <dir> <key>  (.deploy-state: current=, previous=)
+  [ -f "$1/.deploy-state" ] || return 0
+  awk -F= -v k="$2" '$1==k {print $2; exit}' "$1/.deploy-state"
+}
+
+state_set() { # state_set <dir> <current> <previous>
+  printf 'current=%s\nprevious=%s\n' "$2" "$3" > "$1/.deploy-state"
+}
+
+# --- health gate ---------------------------------------------------------------
+health_gate() { # health_gate <profile> <port> <health_path>; 0=healthy
+  local profile=$1 port=$2 path=$3 elapsed=0
+  while (( elapsed < HEALTH_TIMEOUT )); do
+    case "$profile" in
+      static|service)
+        if curl -fsS -m 5 -o /dev/null "http://127.0.0.1:${port}${path}"; then return 0; fi
+        ;;
+      bot)
+        # bot profile: rely on the compose healthcheck (functional getMe check, F4)
+        local cname; cname=$(app_container "$CURRENT_APP")
+        local hs; hs=$(docker inspect --format '{{.State.Health.Status}}' "$cname" 2>/dev/null || echo none)
+        if [ "$hs" = healthy ]; then return 0; fi
+        ;;
+    esac
+    sleep "$HEALTH_INTERVAL"
+    elapsed=$((elapsed + HEALTH_INTERVAL))
+  done
+  return 1
+}
+
+# --- deploy --------------------------------------------------------------------
+compose_up() { # compose_up <dir> <image:tag>
+  DEPLOY_IMAGE="$2" docker compose -f "$1/docker-compose.yml" up -d --pull never app
+}
+
+cmd_deploy() {
+  local app=$1 tag=$2
+  CURRENT_APP=$app
+  local dir; dir=$(app_dir "$app")
+  [ -n "$dir" ] && [ -f "$dir/app.conf" ] || { echo "$S_NO_CONF ($app)" >&2; exit 1; }
+
+  local profile port path image
+  profile=$(conf_get "$dir" profile)
+  port=$(conf_get "$dir" port)
+  path=$(conf_get "$dir" health_path)
+  image=$(conf_get "$dir" image)
+
+  # stdin protocol (see header). Token is used once for docker login and never echoed.
+  local token="" actor="" subject="" start="" line
+  while IFS= read -r line; do
+    case "$line" in
+      token=*)   token=${line#token=} ;;
+      actor=*)   actor=${line#actor=} ;;
+      subject=*) subject=${line#subject=} ;;
+      start=*)   start=${line#start=} ;;
+    esac
+  done
+  subject=$(printf '%s' "$subject" | tr -d '\000-\037' | cut -c1-120)
+  echo "$start" | grep -Eq '^[0-9]{0,12}$' || start=""
+
+  local sha7; sha7=$(printf '%s' "${tag#sha-}" | cut -c1-7)
+  local t0; t0=$(date -u +%s)
+
+  # serialize deploys: one at a time on this 1-CPU box
+  exec 9>"$LOCK_FILE"
+  flock -w "$LOCK_WAIT" 9 || { echo "$S_LOCK_BUSY" >&2; exit 1; }
+
+  # ephemeral GHCR auth: login -> pull -> logout, logout guaranteed by trap
+  if [ -n "$token" ]; then
+    printf '%s' "$token" | docker login "$REGISTRY" -u "${actor:-x}" --password-stdin >/dev/null
+    trap 'docker logout "$REGISTRY" >/dev/null 2>&1 || true' EXIT
+  fi
+  echo "pulling ${image}:${tag}"
+  if ! docker pull -q "${image}:${tag}"; then
+    log_line "$app" "$sha7" deploy fail "$(( $(date -u +%s) - t0 ))"
+    echo "$S_PULL_FAIL" >&2
+    exit 1
+  fi
+  docker logout "$REGISTRY" >/dev/null 2>&1 || true
+
+  local prev; prev=$(state_get "$dir" current)
+  echo "starting ${app} @ ${tag}"
+  compose_up "$dir" "${image}:${tag}"
+
+  local t_end duration_s duration
+  if health_gate "$profile" "$port" "$path"; then
+    t_end=$(date -u +%s)
+    duration_s=$(( t_end - ${start:-$t0} ))
+    duration=$(fmt_duration "$duration_s")
+    state_set "$dir" "$tag" "${prev:-}"
+    log_line "$app" "$sha7" deploy ok "$(( t_end - t0 ))"
+    echo "$S_HEALTH_OK — ${app}@${sha7} live (${duration})"
+    send_card "$app" "$(render_card ok "$app" "$sha7" "$duration" "$subject" "")"
+    return 0
+  fi
+
+  # health gate failed
+  t_end=$(date -u +%s)
+  duration=$(fmt_duration $(( t_end - ${start:-$t0} )))
+  log_line "$app" "$sha7" deploy fail "$(( t_end - t0 ))"
+  echo "$S_HEALTH_FAIL" >&2
+
+  if [ -n "$prev" ]; then
+    local prev7; prev7=$(printf '%s' "${prev#sha-}" | cut -c1-7)
+    echo "rolling back to ${prev}" >&2
+    compose_up "$dir" "${image}:${prev}"
+    if health_gate "$profile" "$port" "$path"; then
+      log_line "$app" "$prev7" rollback ok "$(( $(date -u +%s) - t_end ))"
+      echo "$S_ROLLED_BACK (${prev7})" >&2
+    else
+      log_line "$app" "$prev7" rollback fail "$(( $(date -u +%s) - t_end ))"
+    fi
+    send_card "$app" "$(render_card rollback "$app" "$sha7" "$duration" "$subject" "$prev7")"
+  else
+    docker compose -f "$dir/docker-compose.yml" stop app >/dev/null 2>&1 || true
+    log_line "$app" "$sha7" stop ok 0
+    echo "$S_FIRST_FAIL" >&2
+    send_card "$app" "$(render_card first-fail "$app" "$sha7" "$duration" "$subject" "")"
+  fi
+  exit 1
+}
+
+cmd_rollback() {
+  local app=$1 tag=${2:-}
+  CURRENT_APP=$app
+  local dir; dir=$(app_dir "$app")
+  [ -n "$dir" ] && [ -f "$dir/app.conf" ] || { echo "$S_NO_CONF ($app)" >&2; exit 1; }
+  local image profile port path
+  image=$(conf_get "$dir" image)
+  profile=$(conf_get "$dir" profile)
+  port=$(conf_get "$dir" port)
+  path=$(conf_get "$dir" health_path)
+  [ -n "$tag" ] || tag=$(state_get "$dir" previous)
+  [ -n "$tag" ] || { echo "error: no previous sha recorded for $app" >&2; exit 1; }
+  local sha7; sha7=$(printf '%s' "${tag#sha-}" | cut -c1-7)
+  local t0; t0=$(date -u +%s)
+  exec 9>"$LOCK_FILE"
+  flock -w "$LOCK_WAIT" 9 || { echo "$S_LOCK_BUSY" >&2; exit 1; }
+  compose_up "$dir" "${image}:${tag}"
+  if health_gate "$profile" "$port" "$path"; then
+    local cur; cur=$(state_get "$dir" current)
+    state_set "$dir" "$tag" "${cur:-}"
+    log_line "$app" "$sha7" rollback ok "$(( $(date -u +%s) - t0 ))"
+    echo "$S_ROLLED_BACK (${sha7})"
+  else
+    log_line "$app" "$sha7" rollback fail "$(( $(date -u +%s) - t0 ))"
+    echo "error: rollback target is not healthy either" >&2
+    exit 1
+  fi
+}
+
+cmd_status() {
+  local app dir cur cname state hs last
+  printf '%s | %s | %s | %s\n' app sha health "last deploy"
+  while read -r app dir_raw; do
+    [ -n "$app" ] || continue
+    case "$app" in \#*) continue ;; esac
+    dir=${dir_raw:-/opt/$app}
+    cur=$(state_get "$dir" current); cur=${cur:-none}
+    cname=$(app_container "$app")
+    if [ -n "$cname" ]; then
+      state=$(docker inspect --format '{{.State.Status}}' "$cname" 2>/dev/null || echo missing)
+      hs=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}-{{end}}' "$cname" 2>/dev/null || echo -)
+    else
+      state=missing; hs=-
+    fi
+    last=$(grep "] ${app}@" "$LOG_FILE" 2>/dev/null | grep ' deploy ' | tail -1 | sed -E 's/^\[([^]]+)\].*/\1/')
+    printf '%s | %s | %s/%s | %s\n' "$app" "${cur#sha-}" "$state" "$hs" "${last:-never}"
+  done < "$APPS_LIST"
+}
+
+# --- dispatcher ----------------------------------------------------------------
+main() {
+  # forced command: real request lives in SSH_ORIGINAL_COMMAND;
+  # direct invocation (root shell / RUNBOOK) passes argv instead
+  local raw="${SSH_ORIGINAL_COMMAND:-$*}"
+  # read -a: split words without pathname expansion (raw is attacker-reachable)
+  local argv=()
+  read -r -a argv <<< "$raw" || true
+  local verb="${argv[0]:-}"
+  case "$verb" in
+    deploy|rollback)
+      local app="${argv[1]:-}" tag="${argv[2]:-}"
+      # allowlist first: unknown names are refused before anything runs
+      printf '%s' "$app" | grep -Eq '^[a-z0-9][a-z0-9._-]{0,40}$' \
+        || { echo "$S_UNKNOWN_APP" >&2; log_refuse "$raw"; exit 1; }
+      [ -n "$(app_dir "$app")" ] || { echo "$S_UNKNOWN_APP" >&2; log_refuse "$raw"; exit 1; }
+      if [ "$verb" = deploy ]; then
+        printf '%s' "$tag" | grep -Eq '^sha-[0-9a-f]{7,40}$' \
+          || { echo "$S_BAD_TAG" >&2; log_refuse "$raw"; exit 1; }
+        cmd_deploy "$app" "$tag"
+      else
+        if [ -n "$tag" ]; then
+          printf '%s' "$tag" | grep -Eq '^sha-[0-9a-f]{7,40}$' \
+            || { echo "$S_BAD_TAG" >&2; log_refuse "$raw"; exit 1; }
+        fi
+        cmd_rollback "$app" "$tag"
+      fi
+      ;;
+    status)
+      cmd_status
+      ;;
+    *)
+      echo "$S_REFUSED" >&2
+      log_refuse "$raw"
+      exit 1
+      ;;
+  esac
+}
+
+log_refuse() { # journal a refused request; keep only a sanitized fingerprint
+  # journal format is space-separated: squash spaces so the line stays parseable
+  local what; what=$(printf '%s' "$1" | tr ' ' '_' | tr -cd 'a-zA-Z0-9._-' | cut -c1-40)
+  log_line "-" "-" refuse "denied(${what:-empty})" 0
+}
+
+main "$@"
