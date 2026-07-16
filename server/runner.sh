@@ -132,7 +132,10 @@ conf_get() { # conf_get <dir> <key>
 
 app_container() { # container name = compose service `app` in the app dir
   local dir; dir=$(app_dir "$1")
-  docker compose -f "$dir/docker-compose.yml" ps -a --format '{{.Name}}' app 2>/dev/null | head -1
+  # DEPLOY_IMAGE placeholder: `ps` only needs the file to parse; without it
+  # compose aborts on the :? guard (and pipefail would hit set -e -> || true)
+  DEPLOY_IMAGE="${DEPLOY_IMAGE:-placeholder}" \
+    docker compose -f "$dir/docker-compose.yml" ps -a --format '{{.Name}}' app 2>/dev/null | head -1 || true
 }
 
 state_get() { # state_get <dir> <key>  (.deploy-state: current=, previous=)
@@ -208,9 +211,12 @@ cmd_deploy() {
     trap 'docker logout "$REGISTRY" >/dev/null 2>&1 || true' EXIT
   fi
   echo "pulling ${image}:${tag}"
-  if ! docker pull -q "${image}:${tag}"; then
+  local pull_out
+  if ! pull_out=$(docker pull -q "${image}:${tag}" 2>&1); then
+    # keep the error on the server too: CI logs are not always reachable
+    printf '[%s] %s pull error: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$app" "$pull_out" >> "$HUB_DIR/last-error.log"
     log_line "$app" "$sha7" deploy fail "$(( $(date -u +%s) - t0 ))"
-    echo "$S_PULL_FAIL" >&2
+    echo "$S_PULL_FAIL: $pull_out" >&2
     exit 1
   fi
   docker logout "$REGISTRY" >/dev/null 2>&1 || true
@@ -301,7 +307,7 @@ cmd_status() {
     else
       state=missing; hs=-
     fi
-    last=$(grep "] ${app}@" "$LOG_FILE" 2>/dev/null | grep ' deploy ' | tail -1 | sed -E 's/^\[([^]]+)\].*/\1/')
+    last=$(grep "] ${app}@" "$LOG_FILE" 2>/dev/null | grep ' deploy ' | tail -1 | sed -E 's/^\[([^]]+)\].*/\1/' || true)
     printf '%s | %s | %s/%s | %s\n' "$app" "${cur#sha-}" "$state" "$hs" "${last:-never}"
   done < "$APPS_LIST"
 }
