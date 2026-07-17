@@ -129,6 +129,7 @@ B_ST_STATIC = "\U0001f310 static"
 B_ST_SERVICE = "⚙️ service"
 B_ST_BOT = "\U0001f916 bot"
 B_DO_CONNECT = "✅ Подключить"
+B_CHANGE_TYPE = "\U0001f527 Сменить тип"
 B_MORE = "ещё »"
 C_TITLE = "<b>Подключить репозиторий</b>\nВыберите репозиторий владельца:"
 C_NONE = "Нет подходящих репозиториев (все подключены или недоступны)."
@@ -141,6 +142,13 @@ C_STEP = "• {}"
 C_OK = "✅ <b>{}</b> подключён\n\U0001f517 https://{}.{}.sslip.io\nПервый деплой запущен (push в ветку {})."
 C_FAIL = "❌ Не удалось подключить <b>{}</b>: {}"
 C_NO_DOCKERFILE = "в репозитории нет Dockerfile (нужен один собираемый контейнер)"
+# auto-detection result screen + reasons (owner-facing)
+C_DETECT_SERVICE = "\U0001f50e <b>{}</b>\nОпределил: <b>service</b> ({}) — дам HTTPS-адрес."
+C_DETECT_BOT = "\U0001f50e <b>{}</b>\nОпределил: <b>bot</b> ({}) — без URL, health по процессу."
+D_EXPOSE = "EXPOSE {} в Dockerfile"
+D_COMPOSE_PORT = "порт {} в compose"
+D_COMPOSE_PORTS = "порт в compose"
+D_BOT = "нет EXPOSE и портов"
 # onboarding step lines + error reasons (owner-facing)
 C_STEP_SERVER = "создаю каталог и маршрут на сервере"
 C_STEP_SECRETS = "выставляю секреты репозитория"
@@ -408,10 +416,65 @@ def gh_list_repos(token, owner):
     return repos
 
 
+def gh_get_file(token, owner, repo, branch, path):
+    """Return the decoded text of a repo file, or None if it is absent."""
+    status, data = gh_api(
+        token, "GET",
+        f"/repos/{owner}/{repo}/contents/{path}?ref={branch}")
+    if status != 200 or not isinstance(data, dict) or "content" not in data:
+        return None
+    try:
+        return base64.b64decode(data["content"]).decode("utf-8", "replace")
+    except (ValueError, KeyError):
+        return None
+
+
 def gh_repo_has_dockerfile(token, owner, repo, branch):
-    status, _ = gh_api(token, "GET",
-                       f"/repos/{owner}/{repo}/contents/Dockerfile?ref={branch}")
-    return status == 200
+    return gh_get_file(token, owner, repo, branch, "Dockerfile") is not None
+
+
+# --- profile auto-detection (WB4 one-tap onboarding) --------------------------
+EXPOSE_RE = re.compile(r"^\s*EXPOSE\s+(\d{2,5})", re.MULTILINE | re.IGNORECASE)
+# compose published port: "  - 8080:80" / "  - 127.0.0.1:3000:3000" / "ports:"
+COMPOSE_PORT_RE = re.compile(r"^\s*-\s*[\"']?(?:\d{1,3}(?:\.\d{1,3}){3}:)?(\d{2,5}):\d{2,5}",
+                             re.MULTILINE)
+COMPOSE_HAS_PORTS_RE = re.compile(r"^\s*ports\s*:", re.MULTILINE)
+
+
+def detect_profile(token, owner, repo, branch):
+    """Infer the app profile from repo contents (read-only).
+
+    Returns (profile, cport, reason) where profile is 'service' | 'bot', cport is
+    the container port to expose for service apps (or "" for bot), and reason is a
+    short human string. Returns (None, "", reason) when there is no Dockerfile —
+    the caller must refuse rather than guess.
+
+    Heuristic: EXPOSE in the Dockerfile or a published port in compose => a web
+    app (service); a Dockerfile with neither => a bot (no URL). static is not
+    auto-detected — it is only a manual override (cosmetic health-path split).
+    """
+    dockerfile = gh_get_file(token, owner, repo, branch, "Dockerfile")
+    if dockerfile is None:
+        return None, "", C_NO_DOCKERFILE
+
+    m = EXPOSE_RE.search(dockerfile)
+    if m:
+        return "service", m.group(1), D_EXPOSE.format(m.group(1))
+
+    # no EXPOSE: check a root compose for a published port
+    for cf in ("docker-compose.yml", "docker-compose.yaml", "compose.yml"):
+        compose = gh_get_file(token, owner, repo, branch, cf)
+        if compose is None:
+            continue
+        pm = COMPOSE_PORT_RE.search(compose)
+        if pm:
+            return "service", pm.group(1), D_COMPOSE_PORT.format(pm.group(1))
+        if COMPOSE_HAS_PORTS_RE.search(compose):
+            return "service", "", D_COMPOSE_PORTS
+        break
+
+    # Dockerfile present, no exposed port anywhere => a bot
+    return "bot", "", D_BOT
 
 
 def gh_existing_workflow(token, owner, repo, branch):
@@ -563,6 +626,12 @@ def wb4_onboard(app, repo, profile, progress=None):
     defaults = PROFILE_DEFAULTS.get(profile, PROFILE_DEFAULTS["static"])
     cport = defaults["cport"]
     mem = defaults["mem"]
+    # service: prefer the container port detected from EXPOSE/compose over the
+    # generic default, so the reverse-proxy targets the port the app listens on
+    if profile == "service":
+        _p, detected_cport, _r = detect_profile(token, owner, repo, branch)
+        if detected_cport:
+            cport = detected_cport
     port = "" if profile == "bot" else next_free_port()
     image = f"ghcr.io/{owner.lower()}/{app}"
 
@@ -861,12 +930,40 @@ def screen_connect(page):
     return C_TITLE, {"inline_keyboard": buttons}
 
 
+def screen_connect_detected(repo):
+    """One-tap path: detect the profile from repo contents and present the
+    result for confirmation, with a manual override. Returns (text, kb, profile);
+    profile is None when there is no Dockerfile (the caller refuses)."""
+    token, owner = load_github_env()
+    branch = "main"
+    if token and owner:
+        status, meta = gh_api(token, "GET", f"/repos/{owner}/{repo}")
+        if status == 200 and isinstance(meta, dict):
+            branch = meta.get("default_branch", "main")
+        profile, _cport, reason = detect_profile(token, owner, repo, branch)
+    else:
+        profile, reason = None, E_NO_GH
+
+    if profile is None:
+        kb = {"inline_keyboard": [[{"text": B_BACK, "callback_data": "conn:0"}]]}
+        return C_FAIL.format(esc(repo), esc(reason)), kb, None
+
+    tmpl = C_DETECT_SERVICE if profile == "service" else C_DETECT_BOT
+    kb = {"inline_keyboard": [
+        [{"text": B_DO_CONNECT, "callback_data": f"cgo:{profile}:{repo}"}],
+        [{"text": B_CHANGE_TYPE, "callback_data": f"ctype:{repo}"},
+         {"text": B_CANCEL, "callback_data": "conn:0"}],
+    ]}
+    return tmpl.format(esc(repo), esc(reason)), kb, profile
+
+
 def screen_connect_profile(repo):
+    """Manual override menu (behind "Change type")."""
     kb = {"inline_keyboard": [
         [{"text": B_ST_STATIC, "callback_data": f"cprof:static:{repo}"},
          {"text": B_ST_SERVICE, "callback_data": f"cprof:service:{repo}"},
          {"text": B_ST_BOT, "callback_data": f"cprof:bot:{repo}"}],
-        [{"text": B_BACK, "callback_data": "conn:0"}],
+        [{"text": B_BACK, "callback_data": f"crepo:{repo}"}],
     ]}
     return C_PICK_PROFILE.format(esc(repo)), kb
 
@@ -1025,7 +1122,7 @@ def handle_callback(api, chat_id, message_id, cb_id, data):
     action, _, rest = data.partition(":")
 
     # --- WB4 "Connect a repo" branches (carry repo/profile, not an app) -------
-    if action in ("conn", "crepo", "cprof", "cgo"):
+    if action in ("conn", "crepo", "ctype", "cprof", "cgo"):
         _handle_connect(api, chat_id, message_id, cb_id, action, rest)
         return
 
@@ -1084,7 +1181,8 @@ def _handle_connect(api, chat_id, message_id, cb_id, action, rest):
         _nav(api, chat_id, message_id, cb_id, *screen_connect(page))
         return
 
-    if action == "crepo":
+    # crepo / ctype carry just <repo>
+    if action in ("crepo", "ctype"):
         repo = rest
         if not REPO_RE.match(repo):
             api.answer_callback(cb_id, C_NONE)
@@ -1094,7 +1192,14 @@ def _handle_connect(api, chat_id, message_id, cb_id, action, rest):
             _nav(api, chat_id, message_id, cb_id, C_ALREADY.format(esc(repo)),
                  {"inline_keyboard": [[{"text": B_BACK, "callback_data": "conn:0"}]]})
             return
-        _nav(api, chat_id, message_id, cb_id, *screen_connect_profile(repo))
+        if action == "ctype":
+            # manual override: show the static/service/bot menu
+            _nav(api, chat_id, message_id, cb_id, *screen_connect_profile(repo))
+        else:
+            # default one-tap path: auto-detect and present the result
+            api.answer_callback(cb_id)
+            text, kb, _profile = screen_connect_detected(repo)
+            api.edit(chat_id, message_id, text, kb)
         return
 
     # cprof / cgo carry "<profile>:<repo>"

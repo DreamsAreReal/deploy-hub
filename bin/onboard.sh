@@ -15,7 +15,8 @@
 #      (variable names are extracted from the repo when possible)
 #
 # Options:
-#   --profile static|bot|service   required
+#   --profile static|bot|service   optional; omitted => auto-detect (EXPOSE in the
+#                     Dockerfile or a compose port => service, else => bot)
 #   --port N          host port (127.0.0.1) for static/service; default: first
 #                     free port >= 9001 (checked against app.confs and ss -tlnp)
 #   --cport N         container port (default: 80 static, 8080 service)
@@ -39,7 +40,8 @@ HUB_REPO_SLUG="DreamsAreReal/deploy-hub"
 APPS_LIST_REMOTE=/opt/deploy-hub/apps.list
 
 # --- user-facing strings (en) -------------------------------------------------
-S_USAGE="usage: ./onboard.sh <repo> --profile <static|bot|service> [--port N] [--cport N] [--mem LIMIT] [--health-path P] [--app NAME] [--dockerfile PATH] [--dry-run]
+S_USAGE="usage: ./onboard.sh <repo> [--profile <static|bot|service>] [--port N] [--cport N] [--mem LIMIT] [--health-path P] [--app NAME] [--dockerfile PATH] [--dry-run]
+       (--profile is optional: omitted => auto-detect from the repo)
        ./onboard.sh status | history <app>     # read-only, over the deploy channel"
 S_BAD_PROFILE="error: --profile must be static, bot or service"
 S_NO_REPO="error: repo not found on GitHub"
@@ -82,7 +84,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$REPO_ARG" ] || die "$S_USAGE"
-case "$PROFILE" in static|bot|service) ;; *) die "$S_BAD_PROFILE" ;; esac
+# --profile is optional: empty means auto-detect from the repo after cloning.
+case "$PROFILE" in ""|static|bot|service) ;; *) die "$S_BAD_PROFILE" ;; esac
 
 case "$REPO_ARG" in
   */*) REPO_SLUG="$REPO_ARG" ;;
@@ -92,15 +95,8 @@ REPO_NAME="${REPO_SLUG##*/}"
 APP="${APP:-$(printf '%s' "$REPO_NAME" | tr '[:upper:]' '[:lower:]')}"
 printf '%s' "$APP" | grep -Eq '^[a-z0-9][a-z0-9._-]{0,40}$' || die "error: bad app name: $APP"
 
-# profile defaults
-case "$PROFILE" in
-  static)  CPORT="${CPORT:-80}";   MEM="${MEM:-64m}" ;;
-  service) CPORT="${CPORT:-8080}"; MEM="${MEM:-256m}" ;;
-  bot)     CPORT=""; PORT=""; MEM="${MEM:-128m}" ;;
-esac
-
 # --- gather facts (read-only) ----------------------------------------------------
-say "onboard: $REPO_SLUG -> app '$APP' (profile $PROFILE)"
+say "onboard: $REPO_SLUG -> app '$APP'${PROFILE:+ (profile $PROFILE)}"
 say "gathering facts..."
 
 BRANCH=$(gh repo view "$REPO_SLUG" --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null) \
@@ -113,6 +109,35 @@ trap 'rm -rf "$WORK"' EXIT
 git clone -q --depth 1 -b "$BRANCH" "https://github.com/${REPO_SLUG}.git" "$WORK/repo"
 
 [ -f "$WORK/repo/$DOCKERFILE" ] || die "$S_NO_DOCKERFILE ($DOCKERFILE)"
+
+# profile auto-detection when --profile was omitted: EXPOSE in the Dockerfile or
+# a published port in compose => service (web, gets a URL); a Dockerfile with
+# neither => bot (no URL). static is a manual override only.
+if [ -z "$PROFILE" ]; then
+  DET_CPORT=""
+  if EXP=$(grep -iE '^\s*EXPOSE\s+[0-9]+' "$WORK/repo/$DOCKERFILE" | head -1 \
+           | grep -oE '[0-9]+' | head -1) && [ -n "$EXP" ]; then
+    PROFILE=service; DET_CPORT=$EXP
+    say "  auto-detected: service (EXPOSE $EXP in Dockerfile)"
+  elif compgen -G "$WORK/repo/docker-compose.y*ml" > /dev/null \
+       && grep -qE '^\s*ports\s*:' "$WORK"/repo/docker-compose.y*ml; then
+    DET_CPORT=$(grep -oE '^\s*-\s*"?([0-9.]+:)?[0-9]+:[0-9]+' "$WORK"/repo/docker-compose.y*ml \
+                | grep -oE '[0-9]+:[0-9]+' | head -1 | cut -d: -f1)
+    PROFILE=service
+    say "  auto-detected: service (published port in compose)"
+  else
+    PROFILE=bot
+    say "  auto-detected: bot (no EXPOSE / no published port)"
+  fi
+  [ -n "$DET_CPORT" ] && CPORT="${CPORT:-$DET_CPORT}"
+fi
+
+# profile defaults (applied after any auto-detection)
+case "$PROFILE" in
+  static)  CPORT="${CPORT:-80}";   MEM="${MEM:-64m}" ;;
+  service) CPORT="${CPORT:-8080}"; MEM="${MEM:-256m}" ;;
+  bot)     CPORT=""; PORT=""; MEM="${MEM:-128m}" ;;
+esac
 # app model guard: a repo compose must not build more than one service
 if compgen -G "$WORK/repo/docker-compose.y*ml" > /dev/null; then
   builds=$(grep -cE '^\s+build:' "$WORK"/repo/docker-compose.y*ml || true)

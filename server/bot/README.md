@@ -15,9 +15,11 @@ identifiers, logs and code stay English.
 - Apps → all apps as buttons (2 per row) with a health glyph (`✅` healthy /
   `▫️` running / `❌` down); back.
 - Connect → the owner's GitHub repos (non-archived, non-fork, newest first, with
-  pagination; already-onboarded repos are hidden) → pick a profile
-  (static / service / bot) → confirm → the bot onboards the repo end-to-end and
-  replies with the app's HTTPS URL. See "Connect flow (WB4)" below.
+  pagination; already-onboarded repos are hidden) → tap a repo → the bot
+  auto-detects the profile from the repo and shows the result to confirm
+  (Connect / Change type / Cancel); one tap onboards it end-to-end and replies
+  with the app's HTTPS URL. "Change type" opens the manual static/service/bot
+  menu. See "Connect flow (WB4)" below.
 - App card → name, sha7, health, deploy number + last-deploy time, live URL, a
   server-resource line (RAM + disk), and actions logs / rollback / redeploy /
   refresh / back. Refresh re-reads status; logs are sent as a separate message.
@@ -98,6 +100,16 @@ Logs: `journalctl -u deploy-hub-bot`; audit trail of denied chats:
 `/opt/deploy-hub/bot.log`.
 
 ## Connect flow (WB4)
+
+**Profile auto-detection.** Tapping a repo detects the profile from its contents
+(read-only): an `EXPOSE <port>` in the Dockerfile or a published port in a root
+`docker-compose.yml` means a web app (**service** — it gets an HTTPS URL, and the
+detected port becomes the container port); a Dockerfile with neither means a
+**bot** (no URL, process/functional health). No Dockerfile at all is refused
+rather than guessed. `static` is a manual override only (the static/service split
+is a cosmetic health-path difference). "Change type" reveals the manual
+static/service/bot menu. `onboard.sh` does the same: `--profile` is optional and,
+when omitted, the detected profile is printed in the plan before applying.
 
 The bot runs as `deploy` (no root, no `gh`), so onboarding is split cleanly:
 
