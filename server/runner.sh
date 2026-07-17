@@ -37,14 +37,15 @@ TELEGRAM_LOG="$HUB_DIR/telegram.log"
 REGISTRY=ghcr.io
 HEALTH_TIMEOUT=90      # seconds; contract: never below 60 (guardrail from the brief)
 HEALTH_INTERVAL=5
-LOCK_WAIT=600          # a deploy behind a slow one waits up to 10 min
+LOCK_WAIT=300          # a deploy behind a slow one waits up to 5 min, then fails honestly
 
 # --- user-facing strings (en) -------------------------------------------------
 S_REFUSED="refused: only 'deploy <app> <tag>', 'rollback <app> [tag]', 'status', 'history <app>' are accepted"
 S_UNKNOWN_APP="refused: app not in allowlist"
 S_BAD_TAG="refused: tag must match ^sha-[0-9a-f]{7,40}\$"
 S_NO_CONF="error: app.conf not found for app"
-S_LOCK_BUSY="error: another deploy holds the lock (waited ${LOCK_WAIT}s)"
+S_LOCK_BUSY="error: another deploy holds the lock (waited ${LOCK_WAIT}s, giving up)"
+S_LOCK_WAIT="waiting for deploy lock (another deploy in progress)..."
 S_PULL_FAIL="error: image pull failed"
 S_HEALTH_OK="health: ok"
 S_HEALTH_FAIL="health: no HTTP 200 within ${HEALTH_TIMEOUT}s"
@@ -196,6 +197,17 @@ health_gate() { # health_gate <profile> <port> <health_path>; 0=healthy
   return 1
 }
 
+acquire_lock() { # serialize deploys: one at a time on this 1-CPU box.
+  # Announce a non-empty wait (a silent waiter reads like a hang and gets
+  # killed mid-deploy) and fail honestly after LOCK_WAIT: an orphaned waiter
+  # must not fire a stale operation long after the caller is gone.
+  exec 9>"$LOCK_FILE"
+  if ! flock -n 9; then
+    echo "$S_LOCK_WAIT"
+    flock -w "$LOCK_WAIT" 9 || { echo "$S_LOCK_BUSY" >&2; exit 1; }
+  fi
+}
+
 # --- deploy --------------------------------------------------------------------
 compose_up() { # compose_up <dir> <image:tag>
   DEPLOY_IMAGE="$2" docker compose -f "$1/docker-compose.yml" up -d --pull never app
@@ -229,9 +241,7 @@ cmd_deploy() {
   local sha7; sha7=$(printf '%s' "${tag#sha-}" | cut -c1-7)
   local t0; t0=$(date -u +%s)
 
-  # serialize deploys: one at a time on this 1-CPU box
-  exec 9>"$LOCK_FILE"
-  flock -w "$LOCK_WAIT" 9 || { echo "$S_LOCK_BUSY" >&2; exit 1; }
+  acquire_lock
 
   # ephemeral GHCR auth: login -> pull -> logout, logout guaranteed by trap
   if [ -n "$token" ]; then
@@ -320,8 +330,7 @@ cmd_rollback() {
   [ -n "$tag" ] || { echo "error: no previous sha recorded for $app" >&2; exit 1; }
   local sha7; sha7=$(printf '%s' "${tag#sha-}" | cut -c1-7)
   local t0; t0=$(date -u +%s)
-  exec 9>"$LOCK_FILE"
-  flock -w "$LOCK_WAIT" 9 || { echo "$S_LOCK_BUSY" >&2; exit 1; }
+  acquire_lock
   compose_up "$dir" "${image}:${tag}"
   echo "waiting for the health gate..."
   local dur
