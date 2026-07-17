@@ -9,7 +9,9 @@
 # Verbs:
 #   deploy <app> <tag>     pull image, restart the app container, health-gate,
 #                          rollback on failure; metadata comes on stdin
-#   rollback <app> [tag]   redeploy the previous (or given) sha
+#   rollback <app> [tag]   no tag: roll back to the previous sha (journaled as
+#                          `rollback`); explicit tag: redeploy that version
+#                          (journaled as `redeploy` — it may roll forward)
 #   status                 one line per app: app | sha | health | last deploy
 #   history <app>          last journal lines of the app
 #
@@ -50,6 +52,7 @@ S_PULL_FAIL="error: image pull failed"
 S_HEALTH_OK="health: ok"
 S_HEALTH_FAIL="health: no HTTP 200 within ${HEALTH_TIMEOUT}s"
 S_ROLLED_BACK="rolled back to previous sha"
+S_REDEPLOYED="redeployed to requested sha"
 S_FIRST_FAIL="first deploy failed, app stopped (no rollback target)"
 S_CARD_FIRST_FAIL_HINT="Check /opt/%s/.env and app logs, then push a fix"
 S_CARD_FAIL_HINT="Run: ssh vpn 'docker logs %s --tail 50'"
@@ -59,7 +62,7 @@ log_line() { # log_line <app> <sha7> <action> <result> <duration_s>
   # is the one thing a deploy must never break, so every deploy/rollback/stop
   # line records `vpn=ok|fail` measured right after the operation
   local suffix=""
-  case "$3" in deploy|rollback|stop) suffix=" vpn=$(vpn_smoke)" ;; esac
+  case "$3" in deploy|rollback|redeploy|stop) suffix=" vpn=$(vpn_smoke)" ;; esac
   printf '[%s] %s@%s %s %s %ss%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" "$3" "$4" "$5" "$suffix" >> "$LOG_FILE"
 }
 
@@ -99,6 +102,16 @@ render_card() { # render_card <kind> <app> <sha7> <duration> <subject> <extra> [
       ;;
     rollback-fail)
       line1="❌ ${app} health failed${reason:+ (${reason})} and rollback to ${extra} failed too"
+      line3="$(printf "$S_CARD_FAIL_HINT" "$cname")"
+      ;;
+    redeploy)
+      # explicit-tag operation: may move the app FORWARD, so it must not be
+      # worded as a rollback (evaluator M3+M4)
+      line1="✅ ${app} redeployed to ${extra}"
+      line3="$(render_pulse "$app")"
+      ;;
+    redeploy-fail)
+      line1="❌ ${app} redeploy to ${extra} failed${reason:+ (${reason})}"
       line3="$(printf "$S_CARD_FAIL_HINT" "$cname")"
       ;;
     first-fail)
@@ -318,6 +331,10 @@ cmd_deploy() {
 
 cmd_rollback() {
   local app=$1 tag=${2:-}
+  # explicit tag = the operator asks for a concrete version: that is a
+  # redeploy (it may roll FORWARD), not a rollback; журнал/card must not lie
+  local verb=rollback
+  [ -n "$tag" ] && verb=redeploy
   CURRENT_APP=$app
   local dir; dir=$(app_dir "$app")
   [ -n "$dir" ] && [ -f "$dir/app.conf" ] || { echo "$S_NO_CONF ($app)" >&2; exit 1; }
@@ -340,16 +357,16 @@ cmd_rollback() {
       state_set "$dir" "$tag" "${cur:-}"
     fi
     dur=$(( $(date -u +%s) - t0 ))
-    log_line "$app" "$sha7" rollback ok "$dur"
-    echo "$S_ROLLED_BACK (${sha7})"
-    # a manual rollback is a state change like any deploy: without a card the
-    # last card in the chat keeps claiming the old version is live (consumer M3)
-    send_card "$app" "$(render_card rollback "$app" "$sha7" "$(fmt_duration "$dur")" "manual rollback" "$sha7" "")"
+    log_line "$app" "$sha7" "$verb" ok "$dur"
+    if [ "$verb" = redeploy ]; then echo "$S_REDEPLOYED (${sha7})"; else echo "$S_ROLLED_BACK (${sha7})"; fi
+    # a manual rollback/redeploy is a state change like any deploy: without a
+    # card the last card in the chat keeps claiming the old version is live
+    send_card "$app" "$(render_card "$verb" "$app" "$sha7" "$(fmt_duration "$dur")" "manual $verb" "$sha7" "")"
   else
     dur=$(( $(date -u +%s) - t0 ))
-    log_line "$app" "$sha7" rollback fail "$dur"
-    echo "error: rollback target is not healthy either" >&2
-    send_card "$app" "$(render_card rollback-fail "$app" "$sha7" "$(fmt_duration "$dur")" "manual rollback" "$sha7" "target unhealthy")"
+    log_line "$app" "$sha7" "$verb" fail "$dur"
+    echo "error: $verb target is not healthy" >&2
+    send_card "$app" "$(render_card "$verb-fail" "$app" "$sha7" "$(fmt_duration "$dur")" "manual $verb" "$sha7" "target unhealthy")"
     exit 1
   fi
 }
@@ -386,7 +403,7 @@ cmd_status() {
       state=missing; hs=-
     fi
     # last OPERATION, not just deploy: a rollback moves the app too (consumer M3)
-    last=$(grep "] ${app}@" "$LOG_FILE" 2>/dev/null | grep -E ' (deploy|rollback|stop) ' | tail -1 | sed -E 's/^\[([^]]+)\].*/\1/' || true)
+    last=$(grep "] ${app}@" "$LOG_FILE" 2>/dev/null | grep -E ' (deploy|rollback|redeploy|stop) ' | tail -1 | sed -E 's/^\[([^]]+)\].*/\1/' || true)
     printf '%s | %s | %s/%s | %s\n' "$app" "$cur7" "$state" "$hs" "${last:-never}"
   done < "$APPS_LIST"
 }

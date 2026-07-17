@@ -48,7 +48,7 @@ while read -r app dir_raw; do
     # expand sha7 to the full tag if such an image exists
     full=$(docker images "$image" --format '{{.Tag}}' | grep -E "^sha-${sha7}" | head -1 || true)
     [ -n "$full" ] && keep="$keep $full"
-  done < <(grep -E "] ${app}@[0-9a-f]+ (deploy|rollback) ok " "$LOG_FILE" 2>/dev/null \
+  done < <(grep -E "] ${app}@[0-9a-f]+ (deploy|rollback|redeploy) ok " "$LOG_FILE" 2>/dev/null \
            | sed -E 's/^\[[^]]+\] [^@]+@([0-9a-f]+) .*/\1/' | tac | awk '!seen[$0]++')
 
   removed=0

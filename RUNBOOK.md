@@ -12,9 +12,12 @@ Redeploys the previous sha from `/opt/<app>/.deploy-state`, waits for the
 health gate, journals the result. Takes seconds; no pull — the prune policy
 keeps the running image plus 2 previous versions on disk.
 
-Roll back to a specific version: append the tag —
-`"rollback <app> sha-<full-or-7-char-sha>"` (must be one of the kept images;
-check with `ssh vpn 'docker images ghcr.io/dreamsarereal/<app>'`).
+Redeploy a specific version (may roll FORWARD as well as back): append the
+tag — `"rollback <app> sha-<full-or-7-char-sha>"` (must be one of the kept
+images; check with `ssh vpn 'docker images ghcr.io/dreamsarereal/<app>'`).
+An explicit-tag operation is journaled as `redeploy` and ends with
+`redeployed to requested sha (<sha7>)` + a ✅ card; a plain `rollback <app>`
+is journaled as `rollback` with a ⏪ card.
 
 Before rolling back, see where you would land: `"history <app>"` shows the
 recent journal (deploys, rollbacks and their sha7); the exact target is
@@ -58,7 +61,11 @@ Check disk: `ssh vpn 'df -h /; docker system df'`.
 
 ## Never touch
 
-Xray VPN (ports 2096/8443), nginx:80, the codex container and its
-cloudflared tunnel, UFW rules. If a deploy ever kills the VPN
-(`vpn=fail` in the journal), fix the VPN before anything else:
+Xray VPN (ports 2096/8443), the cloudflared tunnel service itself
+(`codex-tunnel.service`) and UFW rules. The codeapp container IS managed by
+the runner — `"rollback codeapp"` is a normal operation, not a violation.
+nginx is shared ground: the system owns only its location blocks
+(`/portfolio/ /zhaba/ /vote/ /api/`); the `/fef…/` location and the base
+config are off-limits. If a deploy ever kills the VPN (`vpn=fail` in the
+journal), fix the VPN before anything else:
 `ssh vpn 'cd /opt/xray && docker compose up -d'`.

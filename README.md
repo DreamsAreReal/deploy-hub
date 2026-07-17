@@ -79,7 +79,8 @@ forwarding). Accepted requests, everything else is refused and journaled:
 
 ```
 deploy <app> <tag>      # tag must match ^sha-[0-9a-f]{7,40}$
-rollback <app> [tag]    # defaults to the previous sha from .deploy-state
+rollback <app> [tag]    # no tag: previous sha (journaled as rollback);
+                        # explicit tag: journaled as redeploy (may roll forward)
 status                  # app | sha | health | last deploy
 history <app>           # last journal lines of the app
 ```
