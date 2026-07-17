@@ -29,6 +29,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -49,6 +50,15 @@ HOST_SLUG = "192-3-94-42"
 APP_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,40}$")
 TELEGRAM_TEXT_LIMIT = 4096
 
+# --- background monitor thresholds (defaults; overridable via alerts.conf) -----
+ALERTS_CONF = os.path.join(HUB_DIR, "alerts.conf")
+DEFAULT_ALERTS = {
+    "interval_sec": 60,      # how often the monitor samples
+    "disk_pct": 85,          # disk use% above this -> alert
+    "ram_min_mib": 80,       # available RAM below this (MiB) -> alert
+    "cooldown_sec": 10800,   # min seconds between repeats of the same resource alert (3h)
+}
+
 # consistent status glyphs (taste: <=1 meaningful glyph per element)
 GLYPH_HEALTHY = "✅"   # ✅ healthy / passing gate
 GLYPH_RUNNING = "▫️"  # ▫️ running, no health signal
@@ -61,6 +71,7 @@ T_HELP = (
     "Управляйте через кнопки меню или командами:\n"
     "/menu — главное меню\n"
     "/status — таблица всех приложений\n"
+    "/server — ресурсы сервера (RAM, диск, uptime)\n"
     "/apps — список приложений\n"
     "/logs &lt;app&gt; — хвост логов контейнера\n"
     "/history &lt;app&gt; — журнал деплоев\n"
@@ -82,10 +93,28 @@ T_DONE_REDEPLOY = "Передеплой выполнен"
 T_FAILED = "Ошибка (см. карточку)"
 T_REFRESHED = "Обновлено"
 T_RUNNER_FAIL = "runner error (exit {}):\n<pre>{}</pre>"
+T_SERVER_TITLE = "<b>Сервер</b>"
+T_SERVER_BODY = (
+    "{title}\n"
+    "RAM: {ram_used}/{ram_total} MiB (avail {ram_avail})\n"
+    "диск /: {disk_pct}% занято (свободно {disk_free})\n"
+    "uptime: {uptime}\n"
+    "контейнеров: {containers}"
+)
+# resource line reused in /status and the app card: RAM used/total + available, disk
+T_RES_LINE = "\U0001f5a5 RAM {ram_used}/{ram_total} MiB (avail {ram_avail}) • диск {disk_pct}% (свободно {disk_free})"
+# background-monitor alert texts (owner only)
+A_UNHEALTHY = "⚠️ <b>{}</b> unhealthy ({})"
+A_RECOVERED = "✅ <b>{}</b> recovered"
+A_DISK = "\U0001f534 диск {}% (свободно {})"
+A_DISK_OK = "✅ диск в норме ({}%)"
+A_RAM = "\U0001f534 RAM: свободно всего {} MiB"
+A_RAM_OK = "✅ RAM в норме (свободно {} MiB)"
 
 # button labels (ru text, <=1 glyph each)
 B_APPS = "\U0001f4e6 Приложения"
 B_STATUS = "\U0001f4ca Статус"
+B_SERVER = "\U0001f5a5 Сервер"
 B_HELP = "❔ Помощь"
 B_BACK = "« Назад"
 B_LOGS = "\U0001f4dc Логи"
@@ -112,6 +141,28 @@ def load_config():
         sys.stderr.write("bot: TG_TOKEN/TG_CHAT_ID missing in telegram.env\n")
         sys.exit(1)
     return token, int(chat_id)
+
+
+def load_alerts_conf():
+    """Monitor thresholds: defaults, optionally overridden by alerts.conf
+    (key=value lines). Unknown/invalid keys are ignored."""
+    conf = dict(DEFAULT_ALERTS)
+    try:
+        with open(ALERTS_CONF, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                k = k.strip()
+                if k in conf:
+                    try:
+                        conf[k] = int(v.strip())
+                    except ValueError:
+                        pass
+    except OSError:
+        pass
+    return conf
 
 
 # --- journaling ---------------------------------------------------------------
@@ -326,6 +377,115 @@ def deploy_number(app):
         return 0
 
 
+# --- server resources (#4) ----------------------------------------------------
+def server_resources():
+    """Snapshot of host RAM and disk. Values are read from /proc and statvfs so
+    no shell is spawned. Returns a dict with derived MiB / percent fields."""
+    res = {"ram_total": 0, "ram_used": 0, "ram_avail": 0,
+           "disk_pct": 0, "disk_free": "?", "uptime": "?"}
+    try:
+        meminfo = {}
+        with open("/proc/meminfo", encoding="utf-8") as fh:
+            for line in fh:
+                k, _, v = line.partition(":")
+                meminfo[k.strip()] = int(v.strip().split()[0])  # kB
+        total = meminfo.get("MemTotal", 0) // 1024
+        avail = meminfo.get("MemAvailable", 0) // 1024
+        res["ram_total"] = total
+        res["ram_avail"] = avail
+        res["ram_used"] = total - avail
+    except (OSError, ValueError):
+        pass
+    try:
+        st = os.statvfs("/")
+        total_b = st.f_blocks * st.f_frsize
+        free_b = st.f_bavail * st.f_frsize
+        used_b = total_b - free_b
+        res["disk_pct"] = round(used_b * 100 / total_b) if total_b else 0
+        res["disk_free"] = _human_bytes(free_b)
+    except OSError:
+        pass
+    try:
+        with open("/proc/uptime", encoding="utf-8") as fh:
+            secs = int(float(fh.read().split()[0]))
+        res["uptime"] = _human_uptime(secs)
+    except (OSError, ValueError):
+        pass
+    return res
+
+
+def _human_bytes(n):
+    for unit in ("B", "K", "M", "G", "T"):
+        if n < 1024 or unit == "T":
+            return f"{n:.0f}{unit}" if unit in ("B", "K") else f"{n:.1f}{unit}"
+        n /= 1024
+
+
+def _human_uptime(secs):
+    d, rem = divmod(secs, 86400)
+    h, rem = divmod(rem, 3600)
+    m, _ = divmod(rem, 60)
+    if d:
+        return f"{d}d {h}h"
+    if h:
+        return f"{h}h {m}m"
+    return f"{m}m"
+
+
+def container_count():
+    """Number of running docker containers (best-effort)."""
+    try:
+        proc = subprocess.run(["docker", "ps", "-q"],
+                              capture_output=True, text=True, timeout=10)
+        return len([x for x in proc.stdout.splitlines() if x.strip()])
+    except (subprocess.TimeoutExpired, OSError):
+        return "?"
+
+
+def resource_line():
+    """One-line RAM+disk summary reused in /status and app cards (#4)."""
+    r = server_resources()
+    return T_RES_LINE.format(
+        ram_used=r["ram_used"], ram_total=r["ram_total"], ram_avail=r["ram_avail"],
+        disk_pct=r["disk_pct"], disk_free=r["disk_free"])
+
+
+# --- background monitor: health state per app (#2) ----------------------------
+def app_health_state(app):
+    """Coarse health of an app's container for the monitor: one of
+    'healthy' | 'unhealthy' | 'running' | 'exited' | 'missing'. Uses docker
+    inspect directly so it sees exited/unhealthy transitions the moment they
+    happen (independent of the runner status formatting)."""
+    cname = container_name(app)
+    if not cname:
+        return "missing"
+    try:
+        proc = subprocess.run(
+            ["docker", "inspect", "--format",
+             "{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}-{{end}}",
+             cname],
+            capture_output=True, text=True, timeout=10)
+        out = (proc.stdout or "").strip()
+        if not out or proc.returncode != 0:
+            return "missing"
+        status, _, health = out.partition("|")
+        if health == "unhealthy":
+            return "unhealthy"
+        if health == "healthy":
+            return "healthy"
+        if status == "running":
+            return "running"
+        if status == "exited":
+            return "exited"
+        return status or "missing"
+    except (subprocess.TimeoutExpired, OSError):
+        return "missing"
+
+
+# a state is "bad" (deserves an alert) when it is not a healthy/running signal
+BAD_STATES = {"unhealthy", "exited", "missing"}
+
+
 # --- screens (each returns (text, reply_markup)) ------------------------------
 def esc(s):
     return html.escape(str(s), quote=False)
@@ -335,9 +495,21 @@ def screen_menu():
     kb = {"inline_keyboard": [
         [{"text": B_APPS, "callback_data": "apps"},
          {"text": B_STATUS, "callback_data": "status"}],
-        [{"text": B_HELP, "callback_data": "help"}],
+        [{"text": B_SERVER, "callback_data": "server"},
+         {"text": B_HELP, "callback_data": "help"}],
     ]}
     return T_MENU, kb
+
+
+def screen_server():
+    r = server_resources()
+    text = T_SERVER_BODY.format(
+        title=T_SERVER_TITLE,
+        ram_used=r["ram_used"], ram_total=r["ram_total"], ram_avail=r["ram_avail"],
+        disk_pct=r["disk_pct"], disk_free=r["disk_free"], uptime=r["uptime"],
+        containers=container_count())
+    kb = {"inline_keyboard": [[{"text": B_BACK, "callback_data": "menu"}]]}
+    return text, kb
 
 
 def screen_help():
@@ -380,7 +552,8 @@ def screen_app(app):
         f"sha: <code>{esc(info.get('sha', '-'))}</code>\n"
         f"health: <code>{esc(info.get('health', '-'))}</code>\n"
         f"деплой #{n} • {esc(info.get('last', 'never'))}\n"
-        f"\U0001f517 {esc(url)}"
+        f"\U0001f517 {esc(url)}\n"
+        f"{resource_line()}"  # #4: server RAM + disk
     )
     kb = {"inline_keyboard": [
         [{"text": B_LOGS, "callback_data": f"logs:{app}"},
@@ -412,6 +585,8 @@ def screen_status():
         lines.append(
             f"{g} <b>{esc(app)}</b> <code>{esc(info['sha'])}</code>\n"
             f"    {esc(live_url(app))}")
+    lines.append("")
+    lines.append(resource_line())  # #4: server RAM + disk footer
     return "\n".join(lines), kb
 
 
@@ -446,6 +621,9 @@ def handle_message(api, chat_id, text):
         api.send(chat_id, T_HELP)
     elif cmd == "/status":
         t, _ = screen_status()
+        api.send(chat_id, t)
+    elif cmd == "/server":
+        t, _ = screen_server()
         api.send(chat_id, t)
     elif cmd == "/apps":
         t, kb = screen_apps()
@@ -495,6 +673,8 @@ def handle_callback(api, chat_id, message_id, cb_id, data):
         _nav(api, chat_id, message_id, cb_id, *screen_apps())
     elif action == "status":
         _nav(api, chat_id, message_id, cb_id, *screen_status())
+    elif action == "server":
+        _nav(api, chat_id, message_id, cb_id, *screen_server())
     elif action == "app":
         _nav(api, chat_id, message_id, cb_id, *screen_app(app), toast=T_REFRESHED)
     elif action == "logs":
@@ -527,11 +707,93 @@ def _perform(api, chat_id, message_id, cb_id, app, fn, done_msg):
     api.edit(chat_id, message_id, banner + "\n\n" + text, kb)
 
 
+# --- background monitor (#2) --------------------------------------------------
+class Monitor:
+    """Samples app health + host resources on a timer and messages ONLY the
+    owner on a state CHANGE (edge-triggered), never on every tick. Resource
+    alerts have a cooldown so they do not spam while the condition persists.
+
+    Runs in a daemon thread inside the same process as the poll loop. Deploy
+    failures are intentionally NOT re-reported here — runner already sends those
+    cards. A failure inside the monitor is caught and logged; it never takes the
+    bot down.
+    """
+
+    def __init__(self, api, owner_chat_id):
+        self._api = api
+        self._owner = owner_chat_id
+        self._health = {}          # app -> last known state
+        self._disk_alerted_at = 0  # epoch of last disk alert (0 = not alerting)
+        self._ram_alerted_at = 0
+
+    def _notify(self, text):
+        # monitor messages go to the owner and nobody else
+        self._api.send(self._owner, text)
+        bot_log(f"ALERT {text}")
+
+    def _check_health(self):
+        for app in list_apps():
+            cur = app_health_state(app)
+            prev = self._health.get(app)
+            self._health[app] = cur
+            if prev is None:
+                continue  # first observation: establish baseline, no alert
+            if prev == cur:
+                continue
+            cur_bad = cur in BAD_STATES
+            prev_bad = prev in BAD_STATES
+            if cur_bad and not prev_bad:
+                self._notify(A_UNHEALTHY.format(esc(app), esc(cur)))
+            elif prev_bad and not cur_bad:
+                self._notify(A_RECOVERED.format(esc(app)))
+
+    def _check_resources(self, conf):
+        now = time.time()
+        r = server_resources()
+        # disk: alert above threshold with cooldown; reset when it drops back
+        if r["disk_pct"] > conf["disk_pct"]:
+            if now - self._disk_alerted_at >= conf["cooldown_sec"]:
+                self._notify(A_DISK.format(r["disk_pct"], r["disk_free"]))
+                self._disk_alerted_at = now
+        elif self._disk_alerted_at:
+            self._notify(A_DISK_OK.format(r["disk_pct"]))
+            self._disk_alerted_at = 0
+        # RAM: alert below threshold with cooldown; reset when it recovers
+        if r["ram_avail"] and r["ram_avail"] < conf["ram_min_mib"]:
+            if now - self._ram_alerted_at >= conf["cooldown_sec"]:
+                self._notify(A_RAM.format(r["ram_avail"]))
+                self._ram_alerted_at = now
+        elif self._ram_alerted_at:
+            self._notify(A_RAM_OK.format(r["ram_avail"]))
+            self._ram_alerted_at = 0
+
+    def tick(self):
+        """One monitoring pass. Isolated so tests can drive it directly."""
+        conf = load_alerts_conf()
+        try:
+            self._check_health()
+        except Exception as e:  # a monitor must never crash the bot
+            bot_log(f"monitor health error: {type(e).__name__}: {e}")
+        try:
+            self._check_resources(conf)
+        except Exception as e:
+            bot_log(f"monitor resource error: {type(e).__name__}: {e}")
+
+    def run_forever(self):
+        while True:
+            interval = load_alerts_conf()["interval_sec"]
+            self.tick()
+            time.sleep(max(10, interval))
+
+
 # --- main loop ----------------------------------------------------------------
 def main():
     token, authorized_chat_id = load_config()
     api = Api(token)
     bot_log(f"bot started; authorized_chat_id={authorized_chat_id}")
+    # background monitor: edge-triggered alerts to the owner only (#2)
+    monitor = Monitor(api, authorized_chat_id)
+    threading.Thread(target=monitor.run_forever, daemon=True).start()
     offset = 0
     while True:
         for update in api.get_updates(offset):
