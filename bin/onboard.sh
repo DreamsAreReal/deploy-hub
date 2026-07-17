@@ -31,6 +31,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VPS_HOST_ALIAS="${VPS_HOST_ALIAS:-vpn}"
+VPS_ADDR="${VPS_ADDR:-192.3.94.42}"
 DEPLOY_KEY="${DEPLOY_KEY:-$HOME/.ssh/deploy_hub_key}"
 HUB_ENV="$SCRIPT_DIR/.env-hub"
 COMPOSE_TEMPLATE="$SCRIPT_DIR/../server/compose-template.yml"
@@ -38,7 +39,8 @@ HUB_REPO_SLUG="DreamsAreReal/deploy-hub"
 APPS_LIST_REMOTE=/opt/deploy-hub/apps.list
 
 # --- user-facing strings (en) -------------------------------------------------
-S_USAGE="usage: ./onboard.sh <repo> --profile <static|bot|service> [--port N] [--cport N] [--mem LIMIT] [--health-path P] [--app NAME] [--dry-run]"
+S_USAGE="usage: ./onboard.sh <repo> --profile <static|bot|service> [--port N] [--cport N] [--mem LIMIT] [--health-path P] [--app NAME] [--dry-run]
+       ./onboard.sh status | history <app>     # read-only, over the deploy channel"
 S_BAD_PROFILE="error: --profile must be static, bot or service"
 S_NO_REPO="error: repo not found on GitHub"
 S_NO_DOCKERFILE="error: the repo has no Dockerfile — the app model is one built container per repo (add a Dockerfile first)"
@@ -54,6 +56,13 @@ S_PROTECTED="default branch is protected: pushed the stub to a branch and opened
 say()  { printf '%s\n' "$*"; }
 plan() { PLAN_LINES+=("$1"); say "  $1"; }
 die()  { say "$1" >&2; exit 1; }
+
+# --- convenience verbs: proxy read-only queries over the deploy channel ---------
+case "${1:-}" in
+  status|history)
+    exec ssh -i "$DEPLOY_KEY" -o IdentitiesOnly=yes "deploy@$VPS_ADDR" "$*" < /dev/null
+    ;;
+esac
 
 # --- parse args -----------------------------------------------------------------
 REPO_ARG="" PROFILE="" PORT="" CPORT="" MEM="" HEALTH_PATH="/" APP="" DRY=0

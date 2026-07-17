@@ -81,7 +81,11 @@ forwarding). Accepted requests, everything else is refused and journaled:
 deploy <app> <tag>      # tag must match ^sha-[0-9a-f]{7,40}$
 rollback <app> [tag]    # defaults to the previous sha from .deploy-state
 status                  # app | sha | health | last deploy
+history <app>           # last journal lines of the app
 ```
+
+`./bin/onboard.sh status` and `./bin/onboard.sh history <app>` proxy the
+same queries from the operator machine.
 
 `deploy` reads `key=value` lines on stdin: `token` (ephemeral GITHUB_TOKEN,
 used for `docker login` and dropped — no registry credentials live on the

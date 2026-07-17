@@ -11,6 +11,7 @@
 #                          rollback on failure; metadata comes on stdin
 #   rollback <app> [tag]   redeploy the previous (or given) sha
 #   status                 one line per app: app | sha | health | last deploy
+#   history <app>          last journal lines of the app
 #
 # stdin protocol for `deploy` (key=value lines; keeps the ephemeral
 # GITHUB_TOKEN out of argv and logs):
@@ -39,7 +40,7 @@ HEALTH_INTERVAL=5
 LOCK_WAIT=600          # a deploy behind a slow one waits up to 10 min
 
 # --- user-facing strings (en) -------------------------------------------------
-S_REFUSED="refused: only 'deploy <app> <tag>', 'rollback <app> [tag]', 'status' are accepted"
+S_REFUSED="refused: only 'deploy <app> <tag>', 'rollback <app> [tag]', 'status', 'history <app>' are accepted"
 S_UNKNOWN_APP="refused: app not in allowlist"
 S_BAD_TAG="refused: tag must match ^sha-[0-9a-f]{7,40}\$"
 S_NO_CONF="error: app.conf not found for app"
@@ -335,23 +336,49 @@ cmd_rollback() {
 }
 
 cmd_status() {
-  local app dir cur cname state hs last
+  local app dir_raw dir cur cur7 cname state hs last profile port path
   printf '%s | %s | %s | %s\n' app sha health "last deploy"
   while read -r app dir_raw; do
     [ -n "$app" ] || continue
     case "$app" in \#*) continue ;; esac
     dir=${dir_raw:-/opt/$app}
     cur=$(state_get "$dir" current); cur=${cur:-none}
+    cur7=$(printf '%s' "${cur#sha-}" | cut -c1-7)   # journal-style sha7, less noise
     cname=$(app_container "$app")
     if [ -n "$cname" ]; then
       state=$(docker inspect --format '{{.State.Status}}' "$cname" 2>/dev/null || echo missing)
       hs=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}-{{end}}' "$cname" 2>/dev/null || echo -)
+      # no container healthcheck: probe the gate URL live so the column is
+      # never blank for static/service apps
+      if [ "$hs" = "-" ] && [ "$state" = running ] && [ -f "$dir/app.conf" ]; then
+        profile=$(conf_get "$dir" profile)
+        case "$profile" in
+          static|service)
+            port=$(conf_get "$dir" port); path=$(conf_get "$dir" health_path)
+            if curl -fsS -m 3 -o /dev/null "http://127.0.0.1:${port}${path}" 2>/dev/null; then
+              hs=ok
+            else
+              hs=fail
+            fi
+            ;;
+        esac
+      fi
     else
       state=missing; hs=-
     fi
     last=$(grep "] ${app}@" "$LOG_FILE" 2>/dev/null | grep ' deploy ' | tail -1 | sed -E 's/^\[([^]]+)\].*/\1/' || true)
-    printf '%s | %s | %s/%s | %s\n' "$app" "${cur#sha-}" "$state" "$hs" "${last:-never}"
+    printf '%s | %s | %s/%s | %s\n' "$app" "$cur7" "$state" "$hs" "${last:-never}"
   done < "$APPS_LIST"
+}
+
+cmd_history() { # last journal lines of one app, over the deploy SSH channel
+  local app=$1 n=${2:-20} out
+  out=$(grep -F "] ${app}@" "$LOG_FILE" 2>/dev/null | tail -n "$n" || true)
+  if [ -n "$out" ]; then
+    printf '%s\n' "$out"
+  else
+    echo "no journal entries for $app"
+  fi
 }
 
 # --- dispatcher ----------------------------------------------------------------
@@ -364,6 +391,13 @@ main() {
   read -r -a argv <<< "$raw" || true
   local verb="${argv[0]:-}"
   case "$verb" in
+    history)
+      local app="${argv[1]:-}"
+      printf '%s' "$app" | grep -Eq '^[a-z0-9][a-z0-9._-]{0,40}$' \
+        || { echo "$S_UNKNOWN_APP" >&2; log_refuse "$raw"; exit 1; }
+      [ -n "$(app_dir "$app")" ] || { echo "$S_UNKNOWN_APP" >&2; log_refuse "$raw"; exit 1; }
+      cmd_history "$app"
+      ;;
     deploy|rollback)
       local app="${argv[1]:-}" tag="${argv[2]:-}"
       # allowlist first: unknown names are refused before anything runs
