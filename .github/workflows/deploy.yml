@@ -25,6 +25,11 @@ on:
         description: App name, must match a line in /opt/deploy-hub/apps.list on the VPS
         required: true
         type: string
+      dockerfile:
+        description: Path to the Dockerfile inside the repo (some repos keep it out of the root)
+        required: false
+        type: string
+        default: Dockerfile
 
 env:
   VPS_HOST: 192.3.94.42
@@ -61,6 +66,7 @@ jobs:
       - name: Build and push image
         env:
           APP: ${{ inputs.app }}
+          DOCKERFILE: ${{ inputs.dockerfile }}
         run: |
           OWNER="$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
           IMAGE="ghcr.io/${OWNER}/${APP}"
@@ -68,6 +74,7 @@ jobs:
           # GIT_SHA/BUILD_TIME serve Dockerfiles that declare these ARGs
           # (version-stamped pages); harmless for those that do not
           docker build \
+            -f "$DOCKERFILE" \
             --build-arg GIT_SHA="$GITHUB_SHA" \
             --build-arg BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             -t "$IMAGE:$TAG" -t "$IMAGE:latest" .

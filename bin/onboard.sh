@@ -39,7 +39,7 @@ HUB_REPO_SLUG="DreamsAreReal/deploy-hub"
 APPS_LIST_REMOTE=/opt/deploy-hub/apps.list
 
 # --- user-facing strings (en) -------------------------------------------------
-S_USAGE="usage: ./onboard.sh <repo> --profile <static|bot|service> [--port N] [--cport N] [--mem LIMIT] [--health-path P] [--app NAME] [--dry-run]
+S_USAGE="usage: ./onboard.sh <repo> --profile <static|bot|service> [--port N] [--cport N] [--mem LIMIT] [--health-path P] [--app NAME] [--dockerfile PATH] [--dry-run]
        ./onboard.sh status | history <app>     # read-only, over the deploy channel"
 S_BAD_PROFILE="error: --profile must be static, bot or service"
 S_NO_REPO="error: repo not found on GitHub"
@@ -65,7 +65,7 @@ case "${1:-}" in
 esac
 
 # --- parse args -----------------------------------------------------------------
-REPO_ARG="" PROFILE="" PORT="" CPORT="" MEM="" HEALTH_PATH="/" APP="" DRY=0
+REPO_ARG="" PROFILE="" PORT="" CPORT="" MEM="" HEALTH_PATH="/" APP="" DRY=0 DOCKERFILE=Dockerfile
 while [ $# -gt 0 ]; do
   case "$1" in
     --profile)     PROFILE="${2:?}"; shift 2 ;;
@@ -74,6 +74,7 @@ while [ $# -gt 0 ]; do
     --mem)         MEM="${2:?}"; shift 2 ;;
     --health-path) HEALTH_PATH="${2:?}"; shift 2 ;;
     --app)         APP="${2:?}"; shift 2 ;;
+    --dockerfile)  DOCKERFILE="${2:?}"; shift 2 ;;
     --dry-run)     DRY=1; shift ;;
     -h|--help)     say "$S_USAGE"; exit 0 ;;
     -*)            die "$S_USAGE" ;;
@@ -111,7 +112,7 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 git clone -q --depth 1 -b "$BRANCH" "https://github.com/${REPO_SLUG}.git" "$WORK/repo"
 
-[ -f "$WORK/repo/Dockerfile" ] || die "$S_NO_DOCKERFILE"
+[ -f "$WORK/repo/$DOCKERFILE" ] || die "$S_NO_DOCKERFILE ($DOCKERFILE)"
 # app model guard: a repo compose must not build more than one service
 if compgen -G "$WORK/repo/docker-compose.y*ml" > /dev/null; then
   builds=$(grep -cE '^\s+build:' "$WORK"/repo/docker-compose.y*ml || true)
@@ -157,6 +158,8 @@ fi
 
 # stub: compare with what the repo already has
 STUB_PATH="$WORK/repo/.github/workflows/deploy.yml"
+DOCKERFILE_INPUT=""
+[ "$DOCKERFILE" != Dockerfile ] && DOCKERFILE_INPUT=", dockerfile: $DOCKERFILE"
 STUB_WANT=$(cat <<EOF
 on:
   push: {branches: [$BRANCH]}
@@ -164,7 +167,7 @@ permissions: {contents: read, packages: write}
 jobs:
   deploy:
     uses: $HUB_REPO_SLUG/.github/workflows/deploy.yml@main
-    with: {app: $APP}
+    with: {app: $APP$DOCKERFILE_INPUT}
     secrets: inherit
 EOF
 )
