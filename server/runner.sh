@@ -36,6 +36,7 @@ LOG_FILE="$HUB_DIR/deploys.log"
 LOCK_FILE="$HUB_DIR/deploy.lock"
 TELEGRAM_ENV="$HUB_DIR/telegram.env"   # optional: TG_TOKEN=, TG_CHAT_ID= (600, owner deploy)
 TELEGRAM_LOG="$HUB_DIR/telegram.log"
+SMOKE_CONF="$HUB_DIR/smoke.conf"       # optional: TCP ports to probe after each op; empty/absent = skip
 REGISTRY=ghcr.io
 HEALTH_TIMEOUT=90      # seconds; contract: never below 60 (guardrail from the brief)
 HEALTH_INTERVAL=5
@@ -58,21 +59,32 @@ S_CARD_FIRST_FAIL_HINT="Check /opt/%s/.env and app logs, then push a fix"
 S_CARD_FAIL_HINT="Run: ssh vpn 'docker logs %s --tail 50'"
 
 log_line() { # log_line <app> <sha7> <action> <result> <duration_s>
-  # container operations carry a VPN smoke suffix: the prod VPN on this box
-  # is the one thing a deploy must never break, so every deploy/rollback/stop
-  # line records `vpn=ok|fail` measured right after the operation
+  # container operations carry a post-op smoke suffix: whatever critical service
+  # must survive a deploy is probed right after, so every deploy/rollback/stop
+  # line records `vpn=ok|skip|fail` (skip = no smoke ports configured)
   local suffix=""
   case "$3" in deploy|rollback|redeploy|stop) suffix=" vpn=$(vpn_smoke)" ;; esac
   printf '[%s] %s@%s %s %s %ss%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" "$3" "$4" "$5" "$suffix" >> "$LOG_FILE"
 }
 
-vpn_smoke() { # cheap in-VPS probe: xray port listens AND container is running
-  if nc -z -w 2 127.0.0.1 2096 2>/dev/null \
-     && [ -n "$(docker ps --filter name=xray-server --filter status=running -q)" ]; then
-    echo ok
-  else
-    echo fail
-  fi
+smoke_ports() { # configured post-op TCP smoke ports, one per line in smoke.conf
+  # (comments and blank lines ignored). No file / no ports => nothing to probe.
+  [ -f "$SMOKE_CONF" ] || return 0
+  grep -vE '^[[:space:]]*(#|$)' "$SMOKE_CONF" 2>/dev/null | tr -s ' \t' '\n' \
+    | grep -E '^[0-9]{1,5}$' || true
+}
+
+vpn_smoke() { # post-op probe of the configured smoke ports (default: none).
+  # Ports live in smoke.conf so removing a service (e.g. the VPN) does not leave
+  # the journal permanently reading `vpn=fail`: with nothing configured there is
+  # nothing to prove, so the result is `skip`, not `fail`.
+  local ports; ports=$(smoke_ports)
+  [ -n "$ports" ] || { echo skip; return; }
+  local p
+  for p in $ports; do
+    nc -z -w 2 127.0.0.1 "$p" 2>/dev/null || { echo fail; return; }
+  done
+  echo ok
 }
 
 fmt_duration() { # seconds -> "6m12s" | "42s"
