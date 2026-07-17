@@ -2,9 +2,9 @@
 
 Push to the default branch of a connected repo → the app is rebuilt in CI and
 running on the VPS a few minutes later, health-checked, with automatic rollback
-and a Telegram card. Connecting a new repo is one command (`onboard.sh`,
-in progress). No PaaS, no daemons: one reusable GitHub Actions workflow, one
-server-side script, SSH in between.
+and a Telegram card. Connecting a new repo is one command: `bin/onboard.sh`.
+No PaaS, no daemons: one reusable GitHub Actions workflow, one server-side
+script, SSH in between. When things break, see [RUNBOOK.md](RUNBOOK.md).
 
 ## How a deploy flows
 
@@ -17,7 +17,7 @@ push to default branch
           → runner (/opt/deploy-hub/bin/runner.sh on the VPS):
               flock → docker login (ephemeral job token) → pull → logout
               → compose up → health gate (90s)
-              → ok:   journal + ✅ Telegram card
+              → ok:   journal (incl. VPN smoke) + ✅ Telegram card
               → fail: rollback to previous sha → ⏪ card
                       (first deploy: stop app → ❌ card)
 ```
@@ -25,27 +25,37 @@ push to default branch
 Images are built only in CI — never on the VPS (1 CPU, <1 GiB RAM, and a
 production VPN that must not be starved).
 
-## Connecting a repo (manual for now, `onboard.sh` will automate this)
+## Connecting a repo — one command
 
-1. The repo needs a `Dockerfile` (single app container per repo).
-2. Add the caller stub as `.github/workflows/deploy.yml`:
+The repo needs a `Dockerfile` (the app model is one built container per
+repo; static service dependencies may sit in the same compose). Then:
 
-   ```yaml
-   on:
-     push: {branches: [main]}          # your default branch
-   permissions: {contents: read, packages: write}
-   jobs:
-     deploy:
-       uses: DreamsAreReal/deploy-hub/.github/workflows/deploy.yml@main
-       with: {app: myapp}
-       secrets: inherit
-   ```
+```
+./bin/onboard.sh <repo> --profile <static|bot|service> [--port N] [--dry-run]
+```
 
-3. Set the repo secret `VPS_SSH_KEY` (private part of the deploy key);
-   optionally `TG_TOKEN`/`TG_CHAT_ID` for CI-side failure cards.
-4. On the VPS: create `/opt/<app>/` with `docker-compose.yml` (from
-   `server/compose-template.yml`) and `app.conf`, then add the app to
-   `/opt/deploy-hub/apps.list`.
+It prints the plan, then does everything itself: commits the ~8-line caller
+stub to the default branch (opens a PR when the branch is protected), sets
+the `VPS_SSH_KEY` repo secret, prepares `/opt/<app>/` on the VPS over your
+root SSH access (compose from the template, `app.conf`, empty `.env`), and
+adds the app to the allowlist. Idempotent: a second run reports "no changes".
+
+The only thing ever left for you: paste the app's own secrets into
+`/opt/<app>/.env` — onboard prints the variable names it finds in the repo.
+Then push and watch the deploy.
+
+Prerequisites on the operator machine (one-time, already true here):
+`gh` CLI authenticated; root SSH alias `vpn` for the VPS; the deploy key at
+`~/.ssh/deploy_hub_key` — one key for all repos, generated at hub setup, its
+public half is bound to the forced command on the VPS. Optional
+`bin/.env-hub` with `TG_TOKEN=`/`TG_CHAT_ID=` lets onboard set the Telegram
+secrets too.
+
+Manual path (no onboard.sh, e.g. rebuilding the hub itself) — see
+[RUNBOOK.md](RUNBOOK.md) and `server/app.conf.example`: the pieces are the
+caller stub (template in the header of `.github/workflows/deploy.yml`), the
+repo secret, `/opt/<app>/` from `server/compose-template.yml`, and a line in
+`apps.list`.
 
 ## Server layout
 
@@ -53,8 +63,10 @@ production VPN that must not be starved).
 |---|---|
 | `/opt/deploy-hub/bin/runner.sh` | the deploy runner — single SSH entry point (forced command) |
 | `/opt/deploy-hub/apps.list` | allowlist: `<app> <dir>` per line; unknown apps are refused |
-| `/opt/deploy-hub/deploys.log` | append-only journal: `[ISO] app@sha7 action result duration` |
+| `/opt/deploy-hub/deploys.log` | append-only journal: `[ISO] app@sha7 action result duration vpn=ok\|fail` |
 | `/opt/deploy-hub/telegram.env` | `TG_TOKEN`/`TG_CHAT_ID` for cards (600); absent → cards skipped |
+| `/opt/deploy-hub/last-error.log` | recent pull errors (when CI logs are unreachable) |
+| `/opt/deploy-hub/bin/prune.sh` | daily image prune (systemd timer): keeps running + 2 previous per app |
 | `/opt/<app>/docker-compose.yml` | app container: 127.0.0.1 ports, mem_limit, log rotation |
 | `/opt/<app>/app.conf` | `profile=`, `port=`, `health_path=`, `image=` — read by the runner |
 | `/opt/<app>/.env` | app secrets (600), referenced by compose, never in git |

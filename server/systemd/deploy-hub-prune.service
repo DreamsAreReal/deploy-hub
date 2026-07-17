@@ -1,0 +1,8 @@
+[Unit]
+Description=deploy-hub: prune old app images (keep running + 2 previous)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/deploy-hub/bin/prune.sh
