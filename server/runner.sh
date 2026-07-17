@@ -25,6 +25,9 @@
 set -euo pipefail
 
 HUB_DIR="${HUB_DIR:-/opt/deploy-hub}"   # overridable for tests
+# docker compose stats the cwd even with -f: a manual `sudo -u deploy` run
+# from /root would die on permissions, so normalize the cwd first
+cd "${HUB_DIR}" 2>/dev/null || cd /
 APPS_LIST="$HUB_DIR/apps.list"
 LOG_FILE="$HUB_DIR/deploys.log"
 LOCK_FILE="$HUB_DIR/deploy.lock"
@@ -50,7 +53,21 @@ S_CARD_FIRST_FAIL_HINT="Check /opt/%s/.env and app logs, then push a fix"
 S_CARD_FAIL_HINT="Run: ssh vpn 'docker logs %s --tail 50'"
 
 log_line() { # log_line <app> <sha7> <action> <result> <duration_s>
-  printf '[%s] %s@%s %s %s %ss\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" "$3" "$4" "$5" >> "$LOG_FILE"
+  # container operations carry a VPN smoke suffix: the prod VPN on this box
+  # is the one thing a deploy must never break, so every deploy/rollback/stop
+  # line records `vpn=ok|fail` measured right after the operation
+  local suffix=""
+  case "$3" in deploy|rollback|stop) suffix=" vpn=$(vpn_smoke)" ;; esac
+  printf '[%s] %s@%s %s %s %ss%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" "$3" "$4" "$5" "$suffix" >> "$LOG_FILE"
+}
+
+vpn_smoke() { # cheap in-VPS probe: xray port listens AND container is running
+  if nc -z -w 2 127.0.0.1 2096 2>/dev/null \
+     && [ -n "$(docker ps --filter name=xray-server --filter status=running -q)" ]; then
+    echo ok
+  else
+    echo fail
+  fi
 }
 
 fmt_duration() { # seconds -> "6m12s" | "42s"
