@@ -39,6 +39,9 @@ Do this ONCE per hub, before any onboarding. `onboard.sh` and every deploy
 assume it is done; skip it and nothing works. It runs from the operator
 machine (your laptop) against a VPS you already have root SSH to.
 
+0. **Docker + docker compose on the VPS** — the whole system runs on them.
+   On a bare host install first: `ssh vpn 'curl -fsSL https://get.docker.com | sh'`
+   (skip if `ssh vpn 'docker compose version'` already prints a version).
 1. **gh CLI** authenticated for your GitHub account: `gh auth status`.
 2. **Root SSH alias `vpn`** for the VPS in `~/.ssh/config`, e.g.
 
