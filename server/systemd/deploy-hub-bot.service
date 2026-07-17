@@ -1,0 +1,21 @@
+[Unit]
+Description=deploy-hub: interactive Telegram control bot (long-polling)
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=deploy
+Group=deploy
+# secrets (TG_TOKEN) are read by the process from telegram.env, never in argv/env here
+ExecStart=/usr/bin/python3 /opt/deploy-hub/bin/bot.py
+Restart=always
+RestartSec=5
+# survives reboot via [Install]; keeps running unless explicitly stopped
+MemoryMax=64M
+# no new privileges; the bot only needs to exec runner.sh + docker as `deploy`
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
