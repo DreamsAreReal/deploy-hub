@@ -320,14 +320,17 @@ cmd_deploy() {
     printf '%s' "$byoc_main"  | grep -Eq '^[a-zA-Z0-9._-]{1,64}$' || { echo "refused: bad main service" >&2; exit 1; }
     printf '%s' "$byoc_port"  | grep -Eq '^[0-9]{0,5}$'           || { echo "refused: bad hport" >&2; exit 1; }
     case "$byoc_hmode" in compose|http|process) ;; *) echo "refused: bad hmode" >&2; exit 1 ;; esac
-    local newc; newc=$(mktemp)
+    # stage the new compose INSIDE the app dir so its relative paths (env_file:
+    # .env, build contexts) resolve during validation, then swap it in on success
+    local newc="$dir/docker-compose.yml.new"
     printf '%s' "$compose_b64" | base64 -d > "$newc" 2>/dev/null || { echo "refused: bad compose base64" >&2; rm -f "$newc"; exit 1; }
-    # sanity: it must parse as a compose file (with the runner's image var set)
-    if ! DEPLOY_IMAGE="${image}:${tag}" docker compose -f "$newc" config -q >/dev/null 2>&1; then
+    [ -f "$dir/.env" ] || install -m 600 -o deploy -g deploy /dev/null "$dir/.env" 2>/dev/null || : > "$dir/.env"
+    # sanity: it must parse as a compose file (with the runner's image var set),
+    # validated from the app dir so `.env` and relative paths are present
+    if ! ( cd "$dir" && DEPLOY_IMAGE="${image}:${tag}" docker compose -f docker-compose.yml.new config -q >/dev/null 2>&1 ); then
       echo "refused: rendered compose does not parse" >&2; rm -f "$newc"; exit 1
     fi
-    install -m 644 -o deploy -g deploy "$newc" "$dir/docker-compose.yml" 2>/dev/null || cp "$newc" "$dir/docker-compose.yml"
-    rm -f "$newc"
+    mv "$newc" "$dir/docker-compose.yml"
     # refresh app.conf for byoc (mode/main/port/health drive rollback+status)
     { echo "mode=byoc"; echo "main=$byoc_main"; [ -n "$byoc_port" ] && echo "port=$byoc_port"; \
       echo "health_path=/"; echo "hmode=$byoc_hmode"; echo "image=$image"; } > "$dir/app.conf"
@@ -373,8 +376,10 @@ cmd_deploy() {
     echo "$S_HEALTH_OK — ${app}@${sha7} live (${duration})"
     # BYOC: the published port is decided by the developer's compose, so refresh
     # the Caddy route to match the port just recorded in app.conf (idempotent).
+    # caddy-sync writes /etc/caddy (root-owned), so the runner (deploy) invokes
+    # it through the narrow sudoers rule dedicated to that one script.
     if [ "$(conf_get "$dir" mode)" = byoc ] && [ -x "$HUB_DIR/bin/caddy-sync.sh" ]; then
-      "$HUB_DIR/bin/caddy-sync.sh" >/dev/null 2>&1 || true
+      sudo -n "$HUB_DIR/bin/caddy-sync.sh" >/dev/null 2>&1 || true
     fi
     send_card "$app" "$(render_card ok "$app" "$sha7" "$duration" "$subject" "")"
     return 0
@@ -431,6 +436,9 @@ cmd_rollback() {
   profile=$(conf_get "$dir" profile)
   port=$(conf_get "$dir" port)
   path=$(conf_get "$dir" health_path)
+  # BYOC apps carry the health mode in hmode= (there is no legacy profile=);
+  # feed it to the same health_gate so rollback/redeploy gate correctly
+  [ "$(conf_get "$dir" mode)" = byoc ] && profile=$(conf_get "$dir" hmode)
   [ -n "$tag" ] || tag=$(state_get "$dir" previous)
   [ -n "$tag" ] || { echo "error: no previous sha recorded for $app" >&2; exit 1; }
   local sha7; sha7=$(printf '%s' "${tag#sha-}" | cut -c1-7)
