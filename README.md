@@ -99,8 +99,28 @@ empty app list is fine on a fresh hub).
 
 Clone this repo and run `onboard.sh` **from its root** (the `./bin/` path is
 relative to the repo). The app repo you are connecting needs a `Dockerfile`
-(the app model is one built container per repo; static service dependencies
-may sit in the same compose).
+(one built image per repo).
+
+### Bring your own compose (recommended)
+
+If the repo ships a `docker-compose.yml`, deploy-hub deploys **that compose**,
+so you declare ports / health / env / volumes / sidecars yourself — no "type"
+to choose:
+
+- the **main service** (the one with `build:`, or labelled
+  `deploy-hub.main: "true"`, or the only service) is the image CI builds and
+  pushes to GHCR; its `build:` is swapped for that image (the server never
+  builds). Sidecars (postgres/redis/…) are pulled as-is.
+- the main service's published port gets the HTTPS route
+  (`https://<app>.192-3-94-42.sslip.io`); `deploy-hub.public: "false"` opts out
+  of a URL, and `deploy-hub.host: "true"` picks which service's port to expose.
+- a `healthcheck:` in your compose drives the health gate; otherwise HTTP on the
+  published port, otherwise a process-up check.
+- safe defaults (`mem_limit`, json-file log rotation, `restart: unless-stopped`)
+  are layered on **only where you did not set them**.
+
+Repos with just a `Dockerfile` (no compose) use the auto-detected template path
+below.
 
 ```
 git clone https://github.com/DreamsAreReal/deploy-hub && cd deploy-hub
