@@ -273,8 +273,13 @@ cmd_deploy() {
       send_card "$app" "$(render_card rollback-fail "$app" "$sha7" "$duration" "$subject" "$prev7" "$reason")"
     fi
   else
-    docker compose -f "$dir/docker-compose.yml" stop app >/dev/null 2>&1 || true
-    log_line "$app" "$sha7" stop ok 0
+    # DEPLOY_IMAGE must be set even for `stop`: compose refuses to parse the
+    # file otherwise and the app would silently keep running (caught in F4)
+    if DEPLOY_IMAGE="${image}:${tag}" docker compose -f "$dir/docker-compose.yml" stop app >/dev/null 2>&1; then
+      log_line "$app" "$sha7" stop ok 0
+    else
+      log_line "$app" "$sha7" stop fail 0
+    fi
     echo "$S_FIRST_FAIL" >&2
     send_card "$app" "$(render_card first-fail "$app" "$sha7" "$duration" "$subject" "" "$reason")"
   fi
