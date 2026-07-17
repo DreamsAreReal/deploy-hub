@@ -9,25 +9,33 @@ identifiers, logs and code stay English.
 
 ## What it does
 
+The UI follows the RS-05 checklists. A `setMyCommands` menu (the "/" quick menu)
+is registered at startup; navigation edits one message per level; each screen
+carries a breadcrumb title and a Back button; `answerCallbackQuery` fires on
+every callback (empty on navigation, a `⏳` toast on long operations); lists
+longer than ~6 paginate. Status glyph: `🚀` healthy · `⚠️` running-no-signal ·
+`🔴` down.
+
 **Buttons (`/start` or `/menu`):**
 
 - Main menu → apps / status / connect / server / help.
-- Apps → all apps as buttons (2 per row) with a health glyph (`✅` healthy /
-  `▫️` running / `❌` down); back.
+- Apps → apps as buttons (2 per row) with a status glyph; paginated `[◀ i/N ▶]`
+  past ~6; back.
 - Connect → the owner's GitHub repos (non-archived, non-fork, newest first, with
   pagination; already-onboarded repos are hidden) → tap a repo → the bot
-  auto-detects the profile from the repo and shows the result to confirm
-  (Connect / Change type / Cancel); one tap onboards it end-to-end and replies
-  with the app's HTTPS URL. "Change type" opens the manual static/service/bot
-  menu. See "Connect flow (WB4)" below.
-- App card → name, sha7, health, deploy number + last-deploy time, live URL, a
-  server-resource line (RAM + disk), and actions logs / rollback / redeploy /
-  refresh / back. Refresh re-reads status; logs are sent as a separate message.
+  auto-detects the profile and shows the result to confirm (Connect / Change
+  type / Cancel); one tap onboards it end-to-end and replies with the app's HTTPS
+  URL. "Change type" opens the manual static/service/bot menu. See "Connect flow
+  (WB4)" below.
+- App card (RS-05 layout) → status glyph + breadcrumb title (`Приложения › app`),
+  health in `<code>`, bullet metrics (sha, deploy #N + time), a clickable URL,
+  and a one-line verdict. Actions: logs / refresh, redeploy, and the destructive
+  rollback on its own row, then back. Refresh re-reads status; logs go as a
+  separate message.
 - Server → host RAM (used/total + available), disk (use% + free), uptime,
   running container count.
-- Rollback / Redeploy → inline `Да` / `Отмена` confirm in the same card; after the
-  action the card is refreshed with fresh status plus a short toast
-  (`answerCallbackQuery`).
+- Rollback / Redeploy → inline `Да` / `Отмена` confirm; the action shows a
+  visible `⏳` loading state, then the card is refreshed with fresh status.
 
 **Slash-command fallback (still supported):**
 

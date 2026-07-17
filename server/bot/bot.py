@@ -71,47 +71,62 @@ DEFAULT_ALERTS = {
     "cooldown_sec": 10800,   # min seconds between repeats of the same resource alert (3h)
 }
 
-# consistent status glyphs (taste: <=1 meaningful glyph per element)
-GLYPH_HEALTHY = "✅"   # ✅ healthy / passing gate
-GLYPH_RUNNING = "▫️"  # ▫️ running, no health signal
-GLYPH_DOWN = "❌"      # ❌ missing / unhealthy
+# consistent status glyphs (RS-05: one glyph tells the state at a glance)
+GLYPH_HEALTHY = "\U0001f680"  # 🚀 running / healthy / passing gate
+GLYPH_RUNNING = "⚠️"          # ⚠️ running, no health signal (warning)
+GLYPH_DOWN = "\U0001f534"     # 🔴 missing / unhealthy / down
 
 # --- human-facing UI strings (ru) ---------------------------------------------
 T_MENU = "<b>deploy-hub</b>\nПанель управления деплоями."
 T_HELP = (
-    "<b>deploy-hub — помощь</b>\n\n"
-    "Управляйте через кнопки меню или командами:\n"
+    "❔ <b>Справка</b>\n\n"
+    "<b>Команды</b>\n"
     "/menu — главное меню\n"
-    "/status — таблица всех приложений\n"
+    "/status — статус всех приложений\n"
     "/server — ресурсы сервера (RAM, диск, uptime)\n"
     "/apps — список приложений\n"
     "/logs &lt;app&gt; — хвост логов контейнера\n"
     "/history &lt;app&gt; — журнал деплоев\n"
     "/rollback &lt;app&gt; — откат на прошлый sha\n"
     "/redeploy &lt;app&gt; — передеплой текущего sha\n\n"
-    "Откат и передеплой требуют подтверждения."
+    "<b>Действия в карточке</b>\n"
+    "\U0001f4dc Логи · ⏪ Откат · \U0001f504 Редеплой · ♻️ Обновить\n\n"
+    "Откат и редеплой требуют подтверждения."
 )
-T_APPS_TITLE = "<b>Приложения</b>\nВыберите приложение:"
+T_MENU_HINT = "Выберите раздел:"
+T_APPS_HINT = "Выберите приложение:"
 T_NO_APPS = "Приложений пока нет."
+# breadcrumbs shown in section titles (RS-05: user never loses context)
+CRUMB_APPS = "Приложения"
+CRUMB_STATUS = "Статус"
+# app card labels (RS-05 checklist): the card body is built in screen_app() with
+# a status glyph + breadcrumb title, <code> for copyables, a clickable URL,
+# bullet metrics, blank-line separators and a final one-line verdict
+T_CARD_URL_LABEL = "Открыть приложение"
+T_CARD_NO_URL = "URL нет (профиль bot)"
+V_HEALTHY = "\U0001f680 Здоров — все системы в норме"
+V_WARNING = "⚠️ Запущен, health-сигнала нет"
+V_DOWN = "\U0001f534 Недоступен — контейнер не отвечает"
 T_UNKNOWN_APP = "Неизвестное приложение: <code>{}</code>"
 T_NEED_APP = "Использование: {} &lt;app&gt;"
 T_UNKNOWN_CMD = "Неизвестная команда. Откройте /menu."
-T_CONFIRM_ROLLBACK = "Откатить <b>{}</b> на предыдущий sha?\nЭто действие изменит прод."
-T_CONFIRM_REDEPLOY = "Передеплоить <b>{}</b> на текущий sha?"
-T_WORKING = "Выполняю…"
-T_CANCELLED = "Отменено"
+T_CONFIRM_ROLLBACK = "⚠️ Откатить <b>{}</b> на предыдущий sha?\n\nЭто изменит прод и запустит развёртывание."
+T_CONFIRM_REDEPLOY = "\U0001f504 Передеплоить <b>{}</b> на текущий sha?\n\nКонтейнер будет пересоздан."
+T_WORKING = "⏳ Выполняю…"
+T_LOADING = "⏳ Выполняю операцию, подождите…"
 T_DONE_ROLLBACK = "Откат выполнен"
-T_DONE_REDEPLOY = "Передеплой выполнен"
+T_DONE_REDEPLOY = "Редеплой выполнен"
 T_FAILED = "Ошибка (см. карточку)"
 T_REFRESHED = "Обновлено"
 T_RUNNER_FAIL = "runner error (exit {}):\n<pre>{}</pre>"
-T_SERVER_TITLE = "<b>Сервер</b>"
+T_SERVER_TITLE = "\U0001f5a5 <b>Сервер</b>"
 T_SERVER_BODY = (
-    "{title}\n"
-    "RAM: {ram_used}/{ram_total} MiB (avail {ram_avail})\n"
-    "диск /: {disk_pct}% занято (свободно {disk_free})\n"
-    "uptime: {uptime}\n"
-    "контейнеров: {containers}"
+    "{title}\n\n"
+    "\U0001f4ca <b>Ресурсы</b>\n"
+    "  • RAM: {ram_used}/{ram_total} MiB (свободно {ram_avail})\n"
+    "  • диск /: {disk_pct}% занято (свободно {disk_free})\n"
+    "  • uptime: {uptime}\n"
+    "  • контейнеров: {containers}"
 )
 # resource line reused in /status and the app card: RAM used/total + available, disk
 T_RES_LINE = "\U0001f5a5 RAM {ram_used}/{ram_total} MiB (avail {ram_avail}) • диск {disk_pct}% (свободно {disk_free})"
@@ -292,6 +307,16 @@ class Api:
             self._call("answerCallbackQuery", params, timeout=10)
         except (urllib.error.URLError, TimeoutError):
             pass
+
+    def set_commands(self, commands):
+        """setMyCommands: the "/" quick-command menu next to the input box."""
+        try:
+            self._call("setMyCommands",
+                       {"commands": json.dumps(commands)}, timeout=10)
+            return True
+        except (urllib.error.URLError, TimeoutError) as e:
+            bot_log(f"setMyCommands error: {type(e).__name__}")
+            return False
 
 
 # --- app registry (same source of truth as runner) ----------------------------
@@ -739,6 +764,16 @@ def health_glyph(health):
     return GLYPH_DOWN
 
 
+def health_verdict(health):
+    """One-line verdict for the app card (RS-05: read the state in 1 second)."""
+    g = health_glyph(health)
+    if g == GLYPH_HEALTHY:
+        return V_HEALTHY
+    if g == GLYPH_RUNNING:
+        return V_WARNING
+    return V_DOWN
+
+
 def deploy_number(app):
     """Count of successful deploys for the app, from the journal (for the card)."""
     try:
@@ -871,7 +906,7 @@ def screen_menu():
         [{"text": B_SERVER, "callback_data": "server"},
          {"text": B_HELP, "callback_data": "help"}],
     ]}
-    return T_MENU, kb
+    return T_MENU + "\n" + T_MENU_HINT, kb
 
 
 def screen_server():
@@ -975,15 +1010,22 @@ def screen_connect_confirm(profile, repo):
     return C_CONFIRM.format(esc(repo), esc(profile)), kb
 
 
-def screen_apps():
+_APPS_PAGE = 6  # RS-05: paginate lists longer than ~6
+
+
+def screen_apps(page=0):
     apps = list_apps()
     if not apps:
         kb = {"inline_keyboard": [[{"text": B_BACK, "callback_data": "menu"}]]}
         return T_NO_APPS, kb
     rows, _ = status_rows()
     rows = rows or {}
+    total_pages = (len(apps) + _APPS_PAGE - 1) // _APPS_PAGE
+    page = max(0, min(page, total_pages - 1))
+    start = page * _APPS_PAGE
+    chunk = apps[start:start + _APPS_PAGE]
     buttons, row = [], []
-    for app in apps:
+    for app in chunk:
         g = health_glyph(rows.get(app, {}).get("health", ""))
         row.append({"text": f"{g} {app}", "callback_data": f"app:{app}"})
         if len(row) == 2:
@@ -991,33 +1033,54 @@ def screen_apps():
             row = []
     if row:
         buttons.append(row)
+    # page nav [◀ i/N ▶] only when there is more than one page
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append({"text": "◀", "callback_data": f"apage:{page - 1}"})
+        nav.append({"text": f"{page + 1}/{total_pages}", "callback_data": "noop"})
+        if page < total_pages - 1:
+            nav.append({"text": "▶", "callback_data": f"apage:{page + 1}"})
+        buttons.append(nav)
     buttons.append([{"text": B_BACK, "callback_data": "menu"}])
-    return T_APPS_TITLE, {"inline_keyboard": buttons}
+    title = f"\U0001f4e6 <b>{CRUMB_APPS}</b>"
+    if total_pages > 1:
+        title += f" ({page + 1}/{total_pages})"
+    return title + "\n" + T_APPS_HINT, {"inline_keyboard": buttons}
 
 
 def screen_app(app):
-    """App card: name, sha7, health, last deploy + number, live URL."""
+    """App card, RS-05 checklist: status glyph + breadcrumb title, health in
+    <code>, bullet metrics, a clickable URL, and a one-line verdict."""
     rows, err = status_rows()
     if err is not None:
         kb = {"inline_keyboard": [[{"text": B_BACK, "callback_data": "apps"}]]}
         return T_RUNNER_FAIL.format(1, esc(err)), kb
     info = (rows or {}).get(app, {})
-    g = health_glyph(info.get("health", ""))
+    health = info.get("health", "-")
+    g = health_glyph(health)
     url = live_url(app)
     n = deploy_number(app)
+    # URL line: clickable link for web apps, a plain note for bots (no URL)
+    if url and url != "-":
+        url_line = f"\U0001f517 <a href=\"{esc(url)}\">{T_CARD_URL_LABEL}</a>"
+    else:
+        url_line = f"\U0001f517 {T_CARD_NO_URL}"
     text = (
-        f"<b>{esc(app)}</b> {g}\n"
-        f"sha: <code>{esc(info.get('sha', '-'))}</code>\n"
-        f"health: <code>{esc(info.get('health', '-'))}</code>\n"
-        f"деплой #{n} • {esc(info.get('last', 'never'))}\n"
-        f"\U0001f517 {esc(url)}\n"
-        f"{resource_line()}"  # #4: server RAM + disk
+        f"{g} <b>{CRUMB_APPS} › {esc(app)}</b>\n"
+        f"<code>{esc(health)}</code>\n\n"
+        f"\U0001f4ca <b>Метрики</b>\n"
+        f"  • sha: <code>{esc(info.get('sha', '-'))}</code>\n"
+        f"  • деплой #{n} • {esc(info.get('last', 'never'))}\n\n"
+        f"{url_line}\n\n"
+        f"{health_verdict(health)}"
     )
     kb = {"inline_keyboard": [
+        # read + navigate first; the destructive rollback sits on its own row
         [{"text": B_LOGS, "callback_data": f"logs:{app}"},
-         {"text": B_ROLLBACK, "callback_data": f"rbq:{app}"}],
-        [{"text": B_REDEPLOY, "callback_data": f"rdq:{app}"},
          {"text": B_REFRESH, "callback_data": f"app:{app}"}],
+        [{"text": B_REDEPLOY, "callback_data": f"rdq:{app}"}],
+        [{"text": B_ROLLBACK, "callback_data": f"rbq:{app}"}],
         [{"text": B_BACK, "callback_data": "apps"}],
     ]}
     return text, kb
@@ -1037,7 +1100,7 @@ def screen_status():
     kb = {"inline_keyboard": [[{"text": B_BACK, "callback_data": "menu"}]]}
     if err is not None:
         return T_RUNNER_FAIL.format(1, esc(err)), kb
-    lines = ["<b>Статус приложений</b>"]
+    lines = [f"\U0001f4ca <b>{CRUMB_STATUS}</b>", ""]
     for app, info in (rows or {}).items():
         g = health_glyph(info["health"])
         lines.append(
@@ -1126,6 +1189,15 @@ def handle_callback(api, chat_id, message_id, cb_id, data):
         _handle_connect(api, chat_id, message_id, cb_id, action, rest)
         return
 
+    # page navigation / inert buttons carry a number or nothing (not an app)
+    if action == "noop":
+        api.answer_callback(cb_id)  # inert page counter: just close the spinner
+        return
+    if action == "apage":
+        page = int(rest) if rest.isdigit() else 0
+        _nav(api, chat_id, message_id, cb_id, *screen_apps(page))
+        return
+
     app = rest
     # every app-carrying action re-validates it against the allowlist
     if app and not valid_app(app):
@@ -1165,12 +1237,14 @@ def _nav(api, chat_id, message_id, cb_id, text, kb, toast=None):
 
 
 def _perform(api, chat_id, message_id, cb_id, app, fn, done_msg):
-    # acknowledge immediately so the button stops spinning, then act
+    # RS-05 loading state: close the spinner with a toast AND show a visible
+    # "working" message so a slow deploy never looks frozen, then the result
     api.answer_callback(cb_id, T_WORKING)
+    api.edit(chat_id, message_id, T_LOADING, None)
     ok = fn(app)
-    # refresh the card with the post-action status + a short toast
+    # refresh the card with the post-action status + a short banner
     text, kb = screen_app(app)
-    banner = ("✅ " + done_msg) if ok else ("❌ " + T_FAILED)
+    banner = ("\U0001f680 " + done_msg) if ok else ("\U0001f534 " + T_FAILED)
     api.edit(chat_id, message_id, banner + "\n\n" + text, kb)
 
 
@@ -1329,11 +1403,23 @@ class Monitor:
             time.sleep(max(10, interval))
 
 
+# the "/" quick-command menu (setMyCommands): <=6 commands with emoji (RS-05)
+MY_COMMANDS = [
+    {"command": "menu",   "description": "\U0001f3e0 Главное меню"},
+    {"command": "status", "description": "\U0001f4ca Статус приложений"},
+    {"command": "apps",   "description": "\U0001f4e6 Список приложений"},
+    {"command": "server", "description": "\U0001f5a5 Ресурсы сервера"},
+    {"command": "help",   "description": "❔ Справка"},
+]
+
+
 # --- main loop ----------------------------------------------------------------
 def main():
     token, authorized_chat_id = load_config()
     api = Api(token)
     bot_log(f"bot started; authorized_chat_id={authorized_chat_id}")
+    # register the "/" command menu (RS-05: second entry point after buttons)
+    api.set_commands(MY_COMMANDS)
     # background monitor: edge-triggered alerts to the owner only (#2)
     monitor = Monitor(api, authorized_chat_id)
     threading.Thread(target=monitor.run_forever, daemon=True).start()
