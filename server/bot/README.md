@@ -3,22 +3,37 @@
 An interactive Telegram surface over `runner.sh`, running on the VPS. It lets the
 operator check status and drive rollbacks/redeploys from the chat instead of SSH.
 
+The primary UI is a button-driven inline-keyboard menu; navigation edits the same
+message in place (no new message per tap). Human-facing UI text is Russian;
+identifiers, logs and code stay English.
+
 ## What it does
 
-Fixed command set (nothing else is executable through the bot):
+**Buttons (`/start` or `/menu`):**
 
-- `/status` — table of all apps: `app | sha | health | url | last deploy`
-- `/apps` — inline buttons, one per app, drilling into per-app actions
-- `/logs <app>` — last ~30 container log lines (trimmed to Telegram's limit)
+- Main menu → `Приложения` (apps) / `Статус` (status) / `Помощь` (help).
+- Apps → all apps as buttons (2 per row) with a health glyph (`✅` healthy /
+  `▫️` running / `❌` down); `« Назад`.
+- App card → name, sha7, health, deploy number + last-deploy time, live URL, and
+  actions `Логи` / `Откат` / `Редеплой` / `Обновить` / `« Назад`. `Обновить`
+  re-reads status; `Логи` is sent as a separate message (long).
+- Rollback / Redeploy → inline `Да` / `Отмена` confirm in the same card; after the
+  action the card is refreshed with fresh status plus a short toast
+  (`answerCallbackQuery`).
+
+**Slash-command fallback (still supported):**
+
+- `/status` — table of all apps
+- `/apps` — app buttons
+- `/logs <app>` — last ~30 container log lines
 - `/history <app>` — deploy journal tail (`runner.sh history`)
-- `/rollback <app>` — roll back to the previous sha, with a Yes/No confirm
-- `/redeploy <app>` — redeploy the current sha, with a Yes/No confirm
-- `/help` — the command list
+- `/rollback <app>` / `/redeploy <app>` — with a Yes/No confirm
+- `/menu`, `/help`
 
-The URL column (WB2) shows the **current working URL**: nginx-proxied apps get a
-stable `http://<host>/<path>/`; the tunnel app's URL is read live from the
-cloudflared log on every request, so it is always the current quick-tunnel URL
-even after the tunnel restarts.
+The URL (WB2) shows the **current working URL**: nginx-proxied apps get a stable
+`http://<host>/<path>/`; the tunnel app's URL is read live from the cloudflared
+log on every request, so it is always the current quick-tunnel URL even after the
+tunnel restarts.
 
 ## Security model (P0)
 
