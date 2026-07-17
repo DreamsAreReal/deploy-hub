@@ -173,7 +173,14 @@ EOF
 )
 STUB_STATE=missing
 if [ -f "$STUB_PATH" ]; then
-  if [ "$(cat "$STUB_PATH")" = "$STUB_WANT" ]; then STUB_STATE=ok; else STUB_STATE=differs; fi
+  if [ "$(cat "$STUB_PATH")" = "$STUB_WANT" ]; then
+    STUB_STATE=ok
+  elif grep -q "uses: $HUB_REPO_SLUG/" "$STUB_PATH"; then
+    STUB_STATE=differs   # our stub, outdated -> safe to regenerate
+  else
+    # a repo with its own CI pipeline: overwriting it would destroy test jobs
+    die "error: $REPO_SLUG already has a non-hub deploy.yml (own CI) — add the hub caller job manually (see README) instead of onboarding"
+  fi
 fi
 
 SECRETS_HAVE=$(gh secret list -R "$REPO_SLUG" --json name -q '.[].name' 2>/dev/null | tr '\n' ' ')
