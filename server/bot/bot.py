@@ -23,6 +23,8 @@ argv, git, or logs.
 
 Human-facing UI text is Russian; identifiers, logs and code stay English.
 """
+import base64
+import ctypes
 import html
 import json
 import os
@@ -38,10 +40,20 @@ import urllib.request
 # --- configuration ------------------------------------------------------------
 HUB_DIR = os.environ.get("HUB_DIR", "/opt/deploy-hub")
 TELEGRAM_ENV = os.path.join(HUB_DIR, "telegram.env")
+GITHUB_ENV = os.path.join(HUB_DIR, "github.env")   # GH_TOKEN=, GH_OWNER= (600, deploy)
+VPS_SSH_KEY = os.path.join(HUB_DIR, "vps_ssh_key")  # private deploy key (600) for the caller secret
+PROVISION = os.path.join(HUB_DIR, "bin", "wb4-provision.sh")  # root helper via sudoers
 RUNNER = os.path.join(HUB_DIR, "bin", "runner.sh")
 APPS_LIST = os.path.join(HUB_DIR, "apps.list")
 LOG_FILE = os.path.join(HUB_DIR, "deploys.log")
 BOT_LOG = os.path.join(HUB_DIR, "bot.log")
+HUB_REPO_SLUG = "DreamsAreReal/deploy-hub"
+# per-profile compose defaults (mirror onboard.sh)
+PROFILE_DEFAULTS = {
+    "static":  {"cport": "80",   "mem": "64m"},
+    "service": {"cport": "8080", "mem": "256m"},
+    "bot":     {"cport": "",     "mem": "128m"},
+}
 # every app is published by Caddy at a stable HTTPS URL (auto Let's Encrypt on
 # sslip.io): https://<app>.<HOST_SLUG>.sslip.io (WB2). This replaces the old
 # nginx :80 paths and the rotating cloudflared tunnel — the URL no longer moves.
@@ -110,6 +122,35 @@ A_DISK = "\U0001f534 диск {}% (свободно {})"
 A_DISK_OK = "✅ диск в норме ({}%)"
 A_RAM = "\U0001f534 RAM: свободно всего {} MiB"
 A_RAM_OK = "✅ RAM в норме (свободно {} MiB)"
+
+# WB4 "Connect a repo" flow
+B_CONNECT = "➕ Подключить"
+B_ST_STATIC = "\U0001f310 static"
+B_ST_SERVICE = "⚙️ service"
+B_ST_BOT = "\U0001f916 bot"
+B_DO_CONNECT = "✅ Подключить"
+B_MORE = "ещё »"
+C_TITLE = "<b>Подключить репозиторий</b>\nВыберите репозиторий владельца:"
+C_NONE = "Нет подходящих репозиториев (все подключены или недоступны)."
+C_GH_FAIL = "Не удалось получить список репозиториев (GitHub API)."
+C_ALREADY = "Репозиторий <b>{}</b> уже подключён."
+C_PICK_PROFILE = "<b>{}</b>\nВыберите профиль приложения:"
+C_CONFIRM = "Подключить <b>{}</b> как <b>{}</b>?\nБудет создан workflow и секреты в репозитории, каталог на сервере и HTTPS-маршрут."
+C_WORKING = "Подключаю <b>{}</b>… это займёт до минуты."
+C_STEP = "• {}"
+C_OK = "✅ <b>{}</b> подключён\n\U0001f517 https://{}.{}.sslip.io\nПервый деплой запущен (push в ветку {})."
+C_FAIL = "❌ Не удалось подключить <b>{}</b>: {}"
+C_NO_DOCKERFILE = "в репозитории нет Dockerfile (нужен один собираемый контейнер)"
+# onboarding step lines + error reasons (owner-facing)
+C_STEP_SERVER = "создаю каталог и маршрут на сервере"
+C_STEP_SECRETS = "выставляю секреты репозитория"
+C_STEP_WORKFLOW = "коммичу workflow (запускает первый деплой)"
+E_NO_GH = "github.env недоступен"
+E_NO_REPO = "репозиторий не найден"
+E_PROVISION = "provision: {}"
+E_NO_KEY = "vps_ssh_key недоступен"
+E_SECRET = "не удалось выставить VPS_SSH_KEY"
+E_WORKFLOW = "не удалось записать workflow"
 
 # button labels (ru text, <=1 glyph each)
 B_APPS = "\U0001f4e6 Приложения"
@@ -289,6 +330,268 @@ def run_runner(args):
         return 124, "runner timed out"
     except OSError as e:
         return 1, f"cannot exec runner: {e}"
+
+
+# --- GitHub REST client (WB4) -------------------------------------------------
+# The token is read from github.env and used only as a Bearer header — never in
+# argv, never logged. Secret values are sealed with libsodium (crypto_box_seal)
+# via ctypes against the system libsodium.so, so there is no pip dependency.
+GH_API = "https://api.github.com"
+
+
+def load_github_env():
+    """Return (token, owner) from github.env, or (None, None) if unavailable."""
+    token = owner = None
+    try:
+        with open(GITHUB_ENV, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line.startswith("GH_TOKEN="):
+                    token = line[len("GH_TOKEN="):]
+                elif line.startswith("GH_OWNER="):
+                    owner = line[len("GH_OWNER="):]
+    except OSError:
+        return None, None
+    return token, owner
+
+
+def gh_api(token, method, path, body=None, raw_url=None):
+    """One GitHub REST call. Returns (status, parsed_json_or_bytes). The token is
+    passed only as an Authorization header."""
+    url = raw_url or (GH_API + path)
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method)
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Accept", "application/vnd.github+json")
+    req.add_header("X-GitHub-Api-Version", "2022-11-28")
+    req.add_header("User-Agent", "deploy-hub-bot")
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            payload = resp.read()
+            try:
+                return resp.status, json.loads(payload) if payload else {}
+            except json.JSONDecodeError:
+                return resp.status, payload
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read() or b"{}")
+        except (json.JSONDecodeError, OSError):
+            return e.code, {}
+    except (urllib.error.URLError, TimeoutError) as e:
+        bot_log(f"gh_api error {method} {path}: {type(e).__name__}")
+        return 0, {}
+
+
+def gh_list_repos(token, owner):
+    """Owner's repos: non-archived, non-fork, newest first. Returns a list of
+    {name, default_branch}."""
+    repos = []
+    page = 1
+    while page <= 5:  # up to 500 repos; plenty for one account
+        status, data = gh_api(
+            token, "GET",
+            f"/user/repos?per_page=100&page={page}&sort=pushed&affiliation=owner")
+        if status != 200 or not isinstance(data, list) or not data:
+            break
+        for r in data:
+            if r.get("archived") or r.get("fork"):
+                continue
+            if (r.get("owner") or {}).get("login") != owner:
+                continue
+            repos.append({"name": r["name"],
+                          "default_branch": r.get("default_branch", "main")})
+        if len(data) < 100:
+            break
+        page += 1
+    return repos
+
+
+def gh_repo_has_dockerfile(token, owner, repo, branch):
+    status, _ = gh_api(token, "GET",
+                       f"/repos/{owner}/{repo}/contents/Dockerfile?ref={branch}")
+    return status == 200
+
+
+def gh_existing_workflow(token, owner, repo, branch):
+    """Return the current deploy.yml (path content sha) if present, else None."""
+    status, data = gh_api(
+        token, "GET",
+        f"/repos/{owner}/{repo}/contents/.github/workflows/deploy.yml?ref={branch}")
+    if status == 200 and isinstance(data, dict):
+        return data.get("sha")
+    return None
+
+
+def caller_stub(app, branch):
+    return (
+        "on:\n"
+        f"  push: {{branches: [{branch}]}}\n"
+        "permissions: {contents: read, packages: write}\n"
+        "jobs:\n"
+        "  deploy:\n"
+        f"    uses: {HUB_REPO_SLUG}/.github/workflows/deploy.yml@main\n"
+        f"    with: {{app: {app}}}\n"
+        "    secrets: inherit\n")
+
+
+def gh_put_workflow(token, owner, repo, branch, app, prev_sha):
+    """Create/update .github/workflows/deploy.yml on the default branch."""
+    content = caller_stub(app, branch)
+    body = {
+        "message": "ci: deploy to VPS via deploy-hub",
+        "content": base64.b64encode(content.encode()).decode(),
+        "branch": branch,
+    }
+    if prev_sha:
+        body["sha"] = prev_sha
+    status, _ = gh_api(
+        token, "PUT",
+        f"/repos/{owner}/{repo}/contents/.github/workflows/deploy.yml", body)
+    return status in (200, 201)
+
+
+def _seal(public_key_b64, secret_value):
+    """libsodium crypto_box_seal via ctypes (sealed box, what the GitHub secrets
+    API expects). No pip dependency: binds the system libsodium.so."""
+    lib = None
+    for name in ("libsodium.so.23", "libsodium.so", "libsodium.so.26"):
+        try:
+            lib = ctypes.CDLL(name)
+            break
+        except OSError:
+            continue
+    if lib is None:
+        raise RuntimeError("libsodium not found")
+    lib.sodium_init()
+    pk = base64.b64decode(public_key_b64)
+    msg = secret_value.encode()
+    SEALBYTES = 48  # crypto_box_SEALBYTES
+    out = ctypes.create_string_buffer(len(msg) + SEALBYTES)
+    rc = lib.crypto_box_seal(out, msg, ctypes.c_ulonglong(len(msg)), pk)
+    if rc != 0:
+        raise RuntimeError("crypto_box_seal failed")
+    return base64.b64encode(out.raw).decode()
+
+
+def gh_set_secret(token, owner, repo, name, value):
+    """Set a repo Actions secret (fetch public key, seal, PUT)."""
+    status, key = gh_api(token, "GET",
+                         f"/repos/{owner}/{repo}/actions/secrets/public-key")
+    if status != 200 or not isinstance(key, dict):
+        return False
+    try:
+        sealed = _seal(key["key"], value)
+    except (RuntimeError, KeyError) as e:
+        bot_log(f"seal error: {e}")
+        return False
+    status, _ = gh_api(
+        token, "PUT",
+        f"/repos/{owner}/{repo}/actions/secrets/{name}",
+        {"encrypted_value": sealed, "key_id": key["key_id"]})
+    return status in (201, 204)
+
+
+# --- onboarding orchestration (WB4) -------------------------------------------
+def next_free_port():
+    """First free 127.0.0.1 port >= 9001, checked against every app.conf port
+    and everything currently listening — same rule as onboard.sh."""
+    taken = set()
+    for app in list_apps():
+        d = app_dir(app)
+        conf = os.path.join(d, "app.conf") if d else None
+        if conf and os.path.isfile(conf):
+            try:
+                with open(conf, encoding="utf-8") as fh:
+                    for line in fh:
+                        if line.startswith("port="):
+                            taken.add(line.strip()[len("port="):])
+            except OSError:
+                pass
+    try:
+        out = subprocess.run(["ss", "-tlnH"], capture_output=True, text=True,
+                             timeout=10).stdout
+        for line in out.splitlines():
+            fields = line.split()
+            if len(fields) >= 4:
+                taken.add(fields[3].rsplit(":", 1)[-1])
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    p = 9001
+    while str(p) in taken:
+        p += 1
+    return str(p)
+
+
+def provision_server(app, profile, port, cport, mem, health_path, image):
+    """Run the privileged server-side step (create /opt/<app>, apps.list line,
+    Caddy route) via the narrow sudoers helper. Fixed argument list, no shell."""
+    try:
+        proc = subprocess.run(
+            ["sudo", "-n", PROVISION, app, profile, port or "", cport or "",
+             mem, health_path, image],
+            capture_output=True, text=True, timeout=120)
+        return proc.returncode == 0, (proc.stdout + proc.stderr).strip()
+    except (subprocess.TimeoutExpired, OSError) as e:
+        return False, f"provision failed: {e}"
+
+
+def wb4_onboard(app, repo, profile, progress=None):
+    """End-to-end onboarding of one repo. Returns (ok, branch_or_errmsg).
+
+    Steps: validate repo -> GitHub workflow + secrets -> server provisioning.
+    The first deploy is triggered by the workflow commit itself. `progress` is
+    an optional callback(str) for streaming step lines to the chat.
+    """
+    def step(msg):
+        if progress:
+            progress(msg)
+
+    token, owner = load_github_env()
+    if not token or not owner:
+        return False, E_NO_GH
+
+    # repo facts
+    status, meta = gh_api(token, "GET", f"/repos/{owner}/{repo}")
+    if status != 200 or not isinstance(meta, dict):
+        return False, E_NO_REPO
+    branch = meta.get("default_branch", "main")
+    if not gh_repo_has_dockerfile(token, owner, repo, branch):
+        return False, C_NO_DOCKERFILE
+
+    defaults = PROFILE_DEFAULTS.get(profile, PROFILE_DEFAULTS["static"])
+    cport = defaults["cport"]
+    mem = defaults["mem"]
+    port = "" if profile == "bot" else next_free_port()
+    image = f"ghcr.io/{owner.lower()}/{app}"
+
+    # server side FIRST: if we cannot create /opt/<app>, do not touch the repo
+    step(C_STEP_SERVER)
+    ok, out = provision_server(app, profile, port, cport, mem, "/", image)
+    if not ok:
+        return False, E_PROVISION.format(out[-200:])
+
+    # repo secrets: VPS_SSH_KEY (from the local key) + TG creds
+    step(C_STEP_SECRETS)
+    try:
+        with open(VPS_SSH_KEY, encoding="utf-8") as fh:
+            key_material = fh.read()
+    except OSError:
+        return False, E_NO_KEY
+    if not gh_set_secret(token, owner, repo, "VPS_SSH_KEY", key_material):
+        return False, E_SECRET
+    tg_token, tg_chat = load_config()
+    gh_set_secret(token, owner, repo, "TG_TOKEN", tg_token)
+    gh_set_secret(token, owner, repo, "TG_CHAT_ID", str(tg_chat))
+
+    # workflow last: its commit triggers the first deploy
+    step(C_STEP_WORKFLOW)
+    prev = gh_existing_workflow(token, owner, repo, branch)
+    if not gh_put_workflow(token, owner, repo, branch, app, prev):
+        return False, E_WORKFLOW
+
+    return True, branch
 
 
 def container_name(app):
@@ -495,6 +798,7 @@ def screen_menu():
     kb = {"inline_keyboard": [
         [{"text": B_APPS, "callback_data": "apps"},
          {"text": B_STATUS, "callback_data": "status"}],
+        [{"text": B_CONNECT, "callback_data": "conn:0"}],
         [{"text": B_SERVER, "callback_data": "server"},
          {"text": B_HELP, "callback_data": "help"}],
     ]}
@@ -515,6 +819,63 @@ def screen_server():
 def screen_help():
     kb = {"inline_keyboard": [[{"text": B_BACK, "callback_data": "menu"}]]}
     return T_HELP, kb
+
+
+# --- Connect-a-repo screens (WB4) ---------------------------------------------
+# Repo list is cached briefly so pagination does not re-hit GitHub on every tap.
+_REPO_CACHE = {"at": 0, "repos": []}
+_CONN_PAGE = 8
+
+
+def connectable_repos():
+    """Owner repos that are not yet onboarded, newest first (cached ~60 s)."""
+    now = time.time()
+    if now - _REPO_CACHE["at"] > 60:
+        token, owner = load_github_env()
+        repos = gh_list_repos(token, owner) if token and owner else []
+        _REPO_CACHE["at"] = now
+        _REPO_CACHE["repos"] = repos
+    connected = set(list_apps())
+    # hide already-connected repos (their lowercased name is the app name)
+    return [r for r in _REPO_CACHE["repos"]
+            if r["name"].lower() not in connected]
+
+
+def screen_connect(page):
+    repos = connectable_repos()
+    if repos is None:
+        kb = {"inline_keyboard": [[{"text": B_BACK, "callback_data": "menu"}]]}
+        return C_GH_FAIL, kb
+    if not repos:
+        kb = {"inline_keyboard": [[{"text": B_BACK, "callback_data": "menu"}]]}
+        return C_NONE, kb
+    start = page * _CONN_PAGE
+    chunk = repos[start:start + _CONN_PAGE]
+    buttons = [[{"text": r["name"], "callback_data": f"crepo:{r['name']}"}]
+               for r in chunk]
+    nav = []
+    if start + _CONN_PAGE < len(repos):
+        nav.append({"text": B_MORE, "callback_data": f"conn:{page + 1}"})
+    nav.append({"text": B_BACK, "callback_data": "menu"})
+    buttons.append(nav)
+    return C_TITLE, {"inline_keyboard": buttons}
+
+
+def screen_connect_profile(repo):
+    kb = {"inline_keyboard": [
+        [{"text": B_ST_STATIC, "callback_data": f"cprof:static:{repo}"},
+         {"text": B_ST_SERVICE, "callback_data": f"cprof:service:{repo}"},
+         {"text": B_ST_BOT, "callback_data": f"cprof:bot:{repo}"}],
+        [{"text": B_BACK, "callback_data": "conn:0"}],
+    ]}
+    return C_PICK_PROFILE.format(esc(repo)), kb
+
+
+def screen_connect_confirm(profile, repo):
+    kb = {"inline_keyboard": [[
+        {"text": B_DO_CONNECT, "callback_data": f"cgo:{profile}:{repo}"},
+        {"text": B_CANCEL, "callback_data": f"crepo:{repo}"}]]}
+    return C_CONFIRM.format(esc(repo), esc(profile)), kb
 
 
 def screen_apps():
@@ -657,10 +1018,19 @@ def send_logs(api, chat_id, app):
 
 
 # --- callback routing (edits the same message) --------------------------------
-def handle_callback(api, chat_id, message_id, cb_id, data):
-    action, _, app = data.partition(":")
+REPO_RE = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
 
-    # every action that carries an app re-validates it against the allowlist
+
+def handle_callback(api, chat_id, message_id, cb_id, data):
+    action, _, rest = data.partition(":")
+
+    # --- WB4 "Connect a repo" branches (carry repo/profile, not an app) -------
+    if action in ("conn", "crepo", "cprof", "cgo"):
+        _handle_connect(api, chat_id, message_id, cb_id, action, rest)
+        return
+
+    app = rest
+    # every app-carrying action re-validates it against the allowlist
     if app and not valid_app(app):
         api.answer_callback(cb_id, T_UNKNOWN_APP.format(app))
         return
@@ -705,6 +1075,74 @@ def _perform(api, chat_id, message_id, cb_id, app, fn, done_msg):
     text, kb = screen_app(app)
     banner = ("✅ " + done_msg) if ok else ("❌ " + T_FAILED)
     api.edit(chat_id, message_id, banner + "\n\n" + text, kb)
+
+
+def _handle_connect(api, chat_id, message_id, cb_id, action, rest):
+    """Route the Connect-a-repo flow. Repo/profile args are validated here."""
+    if action == "conn":
+        page = int(rest) if rest.isdigit() else 0
+        _nav(api, chat_id, message_id, cb_id, *screen_connect(page))
+        return
+
+    if action == "crepo":
+        repo = rest
+        if not REPO_RE.match(repo):
+            api.answer_callback(cb_id, C_NONE)
+            return
+        # idempotency: an already-onboarded repo has no further action
+        if repo.lower() in set(list_apps()):
+            _nav(api, chat_id, message_id, cb_id, C_ALREADY.format(esc(repo)),
+                 {"inline_keyboard": [[{"text": B_BACK, "callback_data": "conn:0"}]]})
+            return
+        _nav(api, chat_id, message_id, cb_id, *screen_connect_profile(repo))
+        return
+
+    # cprof / cgo carry "<profile>:<repo>"
+    profile, _, repo = rest.partition(":")
+    if profile not in PROFILE_DEFAULTS or not REPO_RE.match(repo):
+        api.answer_callback(cb_id, C_NONE)
+        return
+
+    if action == "cprof":
+        _nav(api, chat_id, message_id, cb_id, *screen_connect_confirm(profile, repo))
+        return
+
+    if action == "cgo":
+        _do_connect(api, chat_id, message_id, cb_id, profile, repo)
+
+
+def _do_connect(api, chat_id, message_id, cb_id, profile, repo):
+    """Execute onboarding after the explicit confirm (destructive: writes to the
+    repo). Streams step lines by editing the same message; ends with a result
+    card + the app's HTTPS URL."""
+    app = repo.lower()
+    # guard the destructive path again right before acting
+    if app in set(list_apps()):
+        api.answer_callback(cb_id, C_ALREADY.format(repo))
+        _nav(api, chat_id, message_id, cb_id, C_ALREADY.format(esc(repo)),
+             {"inline_keyboard": [[{"text": B_BACK, "callback_data": "menu"}]]})
+        return
+    api.answer_callback(cb_id, T_WORKING)
+    steps = []
+
+    def progress(msg):
+        steps.append(C_STEP.format(esc(msg)))
+        api.edit(chat_id, message_id,
+                 C_WORKING.format(esc(repo)) + "\n" + "\n".join(steps))
+
+    try:
+        ok, info = wb4_onboard(app, repo, profile, progress=progress)
+    except Exception as e:  # onboarding must never crash the bot
+        bot_log(f"wb4_onboard error: {type(e).__name__}: {e}")
+        ok, info = False, str(e)
+
+    back = {"inline_keyboard": [[{"text": B_BACK, "callback_data": "menu"}]]}
+    if ok:
+        branch = info
+        text = C_OK.format(esc(app), esc(app), HOST_SLUG, esc(branch))
+    else:
+        text = C_FAIL.format(esc(repo), esc(info))
+    api.edit(chat_id, message_id, text, back)
 
 
 # --- background monitor (#2) --------------------------------------------------

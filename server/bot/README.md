@@ -11,9 +11,13 @@ identifiers, logs and code stay English.
 
 **Buttons (`/start` or `/menu`):**
 
-- Main menu → apps / status / server / help.
+- Main menu → apps / status / connect / server / help.
 - Apps → all apps as buttons (2 per row) with a health glyph (`✅` healthy /
   `▫️` running / `❌` down); back.
+- Connect → the owner's GitHub repos (non-archived, non-fork, newest first, with
+  pagination; already-onboarded repos are hidden) → pick a profile
+  (static / service / bot) → confirm → the bot onboards the repo end-to-end and
+  replies with the app's HTTPS URL. See "Connect flow (WB4)" below.
 - App card → name, sha7, health, deploy number + last-deploy time, live URL, a
   server-resource line (RAM + disk), and actions logs / rollback / redeploy /
   refresh / back. Refresh re-reads status; logs are sent as a separate message.
@@ -92,3 +96,33 @@ sudo systemctl enable --now deploy-hub-bot
 
 Logs: `journalctl -u deploy-hub-bot`; audit trail of denied chats:
 `/opt/deploy-hub/bot.log`.
+
+## Connect flow (WB4)
+
+The bot runs as `deploy` (no root, no `gh`), so onboarding is split cleanly:
+
+- **GitHub side — in the bot** via `github.env` (`GH_TOKEN`, `GH_OWNER`): list
+  repos, create `.github/workflows/deploy.yml` on the default branch (contents
+  API), and set the `VPS_SSH_KEY` / `TG_TOKEN` / `TG_CHAT_ID` secrets (secrets
+  API). Secret values are sealed with libsodium `crypto_box_seal` via `ctypes`
+  against the system `libsodium.so` — no pip dependency. The token is only ever
+  an `Authorization` header, never argv/env/log.
+- **Server side — one privileged helper**, `bin/wb4-provision.sh`, run through a
+  narrow sudoers rule (`deploy ALL=(root) NOPASSWD: …/wb4-provision.sh`). It
+  creates `/opt/<app>` (compose from the template, `app.conf`, empty `.env`),
+  adds the `apps.list` line, and runs `caddy-sync`. Every argument is
+  regex-validated inside the helper, so the unprivileged caller has no
+  arbitrary-shell surface. This is the only escalation and it does no GitHub work
+  and reads no secrets.
+
+The workflow commit is written last, so it triggers the first deploy. The result
+card links `https://<app>.192-3-94-42.sslip.io`.
+
+Prerequisites for this flow (place once, mode 600 owner `deploy`):
+`/opt/deploy-hub/github.env`, `/opt/deploy-hub/vps_ssh_key` (the private deploy
+key, same material already held as the caller repos' `VPS_SSH_KEY` secret), the
+`wb4-provision.sh` helper (root-owned) and its sudoers rule, and the
+`compose-template.yml` next to the hub.
+
+Security: the whole flow is gated on `chat.id == from.id == TG_CHAT_ID`;
+onboarding (which writes to a repo) runs only after the explicit confirm button.
