@@ -38,7 +38,27 @@ If the target is unhealthy too, the command exits non-zero with
     ssh vpn 'cat /opt/deploy-hub/last-error.log'      # recent pull errors
 
 Journal format: `[ISO] app@sha7 action result duration vpn=ok|fail`.
-`vpn=fail` on any line → check the VPN first: `nc -z 192.3.94.42 2096`.
+
+A rollback/deploy command's final line is a **snapshot of that moment**, not a
+promise about the live version. `flock` serializes deploys so two never race,
+but two quick deploys from different sessions (a CI push landing while you roll
+back by hand) can leave the app on a version you did not expect. When in doubt
+about the current state, trust `status` / `history <app>`, not the last line
+your terminal printed.
+
+## Confirm the system did not touch the VPN
+
+The one invariant: deploys must never break the production VPN. Check it any
+time, especially after an incident — from the operator machine (external is
+the real test), then on the host:
+
+    nc -z 192.3.94.42 2096 && echo "2096 ok"   # xray, external
+    nc -z 192.3.94.42 8443 && echo "8443 ok"   # xray, external
+    ssh vpn 'docker ps --filter name=xray-server --format "{{.Names}} {{.Status}}"'
+
+Every deploy/rollback line already carries `vpn=ok|fail` (measured right after
+the operation). A `vpn=fail` anywhere, or a failed check above → fix the VPN
+before anything else: `ssh vpn 'cd /opt/xray && docker compose up -d'`.
 
 ## Deploy runner itself is broken
 
@@ -66,6 +86,5 @@ Xray VPN (ports 2096/8443), the cloudflared tunnel service itself
 the runner — `"rollback codeapp"` is a normal operation, not a violation.
 nginx is shared ground: the system owns only its location blocks
 (`/portfolio/ /zhaba/ /vote/ /api/`); the `/fef…/` location and the base
-config are off-limits. If a deploy ever kills the VPN (`vpn=fail` in the
-journal), fix the VPN before anything else:
-`ssh vpn 'cd /opt/xray && docker compose up -d'`.
+config are off-limits. If a deploy ever kills the VPN, see "Confirm the system
+did not touch the VPN" above.

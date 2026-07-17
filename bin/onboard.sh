@@ -1,5 +1,5 @@
 #!/bin/bash
-# onboard.sh — connect a GitHub repo to deploy-hub in one command.
+# onboard.sh — onboard a GitHub repo to deploy-hub in one command.
 #
 #   ./onboard.sh <repo> --profile <static|bot|service> [options]
 #

@@ -2,9 +2,17 @@
 
 Push to the default branch of a connected repo → the app is rebuilt in CI and
 running on the VPS a few minutes later, health-checked, with automatic rollback
-and a Telegram card. Connecting a new repo is one command: `bin/onboard.sh`.
-No PaaS, no daemons: one reusable GitHub Actions workflow, one server-side
-script, SSH in between. When things break, see [RUNBOOK.md](RUNBOOK.md).
+and a Telegram card. Once the hub is set up, connecting a new repo is one
+command (`bin/onboard.sh`) and under ten minutes. No PaaS, no daemons: one
+reusable GitHub Actions workflow, one server-side script, SSH in between.
+When things break, see [RUNBOOK.md](RUNBOOK.md).
+
+The VPS is `192.3.94.42`. Two ways in: the `deploy` user (locked to the
+runner — how CI and `onboard.sh status` reach it) and your own root access as
+SSH alias `vpn` (how you edit `/opt/<app>/.env` and read logs).
+
+**First time on a fresh host?** Do the one-time [Bootstrap](#bootstrap-one-time-host-setup)
+below first — until it is done, `onboard.sh` has nothing to talk to.
 
 ## How a deploy flows
 
@@ -25,31 +33,98 @@ push to default branch
 Images are built only in CI — never on the VPS (1 CPU, <1 GiB RAM, and a
 production VPN that must not be starved).
 
+## Bootstrap (one-time host setup)
+
+Do this ONCE per hub, before any onboarding. `onboard.sh` and every deploy
+assume it is done; skip it and nothing works. It runs from the operator
+machine (your laptop) against a VPS you already have root SSH to.
+
+1. **gh CLI** authenticated for your GitHub account: `gh auth status`.
+2. **Root SSH alias `vpn`** for the VPS in `~/.ssh/config`, e.g.
+
+   ```
+   Host vpn
+       HostName 192.3.94.42
+       User root
+   ```
+
+   Check: `ssh vpn 'echo ok'`.
+3. **Deploy key** — one ed25519 key for all repos, kept on the operator
+   machine, its public half bound to the forced command on the VPS:
+
+   ```
+   ssh-keygen -t ed25519 -f ~/.ssh/deploy_hub_key -N '' -C deploy-hub
+   PUB=$(cat ~/.ssh/deploy_hub_key.pub)
+   ssh vpn bash -s <<EOF
+   id deploy >/dev/null 2>&1 || useradd -m -s /bin/bash -G docker deploy
+   install -d -m 700 -o deploy -g deploy /home/deploy/.ssh
+   printf 'command="/opt/deploy-hub/bin/runner.sh",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding %s\n' '$PUB' \
+     > /home/deploy/.ssh/authorized_keys
+   chown deploy:deploy /home/deploy/.ssh/authorized_keys
+   chmod 600 /home/deploy/.ssh/authorized_keys
+   EOF
+   ```
+
+4. **Hub directory** on the VPS and the runner scripts from this repo:
+
+   ```
+   ssh vpn 'install -d -m 755 /opt/deploy-hub/bin
+            : > /opt/deploy-hub/apps.list
+            touch /opt/deploy-hub/deploys.log /opt/deploy-hub/deploy.lock
+            chown deploy:deploy /opt/deploy-hub/deploys.log /opt/deploy-hub/deploy.lock'
+   scp server/runner.sh server/prune.sh vpn:/opt/deploy-hub/bin/
+   ssh vpn 'chmod 755 /opt/deploy-hub/bin/*.sh; chown root:root /opt/deploy-hub/bin/*.sh'
+   scp server/systemd/deploy-hub-prune.* vpn:/etc/systemd/system/
+   ssh vpn 'systemctl daemon-reload && systemctl enable --now deploy-hub-prune.timer'
+   ```
+
+5. **Telegram cards (optional)** — without this, deploys still work and the
+   cards are only written to `telegram.log`; delivery is off:
+
+   ```
+   ssh vpn 'umask 077; printf "TG_TOKEN=...\nTG_CHAT_ID=...\n" > /opt/deploy-hub/telegram.env
+            chown deploy:deploy /opt/deploy-hub/telegram.env'
+   ```
+
+   To also have `onboard.sh` set the `TG_TOKEN`/`TG_CHAT_ID` repo secrets,
+   put the same values in `bin/.env-hub` on the operator machine (gitignored).
+
+Verify the hub answers: `./bin/onboard.sh status` should print a header (an
+empty app list is fine on a fresh hub).
+
 ## Connecting a repo — one command
 
-The repo needs a `Dockerfile` (the app model is one built container per
-repo; static service dependencies may sit in the same compose). Then:
+Clone this repo and run `onboard.sh` **from its root** (the `./bin/` path is
+relative to the repo). The app repo you are connecting needs a `Dockerfile`
+(the app model is one built container per repo; static service dependencies
+may sit in the same compose).
 
 ```
+git clone https://github.com/DreamsAreReal/deploy-hub && cd deploy-hub
 ./bin/onboard.sh <repo> --profile <static|bot|service> [--port N] [--dry-run]
 ```
 
-It prints the plan, then does everything itself: commits the ~8-line caller
+`--dry-run` prints the exact plan (stub commit, secret, `/opt/<app>/` files,
+allowlist line) and changes nothing — run it first to see what will happen.
+`--port` is optional: for `static`/`service` onboard picks the first free
+`127.0.0.1` port from 9001 up (override with `--port N`); `bot` has no port.
+
+Without `--dry-run` it does everything itself: commits the ~8-line caller
 stub to the default branch (opens a PR when the branch is protected), sets
 the `VPS_SSH_KEY` repo secret, prepares `/opt/<app>/` on the VPS over your
 root SSH access (compose from the template, `app.conf`, empty `.env`), and
 adds the app to the allowlist. Idempotent: a second run reports "no changes".
 
-The only thing ever left for you: paste the app's own secrets into
-`/opt/<app>/.env` — onboard prints the variable names it finds in the repo.
-Then push and watch the deploy.
+**What is left for you afterwards:**
 
-Prerequisites on the operator machine (one-time, already true here):
-`gh` CLI authenticated; root SSH alias `vpn` for the VPS; the deploy key at
-`~/.ssh/deploy_hub_key` — one key for all repos, generated at hub setup, its
-public half is bound to the forced command on the VPS. Optional
-`bin/.env-hub` with `TG_TOKEN=`/`TG_CHAT_ID=` lets onboard set the Telegram
-secrets too.
+- **static site with no secrets** (the common case): nothing — onboard prints
+  `nothing left to do by hand`. Just `git push` to the default branch.
+- **app with secrets** (bots, backends): paste them into `/opt/<app>/.env` on
+  the VPS before the first push — onboard lists the variable names it found in
+  the repo. Edit it as root: `ssh vpn 'nano /opt/<app>/.env'` (mode stays 600).
+
+Then push and watch the deploy: the Actions run on GitHub, the Telegram card
+(if configured), or `./bin/onboard.sh status` / `./bin/onboard.sh history <app>`.
 
 Manual path (no onboard.sh, e.g. rebuilding the hub itself) — see
 [RUNBOOK.md](RUNBOOK.md) and `server/app.conf.example`: the pieces are the
