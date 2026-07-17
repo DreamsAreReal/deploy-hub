@@ -21,10 +21,20 @@
 #   actor=<github login>   docker login username
 #   subject=<commit line>  first line of the commit message, for the card
 #   start=<epoch seconds>  workflow start, for full push->healthy duration
+#   compose=<base64>       (BYOC only) deploy-ready compose rendered in CI from
+#                          the repo's own docker-compose.yml (build:->image via
+#                          the DEPLOY_IMAGE placeholder, safe defaults layered,
+#                          sidecars intact). Its presence switches the deploy to
+#                          bring-your-own-compose mode; absent => template mode.
+#   main=<service>         (BYOC) name of the main/built service
+#   hport=<port>           (BYOC) published host port to expose (empty => no URL)
+#   hmode=<compose|http|process>  (BYOC) health-gate mode
 #
 # App registry: /opt/deploy-hub/apps.list, one app per line: `<app> <dir>`
 # (dir defaults to /opt/<app>; the pilot lives in /opt/portfolio-new).
 # Per-app config: <dir>/app.conf with profile=, port=, health_path=, image=.
+# BYOC apps additionally carry mode=byoc, main=<service>, and the runner drives
+# the whole stack (`up -d` with no service filter) instead of just `app`.
 set -euo pipefail
 
 HUB_DIR="${HUB_DIR:-/opt/deploy-hub}"   # overridable for tests
@@ -182,10 +192,15 @@ conf_get() { # conf_get <dir> <key>
   awk -F= -v k="$2" '$1==k {print substr($0, index($0,"=")+1); exit}' "$1/app.conf"
 }
 
-app_container() { # container name = compose service `app` in the app dir
+app_container() { # main container name for the app
   local dir; dir=$(app_dir "$1")
-  # DEPLOY_IMAGE placeholder: `ps` only needs the file to parse; without it
-  # compose aborts on the :? guard (and pipefail would hit set -e -> || true)
+  # BYOC: the rendered compose pins container_name = <app>, so the main
+  # container name is just the app name (the main service may be named anything)
+  if [ "$(conf_get "$dir" mode)" = byoc ]; then
+    echo "$1"; return
+  fi
+  # template: main service is `app`. DEPLOY_IMAGE placeholder — `ps` only needs
+  # the file to parse; without it compose aborts on the :? guard.
   DEPLOY_IMAGE="${DEPLOY_IMAGE:-placeholder}" \
     docker compose -f "$dir/docker-compose.yml" ps -a --format '{{.Name}}' app 2>/dev/null | head -1 || true
 }
@@ -200,20 +215,40 @@ state_set() { # state_set <dir> <current> <previous>
 }
 
 # --- health gate ---------------------------------------------------------------
-health_gate() { # health_gate <profile> <port> <health_path>; 0=healthy
-  local profile=$1 port=$2 path=$3 elapsed=0
+# Modes:
+#   http     poll http://127.0.0.1:<port><path> for a 200 (static/service, or
+#            BYOC hmode=http)
+#   compose  trust the container's own healthcheck = healthy (bot, or BYOC
+#            hmode=compose — the developer declared healthcheck in their compose)
+#   process  no port and no healthcheck: the main container just has to stay up
+#            (BYOC hmode=process)
+health_gate() { # health_gate <mode> <port> <health_path>; 0=healthy
+  local mode=$1 port=$2 path=$3 elapsed=0
+  # map legacy profiles to modes so template apps behave exactly as before
+  case "$mode" in
+    static|service) mode=http ;;
+    bot)            mode=compose ;;
+  esac
   while (( elapsed < HEALTH_TIMEOUT )); do
-    case "$profile" in
-      static|service)
+    case "$mode" in
+      http)
         # -s without -S: transient connect errors during container restart are
         # expected and used to read like failures in the output (consumer M3)
         if curl -fs -m 5 -o /dev/null "http://127.0.0.1:${port}${path}" 2>/dev/null; then return 0; fi
         ;;
-      bot)
-        # bot profile: rely on the compose healthcheck (functional getMe check, F4)
+      compose)
+        # trust the container's own healthcheck (functional check, declared by
+        # the developer or, for bots, the getMe probe)
         local cname; cname=$(app_container "$CURRENT_APP")
         local hs; hs=$(docker inspect --format '{{.State.Health.Status}}' "$cname" 2>/dev/null || echo none)
         if [ "$hs" = healthy ]; then return 0; fi
+        ;;
+      process)
+        # no port, no healthcheck: the main container must simply be running
+        local cname; cname=$(app_container "$CURRENT_APP")
+        local st; st=$(docker inspect --format '{{.State.Status}}' "$cname" 2>/dev/null || echo none)
+        # give it a moment to crash-on-start; require running after the interval
+        if [ "$st" = running ] && (( elapsed >= HEALTH_INTERVAL )); then return 0; fi
         ;;
     esac
     sleep "$HEALTH_INTERVAL"
@@ -235,7 +270,17 @@ acquire_lock() { # serialize deploys: one at a time on this 1-CPU box.
 
 # --- deploy --------------------------------------------------------------------
 compose_up() { # compose_up <dir> <image:tag>
-  DEPLOY_IMAGE="$2" docker compose -f "$1/docker-compose.yml" up -d --pull never app
+  # Template apps recreate only the `app` service; BYOC apps bring a whole stack
+  # (app + sidecars) and are brought up with no service filter. `--pull never`
+  # guarantees the main image is the one already pulled — the server NEVER builds.
+  # Sidecar images (redis/postgres/...) are pulled here by compose from their own
+  # registries; the built app image is not (it is pre-pulled and tagged).
+  local dir=$1 imagetag=$2
+  if [ "$(conf_get "$dir" mode)" = byoc ]; then
+    DEPLOY_IMAGE="$imagetag" docker compose -f "$dir/docker-compose.yml" up -d --pull missing
+  else
+    DEPLOY_IMAGE="$imagetag" docker compose -f "$dir/docker-compose.yml" up -d --pull never app
+  fi
 }
 
 cmd_deploy() {
@@ -252,16 +297,42 @@ cmd_deploy() {
 
   # stdin protocol (see header). Token is used once for docker login and never echoed.
   local token="" actor="" subject="" start="" line
+  local compose_b64="" byoc_main="" byoc_port="" byoc_hmode=""
   while IFS= read -r line; do
     case "$line" in
       token=*)   token=${line#token=} ;;
       actor=*)   actor=${line#actor=} ;;
       subject=*) subject=${line#subject=} ;;
       start=*)   start=${line#start=} ;;
+      compose=*) compose_b64=${line#compose=} ;;
+      main=*)    byoc_main=${line#main=} ;;
+      hport=*)   byoc_port=${line#hport=} ;;
+      hmode=*)   byoc_hmode=${line#hmode=} ;;
     esac
   done
   subject=$(printf '%s' "$subject" | tr -d '\000-\037' | cut -c1-120)
   echo "$start" | grep -Eq '^[0-9]{0,12}$' || start=""
+
+  # BYOC: a compose arrived from CI. Validate the metadata, install the rendered
+  # compose as the app's docker-compose.yml, and record byoc config so rollback
+  # and status use the same file/health mode. Template apps skip all of this.
+  if [ -n "$compose_b64" ]; then
+    printf '%s' "$byoc_main"  | grep -Eq '^[a-zA-Z0-9._-]{1,64}$' || { echo "refused: bad main service" >&2; exit 1; }
+    printf '%s' "$byoc_port"  | grep -Eq '^[0-9]{0,5}$'           || { echo "refused: bad hport" >&2; exit 1; }
+    case "$byoc_hmode" in compose|http|process) ;; *) echo "refused: bad hmode" >&2; exit 1 ;; esac
+    local newc; newc=$(mktemp)
+    printf '%s' "$compose_b64" | base64 -d > "$newc" 2>/dev/null || { echo "refused: bad compose base64" >&2; rm -f "$newc"; exit 1; }
+    # sanity: it must parse as a compose file (with the runner's image var set)
+    if ! DEPLOY_IMAGE="${image}:${tag}" docker compose -f "$newc" config -q >/dev/null 2>&1; then
+      echo "refused: rendered compose does not parse" >&2; rm -f "$newc"; exit 1
+    fi
+    install -m 644 -o deploy -g deploy "$newc" "$dir/docker-compose.yml" 2>/dev/null || cp "$newc" "$dir/docker-compose.yml"
+    rm -f "$newc"
+    # refresh app.conf for byoc (mode/main/port/health drive rollback+status)
+    { echo "mode=byoc"; echo "main=$byoc_main"; [ -n "$byoc_port" ] && echo "port=$byoc_port"; \
+      echo "health_path=/"; echo "hmode=$byoc_hmode"; echo "image=$image"; } > "$dir/app.conf"
+    profile=$byoc_hmode; port=$byoc_port; path="/"
+  fi
 
   local sha7; sha7=$(printf '%s' "${tag#sha-}" | cut -c1-7)
   local t0; t0=$(date -u +%s)
@@ -300,6 +371,11 @@ cmd_deploy() {
     fi
     log_line "$app" "$sha7" deploy ok "$(( t_end - t0 ))"
     echo "$S_HEALTH_OK — ${app}@${sha7} live (${duration})"
+    # BYOC: the published port is decided by the developer's compose, so refresh
+    # the Caddy route to match the port just recorded in app.conf (idempotent).
+    if [ "$(conf_get "$dir" mode)" = byoc ] && [ -x "$HUB_DIR/bin/caddy-sync.sh" ]; then
+      "$HUB_DIR/bin/caddy-sync.sh" >/dev/null 2>&1 || true
+    fi
     send_card "$app" "$(render_card ok "$app" "$sha7" "$duration" "$subject" "")"
     return 0
   fi

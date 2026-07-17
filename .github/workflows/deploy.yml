@@ -56,6 +56,13 @@ jobs:
       - name: Check out
         uses: actions/checkout@v4
 
+      - name: Check out deploy-hub (compose renderer)
+        uses: actions/checkout@v4
+        with:
+          repository: DreamsAreReal/deploy-hub
+          path: .deploy-hub
+          ref: main
+
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -63,21 +70,52 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push image
+      - name: Resolve the build context (bring-your-own-compose)
+        id: ctx
         env:
           APP: ${{ inputs.app }}
           DOCKERFILE: ${{ inputs.dockerfile }}
         run: |
+          # BYOC: if the repo ships a docker-compose.yml, render a deploy-ready
+          # copy (build:->image via DEPLOY_IMAGE, safe defaults, sidecars intact)
+          # and figure out which Dockerfile builds the MAIN service so CI builds
+          # exactly that image. No compose in the repo => template/Dockerfile path.
+          COMPOSE=""
+          for f in docker-compose.yml docker-compose.yaml compose.yml; do
+            [ -f "$f" ] && { COMPOSE="$f"; break; }
+          done
+          DF="$DOCKERFILE"
+          if [ -n "$COMPOSE" ]; then
+            pip install --quiet pyyaml >/dev/null 2>&1 || true
+            META="$(python3 .deploy-hub/server/compose-render.py "$APP" "$COMPOSE" rendered-compose.yml)"
+            echo "$META"
+            # the main service's build context tells CI what Dockerfile to build
+            DF="$(python3 .deploy-hub/server/compose-main-dockerfile.py "$APP" "$COMPOSE")"
+            {
+              echo "byoc=1"
+              echo "$META"   # main=, port=, public=, health=
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "byoc=0" >> "$GITHUB_OUTPUT"
+          fi
+          echo "dockerfile=$DF" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push image
+        env:
+          APP: ${{ inputs.app }}
+          DOCKERFILE: ${{ steps.ctx.outputs.dockerfile }}
+        run: |
           OWNER="$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
           IMAGE="ghcr.io/${OWNER}/${APP}"
           TAG="sha-${GITHUB_SHA}"
-          # GIT_SHA/BUILD_TIME serve Dockerfiles that declare these ARGs
-          # (version-stamped pages); harmless for those that do not
+          # build the MAIN service image only (sidecars are pulled on the VPS);
+          # -f may point inside a service build context resolved above
+          CTX="$(dirname "$DOCKERFILE")"; [ "$CTX" = "." ] && CTX="."
           docker build \
             -f "$DOCKERFILE" \
             --build-arg GIT_SHA="$GITHUB_SHA" \
             --build-arg BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            -t "$IMAGE:$TAG" -t "$IMAGE:latest" .
+            -t "$IMAGE:$TAG" -t "$IMAGE:latest" "$CTX"
           docker push "$IMAGE:$TAG"
           docker push "$IMAGE:latest"
 
@@ -88,6 +126,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ACTOR: ${{ github.actor }}
           START_EPOCH: ${{ steps.start.outputs.epoch }}
+          BYOC: ${{ steps.ctx.outputs.byoc }}
+          BYOC_MAIN: ${{ steps.ctx.outputs.main }}
+          BYOC_PORT: ${{ steps.ctx.outputs.port }}
+          BYOC_HEALTH: ${{ steps.ctx.outputs.health }}
         run: |
           mkdir -p ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
@@ -97,11 +139,19 @@ jobs:
           # Runner protocol: command carries only verb+app+tag; everything else
           # (ephemeral GITHUB_TOKEN for GHCR pull, metadata) goes via stdin so
           # it never appears in argv, shell history or the SSH command string.
+          # BYOC: also stream the rendered compose (base64) + its metadata; the
+          # runner writes it as the app's compose and drives the whole stack.
           {
             printf 'token=%s\n' "$GH_TOKEN"
             printf 'actor=%s\n'  "$ACTOR"
             printf 'subject=%s\n' "$SUBJECT"
             printf 'start=%s\n'  "$START_EPOCH"
+            if [ "$BYOC" = 1 ]; then
+              printf 'compose=%s\n' "$(base64 -w0 rendered-compose.yml)"
+              printf 'main=%s\n'  "$BYOC_MAIN"
+              printf 'hport=%s\n' "$BYOC_PORT"
+              printf 'hmode=%s\n' "$BYOC_HEALTH"
+            fi
           } | ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes \
                 "$VPS_USER@$VPS_HOST" "deploy $APP sha-${GITHUB_SHA}"
 
