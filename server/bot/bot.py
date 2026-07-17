@@ -41,17 +41,12 @@ RUNNER = os.path.join(HUB_DIR, "bin", "runner.sh")
 APPS_LIST = os.path.join(HUB_DIR, "apps.list")
 LOG_FILE = os.path.join(HUB_DIR, "deploys.log")
 BOT_LOG = os.path.join(HUB_DIR, "bot.log")
-# cloudflared quick-tunnel writes its public URL here (StandardOutput=append);
-# the URL rotates on every restart, so it is read live on each request (WB2)
-TUNNEL_LOG = "/var/log/codex-tunnel.log"
-# apps served behind nginx on :80 have a stable path URL (WB2)
-NGINX_PATHS = {"portfolio": "/portfolio/", "zhaba": "/zhaba/", "vote": "/vote/"}
-NGINX_HOST = "http://192.3.94.42"
-# app whose live URL is the rotating cloudflared tunnel
-TUNNEL_APP = "codeapp"
+# every app is published by Caddy at a stable HTTPS URL (auto Let's Encrypt on
+# sslip.io): https://<app>.<HOST_SLUG>.sslip.io (WB2). This replaces the old
+# nginx :80 paths and the rotating cloudflared tunnel — the URL no longer moves.
+HOST_SLUG = "192-3-94-42"
 
 APP_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,40}$")
-TUNNEL_URL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
 TELEGRAM_TEXT_LIMIT = 4096
 
 # consistent status glyphs (taste: <=1 meaningful glyph per element)
@@ -291,23 +286,10 @@ def current_sha(app):
     return None
 
 
-def tunnel_url():
-    """Last cloudflared quick-tunnel URL from the log = the current one."""
-    try:
-        with open(TUNNEL_LOG, encoding="utf-8", errors="replace") as fh:
-            found = TUNNEL_URL_RE.findall(fh.read())
-        return found[-1] if found else None
-    except OSError:
-        return None
-
-
 def live_url(app):
-    """Current working URL for an app (WB2)."""
-    if app in NGINX_PATHS:
-        return NGINX_HOST + NGINX_PATHS[app]
-    if app == TUNNEL_APP:
-        return tunnel_url() or "(туннель недоступен)"
-    return "-"
+    """Stable HTTPS URL for an app (WB2): Caddy serves every app at
+    https://<app>.<HOST_SLUG>.sslip.io with an auto Let's Encrypt cert."""
+    return f"https://{app}.{HOST_SLUG}.sslip.io"
 
 
 def status_rows():

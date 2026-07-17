@@ -278,6 +278,11 @@ if ! grep -qE "^\$APP( |\$)" $APPS_LIST_REMOTE; then
   printf '%s %s\n' "\$APP" "\$DIR" >> $APPS_LIST_REMOTE
   echo "  apps.list: added '\$APP \$DIR'"
 fi
+# publish an HTTPS route for the new app (Caddy + auto Let's Encrypt on sslip.io);
+# no-op reload if the route already exists. Non-fatal if Caddy is absent.
+if [ -x /opt/deploy-hub/bin/caddy-sync.sh ]; then
+  /opt/deploy-hub/bin/caddy-sync.sh || echo "  caddy-sync: skipped (see logs)"
+fi
 REMOTE
 
 # caller stub commit (last: the push triggers the first deploy)

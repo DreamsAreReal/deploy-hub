@@ -30,10 +30,10 @@ identifiers, logs and code stay English.
 - `/rollback <app>` / `/redeploy <app>` — with a Yes/No confirm
 - `/menu`, `/help`
 
-The URL (WB2) shows the **current working URL**: nginx-proxied apps get a stable
-`http://<host>/<path>/`; the tunnel app's URL is read live from the cloudflared
-log on every request, so it is always the current quick-tunnel URL even after the
-tunnel restarts.
+The URL (WB2) is the app's stable HTTPS address, served by Caddy with an auto
+Let's Encrypt certificate: `https://<app>.192-3-94-42.sslip.io`. The name no
+longer moves (it replaced the old nginx `:80` paths and the rotating cloudflared
+tunnel).
 
 ## Security model (P0)
 
