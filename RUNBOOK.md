@@ -16,6 +16,17 @@ Roll back to a specific version: append the tag —
 `"rollback <app> sha-<full-or-7-char-sha>"` (must be one of the kept images;
 check with `ssh vpn 'docker images ghcr.io/dreamsarereal/<app>'`).
 
+Before rolling back, see where you would land: `"history <app>"` shows the
+recent journal (deploys, rollbacks and their sha7); the exact target is
+`previous=` in `/opt/<app>/.deploy-state`.
+
+Verify the rollback worked: the command itself must end with
+`rolled back to previous sha (<sha7>)` — the health gate has already passed
+at that point. Then `"status"` must show that sha7 with `running/healthy`
+(or `running/ok`), and a version-stamped page shows the old sha again.
+If the target is unhealthy too, the command exits non-zero with
+`rollback target is not healthy either` — pick an older tag by hand.
+
 ## See what is going on
 
     ssh -i ~/.ssh/deploy_hub_key deploy@192.3.94.42 "status"

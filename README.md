@@ -87,6 +87,13 @@ history <app>           # last journal lines of the app
 `./bin/onboard.sh status` and `./bin/onboard.sh history <app>` proxy the
 same queries from the operator machine.
 
+`status` columns: `sha` is the journal-style sha7 of the running version;
+`health` reads `<container state>/<check>`, where `<check>` is the container's
+own healthcheck status when it has one, a live gate probe (`ok`/`fail`) for
+static/service apps without one, and `-` when nothing can be probed (app
+stopped or not deployed yet); `last deploy` is the latest journal operation
+(deploy, rollback or stop).
+
 `deploy` reads `key=value` lines on stdin: `token` (ephemeral GITHUB_TOKEN,
 used for `docker login` and dropped — no registry credentials live on the
 VPS), `actor`, `subject` (commit line for the card), `start` (workflow start

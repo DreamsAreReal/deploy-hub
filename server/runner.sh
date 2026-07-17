@@ -179,7 +179,9 @@ health_gate() { # health_gate <profile> <port> <health_path>; 0=healthy
   while (( elapsed < HEALTH_TIMEOUT )); do
     case "$profile" in
       static|service)
-        if curl -fsS -m 5 -o /dev/null "http://127.0.0.1:${port}${path}"; then return 0; fi
+        # -s without -S: transient connect errors during container restart are
+        # expected and used to read like failures in the output (consumer M3)
+        if curl -fs -m 5 -o /dev/null "http://127.0.0.1:${port}${path}" 2>/dev/null; then return 0; fi
         ;;
       bot)
         # bot profile: rely on the compose healthcheck (functional getMe check, F4)
@@ -321,16 +323,24 @@ cmd_rollback() {
   exec 9>"$LOCK_FILE"
   flock -w "$LOCK_WAIT" 9 || { echo "$S_LOCK_BUSY" >&2; exit 1; }
   compose_up "$dir" "${image}:${tag}"
+  echo "waiting for the health gate..."
+  local dur
   if health_gate "$profile" "$port" "$path"; then
     local cur; cur=$(state_get "$dir" current)
     if [ "${cur:-}" != "$tag" ]; then
       state_set "$dir" "$tag" "${cur:-}"
     fi
-    log_line "$app" "$sha7" rollback ok "$(( $(date -u +%s) - t0 ))"
+    dur=$(( $(date -u +%s) - t0 ))
+    log_line "$app" "$sha7" rollback ok "$dur"
     echo "$S_ROLLED_BACK (${sha7})"
+    # a manual rollback is a state change like any deploy: without a card the
+    # last card in the chat keeps claiming the old version is live (consumer M3)
+    send_card "$app" "$(render_card rollback "$app" "$sha7" "$(fmt_duration "$dur")" "manual rollback" "$sha7" "")"
   else
-    log_line "$app" "$sha7" rollback fail "$(( $(date -u +%s) - t0 ))"
+    dur=$(( $(date -u +%s) - t0 ))
+    log_line "$app" "$sha7" rollback fail "$dur"
     echo "error: rollback target is not healthy either" >&2
+    send_card "$app" "$(render_card rollback-fail "$app" "$sha7" "$(fmt_duration "$dur")" "manual rollback" "$sha7" "target unhealthy")"
     exit 1
   fi
 }
@@ -366,7 +376,8 @@ cmd_status() {
     else
       state=missing; hs=-
     fi
-    last=$(grep "] ${app}@" "$LOG_FILE" 2>/dev/null | grep ' deploy ' | tail -1 | sed -E 's/^\[([^]]+)\].*/\1/' || true)
+    # last OPERATION, not just deploy: a rollback moves the app too (consumer M3)
+    last=$(grep "] ${app}@" "$LOG_FILE" 2>/dev/null | grep -E ' (deploy|rollback|stop) ' | tail -1 | sed -E 's/^\[([^]]+)\].*/\1/' || true)
     printf '%s | %s | %s/%s | %s\n' "$app" "$cur7" "$state" "$hs" "${last:-never}"
   done < "$APPS_LIST"
 }
