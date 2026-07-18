@@ -24,14 +24,14 @@ push to default branch
         → ssh deploy@vps "deploy <app> sha-<commit>"   (metadata on stdin)
           → runner (/opt/deploy-hub/bin/runner.sh on the VPS):
               flock → docker login (ephemeral job token) → pull → logout
-              → compose up → health gate (90s)
-              → ok:   journal (incl. VPN smoke) + ✅ Telegram card
-              → fail: rollback to previous sha → ⏪ card
+              → blue-green: start a standby, health gate (90s), cut over
+              → ok:   journal + ✅ Telegram card (zero-downtime; old never stopped)
+              → fail: discard the standby, the current version keeps serving → ⏪ card
                       (first deploy: stop app → ❌ card)
 ```
 
-Images are built only in CI — never on the VPS (1 CPU, <1 GiB RAM, and a
-production VPN that must not be starved).
+Images are built only in CI — never on the VPS (1 CPU, <1 GiB RAM: a build there
+would starve the running apps).
 
 ## Bootstrap (one-time host setup)
 
@@ -161,7 +161,8 @@ repo secret, `/opt/<app>/` from `server/compose-template.yml`, and a line in
 |---|---|
 | `/opt/deploy-hub/bin/runner.sh` | the deploy runner — single SSH entry point (forced command) |
 | `/opt/deploy-hub/apps.list` | allowlist: `<app> <dir>` per line; unknown apps are refused |
-| `/opt/deploy-hub/deploys.log` | append-only journal: `[ISO] app@sha7 action result duration vpn=ok\|fail` |
+| `/opt/deploy-hub/deploys.log` | append-only journal: `[ISO] app@sha7 action result duration smoke=ok\|skip\|fail` |
+| `/opt/deploy-hub/smoke.conf` | optional: host TCP ports a deploy must not break; absent → `smoke=skip` |
 | `/opt/deploy-hub/telegram.env` | `TG_TOKEN`/`TG_CHAT_ID` for cards (600); absent → cards skipped |
 | `/opt/deploy-hub/last-error.log` | recent pull errors (when CI logs are unreachable) |
 | `/opt/deploy-hub/bin/prune.sh` | daily image prune (systemd timer): keeps running + 2 previous per app |

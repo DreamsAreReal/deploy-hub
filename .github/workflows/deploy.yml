@@ -54,17 +54,17 @@ jobs:
         run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
 
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Check out deploy-hub (compose renderer)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: DreamsAreReal/deploy-hub
           path: .deploy-hub
           ref: main
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

@@ -69,11 +69,12 @@ S_CARD_FIRST_FAIL_HINT="Check /opt/%s/.env and app logs, then push a fix"
 S_CARD_FAIL_HINT="Run: ssh vpn 'docker logs %s --tail 50'"
 
 log_line() { # log_line <app> <sha7> <action> <result> <duration_s>
-  # container operations carry a post-op smoke suffix: whatever critical service
-  # must survive a deploy is probed right after, so every deploy/rollback/stop
-  # line records `vpn=ok|skip|fail` (skip = no smoke ports configured)
+  # container operations carry a post-op smoke suffix: any critical service the
+  # operator lists in smoke.conf is probed right after, so every deploy/rollback/
+  # stop line records `smoke=ok|skip|fail` (skip = no smoke ports configured;
+  # the default — the box has no service that a deploy must be checked against)
   local suffix=""
-  case "$3" in deploy|rollback|redeploy|stop) suffix=" vpn=$(vpn_smoke)" ;; esac
+  case "$3" in deploy|rollback|redeploy|stop) suffix=" smoke=$(run_smoke)" ;; esac
   printf '[%s] %s@%s %s %s %ss%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" "$3" "$4" "$5" "$suffix" >> "$LOG_FILE"
 }
 
@@ -84,10 +85,10 @@ smoke_ports() { # configured post-op TCP smoke ports, one per line in smoke.conf
     | grep -E '^[0-9]{1,5}$' || true
 }
 
-vpn_smoke() { # post-op probe of the configured smoke ports (default: none).
-  # Ports live in smoke.conf so removing a service (e.g. the VPN) does not leave
-  # the journal permanently reading `vpn=fail`: with nothing configured there is
-  # nothing to prove, so the result is `skip`, not `fail`.
+run_smoke() { # post-op probe of the configured smoke ports (default: none).
+  # Optional: the operator may list host TCP ports in smoke.conf that a deploy
+  # must not break; with nothing configured there is nothing to prove, so the
+  # result is `skip` (honest), not `fail`.
   local ports; ports=$(smoke_ports)
   [ -n "$ports" ] || { echo skip; return; }
   local p
@@ -222,35 +223,41 @@ state_set() { # state_set <dir> <current> <previous>
 #            hmode=compose — the developer declared healthcheck in their compose)
 #   process  no port and no healthcheck: the main container just has to stay up
 #            (BYOC hmode=process)
-health_gate() { # health_gate <mode> <port> <health_path>; 0=healthy
-  local mode=$1 port=$2 path=$3 elapsed=0
-  # map legacy profiles to modes so template apps behave exactly as before
+norm_mode() { # legacy profile -> health mode (template apps behave as before)
+  case "$1" in static|service) echo http ;; bot) echo compose ;; *) echo "$1" ;; esac
+}
+
+health_probe() { # health_probe <mode> <port> <path> <cname> <elapsed>; 0=healthy
+  local mode=$1 port=$2 path=$3 cname=$4 elapsed=$5
   case "$mode" in
-    static|service) mode=http ;;
-    bot)            mode=compose ;;
+    http)
+      # -s without -S: transient connect errors during a restart are expected
+      curl -fs -m 5 -o /dev/null "http://127.0.0.1:${port}${path}" 2>/dev/null
+      ;;
+    compose)
+      # trust the container's own healthcheck (declared by dev, or bot getMe)
+      [ "$(docker inspect --format '{{.State.Health.Status}}' "$cname" 2>/dev/null || echo none)" = healthy ]
+      ;;
+    process)
+      # no port/healthcheck: the container must simply be running past one tick
+      [ "$(docker inspect --format '{{.State.Status}}' "$cname" 2>/dev/null || echo none)" = running ] \
+        && (( elapsed >= HEALTH_INTERVAL ))
+      ;;
+    *) return 1 ;;
   esac
+}
+
+health_gate() { # health_gate <mode> <port> <health_path>; 0=healthy
+  # gates the app's MAIN container (resolved by name); blue-green uses
+  # health_gate_target to gate a specific temporary container instead
+  health_gate_target "$(norm_mode "$1")" "$2" "$3" "$(app_container "$CURRENT_APP")"
+}
+
+health_gate_target() { # health_gate_target <mode> <port> <path> <cname>; 0=healthy
+  local mode; mode=$(norm_mode "$1")
+  local port=$2 path=$3 cname=$4 elapsed=0
   while (( elapsed < HEALTH_TIMEOUT )); do
-    case "$mode" in
-      http)
-        # -s without -S: transient connect errors during container restart are
-        # expected and used to read like failures in the output (consumer M3)
-        if curl -fs -m 5 -o /dev/null "http://127.0.0.1:${port}${path}" 2>/dev/null; then return 0; fi
-        ;;
-      compose)
-        # trust the container's own healthcheck (functional check, declared by
-        # the developer or, for bots, the getMe probe)
-        local cname; cname=$(app_container "$CURRENT_APP")
-        local hs; hs=$(docker inspect --format '{{.State.Health.Status}}' "$cname" 2>/dev/null || echo none)
-        if [ "$hs" = healthy ]; then return 0; fi
-        ;;
-      process)
-        # no port, no healthcheck: the main container must simply be running
-        local cname; cname=$(app_container "$CURRENT_APP")
-        local st; st=$(docker inspect --format '{{.State.Status}}' "$cname" 2>/dev/null || echo none)
-        # give it a moment to crash-on-start; require running after the interval
-        if [ "$st" = running ] && (( elapsed >= HEALTH_INTERVAL )); then return 0; fi
-        ;;
-    esac
+    if health_probe "$mode" "$port" "$path" "$cname" "$elapsed"; then return 0; fi
     sleep "$HEALTH_INTERVAL"
     elapsed=$((elapsed + HEALTH_INTERVAL))
   done
@@ -281,6 +288,89 @@ compose_up() { # compose_up <dir> <image:tag>
   else
     DEPLOY_IMAGE="$imagetag" docker compose -f "$dir/docker-compose.yml" up -d --pull never app
   fi
+}
+
+# --- zero-downtime (blue-green) for the main service ---------------------------
+free_port() { # first free 127.0.0.1 TCP port at/above $1
+  local p=$1
+  while ss -tlnH "sport = :$p" 2>/dev/null | grep -q .; do p=$((p+1)); done
+  echo "$p"
+}
+
+# bluegreen_up: bring up a NEW main instance beside the running one, health-gate
+# it, and only then cut the Caddy route over — the old instance serves traffic
+# the entire time, so a healthy release has zero downtime and a broken release is
+# simply discarded (the old one never stopped). Returns 0 healthy / 1 broken.
+# Falls back to a plain recreate when there is no old container to protect (first
+# deploy) or when the app has no public port (nothing to cut over).
+bluegreen_up() { # bluegreen_up <dir> <image:tag> <mode> <port> <path>
+  local dir=$1 imagetag=$2 mode=$3 port=$4 path=$5
+  local old; old=$(app_container "$CURRENT_APP")
+  # no live old container, or no port to route: nothing to keep up -> plain path
+  if [ -z "$port" ] || [ -z "$(docker ps -q -f "name=^${old}$" 2>/dev/null)" ]; then
+    compose_up "$dir" "$imagetag"
+    health_gate "$mode" "$port" "$path"; return $?
+  fi
+
+  # BG_OLD_ALIVE marks whether the old instance is still serving after a failure:
+  # when true the caller must NOT roll back (nothing broke in prod)
+  BG_OLD_ALIVE=0
+  local bg="${CURRENT_APP}-bg" bgport; bgport=$(free_port $((port + 10000)))
+  docker rm -f "$bg" >/dev/null 2>&1 || true
+  # mirror the essentials of the main container onto the standby: same compose
+  # network (so BYOC sidecars are reachable), env_file, mem_limit, published on a
+  # temp loopback port. --pull never: image is already pulled; server never builds.
+  local net; net=$(docker inspect --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}' "$old" 2>/dev/null | head -1)
+  # container port the app listens on = what the old container maps <port> to
+  # (host <port> -> container <cport>); reuse it so the standby exposes the same
+  local cport; cport=$(docker inspect --format \
+    "{{range \$p,\$c := .NetworkSettings.Ports}}{{range \$c}}{{if eq .HostPort \"$port\"}}{{\$p}}{{end}}{{end}}{{end}}" \
+    "$old" 2>/dev/null | grep -oE '^[0-9]+' | head -1)
+  cport=${cport:-$port}
+  local envargs=(); [ -f "$dir/.env" ] && envargs=(--env-file "$dir/.env")
+  echo "blue-green: starting standby ${bg} on 127.0.0.1:${bgport} -> ${cport}"
+  if ! docker run -d --name "$bg" --restart no \
+        ${net:+--network "$net"} "${envargs[@]}" \
+        --memory 256m \
+        -p "127.0.0.1:${bgport}:${cport}" "$imagetag" >/dev/null 2>&1; then
+    # some images have no server on <port> or need compose-only wiring: fall back
+    echo "blue-green: standby did not start, falling back to in-place recreate" >&2
+    docker rm -f "$bg" >/dev/null 2>&1 || true
+    compose_up "$dir" "$imagetag"
+    health_gate "$mode" "$port" "$path"; return $?
+  fi
+
+  # gate the standby on its temp port / its own container health
+  if ! health_gate_target "$mode" "$bgport" "$path" "$bg"; then
+    echo "blue-green: standby unhealthy — discarding it, old stays live" >&2
+    docker rm -f "$bg" >/dev/null 2>&1 || true
+    BG_OLD_ALIVE=1   # prod never changed: caller must not roll back
+    return 1
+  fi
+
+  # standby healthy: cut Caddy to it (graceful reload = no dropped requests),
+  # then recreate the real main service on its permanent port with the new image,
+  # gate it, cut Caddy back, and finally drop the standby.
+  echo "blue-green: standby healthy — cutting over"
+  route_port "$dir" "$bgport"
+  compose_up "$dir" "$imagetag"
+  if health_gate "$mode" "$port" "$path"; then
+    route_port "$dir" "$port"
+    docker rm -f "$bg" >/dev/null 2>&1 || true
+    return 0
+  fi
+  # extremely unlikely (standby passed but recreate failed): keep serving via the
+  # standby by leaving Caddy on it; report failure so the caller does not advance
+  echo "blue-green: recreate failed after standby passed — leaving Caddy on standby" >&2
+  return 1
+}
+
+route_port() { # point the app's Caddy route at <port> (temp or permanent)
+  local dir=$1 p=$2 cur; cur=$(conf_get "$dir" port)
+  [ "$cur" = "$p" ] && return 0
+  # caddy-sync renders from app.conf port=; swap it, sync, (caller restores)
+  sed -i "s/^port=.*/port=$p/" "$dir/app.conf"
+  [ -x "$HUB_DIR/bin/caddy-sync.sh" ] && sudo -n "$HUB_DIR/bin/caddy-sync.sh" >/dev/null 2>&1 || true
 }
 
 cmd_deploy() {
@@ -360,10 +450,16 @@ cmd_deploy() {
 
   local prev; prev=$(state_get "$dir" current)
   echo "starting ${app} @ ${tag}"
-  compose_up "$dir" "${image}:${tag}"
+  # BYOC brings sidecars up first (idempotent) so the standby can reach them;
+  # the main service itself is swapped zero-downtime via blue-green below.
+  if [ "$(conf_get "$dir" mode)" = byoc ]; then
+    DEPLOY_IMAGE="${image}:${tag}" docker compose -f "$dir/docker-compose.yml" up -d --pull missing --no-recreate >/dev/null 2>&1 || true
+  fi
 
   local t_end duration_s duration
-  if health_gate "$profile" "$port" "$path"; then
+  # blue-green: gate a standby, then cut over — the old instance never stops, so
+  # a healthy release has zero downtime and a broken one is discarded untouched
+  if bluegreen_up "$dir" "${image}:${tag}" "$profile" "$port" "$path"; then
     t_end=$(date -u +%s)
     duration_s=$(( t_end - ${start:-$t0} ))
     duration=$(fmt_duration "$duration_s")
@@ -395,6 +491,15 @@ cmd_deploy() {
   esac
   log_line "$app" "$sha7" deploy fail "$(( t_end - t0 ))"
   echo "$S_HEALTH_FAIL" >&2
+
+  # zero-downtime: the standby was discarded and the old instance never stopped,
+  # so prod is untouched — report the rejection without any rollback churn
+  if [ "${BG_OLD_ALIVE:-0}" = 1 ]; then
+    local prev7; prev7=$(printf '%s' "${prev#sha-}" | cut -c1-7)
+    echo "$S_ROLLED_BACK (${prev7}) — zero-downtime: prod never changed" >&2
+    send_card "$app" "$(render_card rollback "$app" "$sha7" "$duration" "$subject" "$prev7" "$reason")"
+    exit 1
+  fi
 
   if [ -n "$prev" ]; then
     local prev7; prev7=$(printf '%s' "${prev#sha-}" | cut -c1-7)
@@ -444,10 +549,15 @@ cmd_rollback() {
   local sha7; sha7=$(printf '%s' "${tag#sha-}" | cut -c1-7)
   local t0; t0=$(date -u +%s)
   acquire_lock
-  compose_up "$dir" "${image}:${tag}"
+  # bring sidecars up first for BYOC (idempotent), then swap the main service
+  # zero-downtime via blue-green — same as a deploy, so a rollback/redeploy never
+  # drops a request and a bad target leaves the current one serving
+  if [ "$(conf_get "$dir" mode)" = byoc ]; then
+    DEPLOY_IMAGE="${image}:${tag}" docker compose -f "$dir/docker-compose.yml" up -d --pull missing --no-recreate >/dev/null 2>&1 || true
+  fi
   echo "waiting for the health gate..."
   local dur
-  if health_gate "$profile" "$port" "$path"; then
+  if bluegreen_up "$dir" "${image}:${tag}" "$profile" "$port" "$path"; then
     local cur; cur=$(state_get "$dir" current)
     if [ "${cur:-}" != "$tag" ]; then
       state_set "$dir" "$tag" "${cur:-}"
