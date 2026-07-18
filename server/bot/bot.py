@@ -1426,32 +1426,47 @@ def main():
     offset = 0
     while True:
         for update in api.get_updates(offset):
-            offset = update["update_id"] + 1
-            msg = update.get("message")
-            cb = update.get("callback_query")
-            # --- P0 GATE: act ONLY for the authorized chat AND user ----------
-            if msg:
-                chat_id = (msg.get("chat") or {}).get("id")
-                from_id = (msg.get("from") or {}).get("id")
-                if chat_id != authorized_chat_id or from_id != authorized_chat_id:
-                    uname = (msg.get("from") or {}).get("username", "?")
-                    log_denied(chat_id, uname)
-                    continue
-                text = msg.get("text")
-                if text:
-                    handle_message(api, chat_id, text)
-            elif cb:
-                cb_msg = cb.get("message") or {}
-                cb_chat = (cb_msg.get("chat") or {}).get("id")
-                from_id = (cb.get("from") or {}).get("id")
-                # both the chat and the pressing user must be authorized
-                if cb_chat != authorized_chat_id or from_id != authorized_chat_id:
-                    uname = (cb.get("from") or {}).get("username", "?")
-                    log_denied(from_id, uname)
-                    api.answer_callback(cb.get("id", ""))
-                    continue
-                handle_callback(api, cb_chat, cb_msg.get("message_id"),
-                                cb.get("id", ""), cb.get("data", ""))
+            # V4: never let an unexpected error in a handler kill the bot. Advance
+            # the offset FIRST (so a poison update is not reprocessed forever),
+            # then process inside try/except — log and move on, like the monitor.
+            uid = update.get("update_id")
+            if uid is not None:
+                offset = uid + 1
+            try:
+                _process_update(api, authorized_chat_id, update)
+            except Exception as e:
+                bot_log(f"handler error: {type(e).__name__}: {e}")
+
+
+def _process_update(api, authorized_chat_id, update):
+    """Handle one update. The P0 gate (chat.id == from.id == authorized) is
+    unchanged; callers wrap this in try/except so a bad handler never kills the
+    poll loop (V4)."""
+    msg = update.get("message")
+    cb = update.get("callback_query")
+    # --- P0 GATE: act ONLY for the authorized chat AND user ----------
+    if msg:
+        chat_id = (msg.get("chat") or {}).get("id")
+        from_id = (msg.get("from") or {}).get("id")
+        if chat_id != authorized_chat_id or from_id != authorized_chat_id:
+            uname = (msg.get("from") or {}).get("username", "?")
+            log_denied(chat_id, uname)
+            return
+        text = msg.get("text")
+        if text:
+            handle_message(api, chat_id, text)
+    elif cb:
+        cb_msg = cb.get("message") or {}
+        cb_chat = (cb_msg.get("chat") or {}).get("id")
+        from_id = (cb.get("from") or {}).get("id")
+        # both the chat and the pressing user must be authorized
+        if cb_chat != authorized_chat_id or from_id != authorized_chat_id:
+            uname = (cb.get("from") or {}).get("username", "?")
+            log_denied(from_id, uname)
+            api.answer_callback(cb.get("id", ""))
+            return
+        handle_callback(api, cb_chat, cb_msg.get("message_id"),
+                        cb.get("id", ""), cb.get("data", ""))
 
 
 if __name__ == "__main__":

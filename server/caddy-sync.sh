@@ -35,7 +35,20 @@ render() {
     local dir port
     dir=$(app_dir "$app")
     [ -n "$dir" ] && [ -f "$dir/app.conf" ] || continue
-    port=$(conf_get "$dir" port)
+    # blue-green temporary route override: mid-cutover a deploy writes the standby
+    # port to <dir>/.caddy-port so the route points at the standby WITHOUT mutating
+    # app.conf (which stays on the permanent port). Absent/blank => permanent port.
+    # Self-healing: the override is only honored while something actually listens
+    # on it — after a reboot/OOM the standby (--restart no) is gone, so the stale
+    # override is ignored and the route falls back to the permanent port.
+    port=""
+    if [ -f "$dir/.caddy-port" ]; then
+      local ovr; ovr=$(tr -cd '0-9' < "$dir/.caddy-port" | head -c5)
+      if [ -n "$ovr" ] && ss -tlnH "sport = :$ovr" 2>/dev/null | grep -q .; then
+        port=$ovr
+      fi
+    fi
+    [ -n "$port" ] || port=$(conf_get "$dir" port)
     printf '%s' "$port" | grep -Eq '^[0-9]{2,5}$' || continue
     printf '%s.%s.sslip.io {\n\treverse_proxy 127.0.0.1:%s\n}\n\n' \
       "$app" "$HOST_SLUG" "$port"

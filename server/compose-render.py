@@ -106,20 +106,37 @@ def published_port(svc):
     return None
 
 
+def die(msg):
+    # V5: a clean one-line reason for the operator instead of a raw traceback
+    sys.stderr.write(f"compose-render: {msg}\n")
+    sys.exit(1)
+
+
 def main():
     if len(sys.argv) != 4:
         sys.stderr.write(__doc__)
         sys.exit(2)
     app, in_path, out_path = sys.argv[1:4]
 
-    with open(in_path, encoding="utf-8") as fh:
-        doc = yaml.safe_load(fh) or {}
-    services = doc.get("services") or {}
-    if not services:
-        sys.stderr.write("compose-render: no services in compose\n")
-        sys.exit(1)
+    # V5: bad YAML / wrong shape must produce a clear message, not a traceback
+    try:
+        with open(in_path, encoding="utf-8") as fh:
+            doc = yaml.safe_load(fh) or {}
+    except (OSError, yaml.YAMLError) as e:
+        die(f"cannot parse compose: {e}")
+    if not isinstance(doc, dict):
+        die("compose is not a mapping (expected top-level services:)")
+    services = doc.get("services")
+    if not isinstance(services, dict) or not services:
+        die("no services in compose (services: must be a mapping of names)")
+    for name, svc in services.items():
+        if not isinstance(svc, dict):
+            die(f"service '{name}' is not a mapping")
 
-    main_name = pick_main(services)
+    try:
+        main_name = pick_main(services)
+    except ValueError as e:
+        die(str(e))
     main_svc = services[main_name]
     lbls = labels_of(main_svc)
 
@@ -156,7 +173,10 @@ def main():
         if truthy(labels_of(s).get("deploy-hub.host", "")):
             host_svc = s
             break
-    port = published_port(host_svc) if public == "true" else ""
+    # V3: published_port may be None (no ports: section). Coerce to "" so a valid
+    # public app without a published port deploys as a no-URL/process app instead
+    # of emitting `port=None`, which the runner would reject.
+    port = (published_port(host_svc) or "") if public == "true" else ""
     health = "compose" if "healthcheck" in main_svc else ("http" if port else "process")
 
     with open(out_path, "w", encoding="utf-8") as fh:

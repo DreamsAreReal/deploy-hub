@@ -317,9 +317,18 @@ bluegreen_up() { # bluegreen_up <dir> <image:tag> <mode> <port> <path>
   BG_OLD_ALIVE=0
   local bg="${CURRENT_APP}-bg" bgport; bgport=$(free_port $((port + 10000)))
   docker rm -f "$bg" >/dev/null 2>&1 || true
+
+  # V1: never mutate app.conf (it always holds the PERMANENT port). The Caddy
+  # route is temporarily overridden via <dir>/.caddy-port, and a trap guarantees
+  # that override is cleared and the standby removed on ANY exit — including
+  # SIGKILL/OOM/reboot mid-cutover — so prod can never stick on the temp port and
+  # the standby can never leak. bg_cleanup restores the route to permanent.
+  BG_DIR="$dir" BG_NAME="$bg"
+  trap 'bg_cleanup' EXIT
+
   # mirror the essentials of the main container onto the standby: same compose
   # network (so BYOC sidecars are reachable), env_file, mem_limit, published on a
-  # temp loopback port. --pull never: image is already pulled; server never builds.
+  # temp loopback port. The image is already pulled; the server never builds.
   local net; net=$(docker inspect --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}' "$old" 2>/dev/null | head -1)
   # container port the app listens on = what the old container maps <port> to
   # (host <port> -> container <cport>); reuse it so the standby exposes the same
@@ -335,7 +344,7 @@ bluegreen_up() { # bluegreen_up <dir> <image:tag> <mode> <port> <path>
         -p "127.0.0.1:${bgport}:${cport}" "$imagetag" >/dev/null 2>&1; then
     # some images have no server on <port> or need compose-only wiring: fall back
     echo "blue-green: standby did not start, falling back to in-place recreate" >&2
-    docker rm -f "$bg" >/dev/null 2>&1 || true
+    bg_cleanup; trap - EXIT
     compose_up "$dir" "$imagetag"
     health_gate "$mode" "$port" "$path"; return $?
   fi
@@ -343,33 +352,43 @@ bluegreen_up() { # bluegreen_up <dir> <image:tag> <mode> <port> <path>
   # gate the standby on its temp port / its own container health
   if ! health_gate_target "$mode" "$bgport" "$path" "$bg"; then
     echo "blue-green: standby unhealthy — discarding it, old stays live" >&2
-    docker rm -f "$bg" >/dev/null 2>&1 || true
+    bg_cleanup; trap - EXIT
     BG_OLD_ALIVE=1   # prod never changed: caller must not roll back
     return 1
   fi
 
   # standby healthy: cut Caddy to it (graceful reload = no dropped requests),
   # then recreate the real main service on its permanent port with the new image,
-  # gate it, cut Caddy back, and finally drop the standby.
+  # gate it, cut Caddy back to permanent, and drop the standby.
   echo "blue-green: standby healthy — cutting over"
   route_port "$dir" "$bgport"
-  compose_up "$dir" "$imagetag"
+  compose_up "$dir" "$imagetag"   # recreated with the compose restart policy (V2)
   if health_gate "$mode" "$port" "$path"; then
-    route_port "$dir" "$port"
-    docker rm -f "$bg" >/dev/null 2>&1 || true
+    bg_cleanup; trap - EXIT       # route back to permanent + drop standby
     return 0
   fi
-  # extremely unlikely (standby passed but recreate failed): keep serving via the
-  # standby by leaving Caddy on it; report failure so the caller does not advance
-  echo "blue-green: recreate failed after standby passed — leaving Caddy on standby" >&2
+  # standby passed but the permanent recreate did not: recreate the PREVIOUS good
+  # image on the permanent port so prod ends on a proper restart:unless-stopped
+  # container (V2 — never leave prod on the --restart no standby), route back,
+  # drop the standby, and report failure so the caller does not advance state.
+  echo "blue-green: recreate failed after standby passed — restoring previous on permanent port" >&2
+  local prevtag; prevtag=$(state_get "$dir" current)
+  [ -n "$prevtag" ] && compose_up "$dir" "$(conf_get "$dir" image):${prevtag}" >/dev/null 2>&1 || true
+  bg_cleanup; trap - EXIT
+  BG_OLD_ALIVE=1
   return 1
 }
 
-route_port() { # point the app's Caddy route at <port> (temp or permanent)
-  local dir=$1 p=$2 cur; cur=$(conf_get "$dir" port)
-  [ "$cur" = "$p" ] && return 0
-  # caddy-sync renders from app.conf port=; swap it, sync, (caller restores)
-  sed -i "s/^port=.*/port=$p/" "$dir/app.conf"
+bg_cleanup() { # restore the Caddy route to the permanent port + drop the standby
+  [ -n "${BG_DIR:-}" ] && rm -f "$BG_DIR/.caddy-port" 2>/dev/null || true
+  [ -x "$HUB_DIR/bin/caddy-sync.sh" ] && sudo -n "$HUB_DIR/bin/caddy-sync.sh" >/dev/null 2>&1 || true
+  [ -n "${BG_NAME:-}" ] && docker rm -f "$BG_NAME" >/dev/null 2>&1 || true
+}
+
+route_port() { # point the app's Caddy route at <port> WITHOUT touching app.conf
+  local dir=$1 p=$2
+  # write the temp-port override file; caddy-sync prefers it over app.conf port=
+  printf '%s\n' "$p" > "$dir/.caddy-port"
   [ -x "$HUB_DIR/bin/caddy-sync.sh" ] && sudo -n "$HUB_DIR/bin/caddy-sync.sh" >/dev/null 2>&1 || true
 }
 
