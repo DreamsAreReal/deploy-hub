@@ -94,7 +94,7 @@ func TestJournalSamples(t *testing.T) {
 		{Time: at(9), App: "c", Action: journal.ActionDeploy, Result: journal.ResultFail},
 		{Time: at(10), App: "b", Action: journal.ActionDeploy, Result: journal.ResultFail},
 	}
-	samples := JournalSamples(entries)
+	samples := JournalSamples(entries, []string{"a", "c"})
 	testutil.Equal(t, cap(samples), len(samples))
 	lines := make([]string, 0, len(samples))
 	for _, s := range samples {
@@ -115,6 +115,7 @@ func TestJournalSamples(t *testing.T) {
 		`deploy_hub_last_operation_timestamp_seconds{action="deploy",app="b",result="ok"} 1060 1760000000000`,
 		`deploy_hub_operations_total{action="deploy",app="c",result="fail"} 1 1760000000000`,
 		`deploy_hub_last_operation_timestamp_seconds{action="deploy",app="c",result="fail"} 1540 1760000000000`,
+		`deploy_hub_operations_total{action="deploy",app="c",result="ok"} 0 1760000000000`,
 		`deploy_hub_last_incident_timestamp_seconds{app="a"} 1480 1760000000000`,
 		`deploy_hub_last_incident_timestamp_seconds{app="b"} 1600 1760000000000`,
 		`deploy_hub_last_incident_timestamp_seconds{app="c"} 1540 1760000000000`,

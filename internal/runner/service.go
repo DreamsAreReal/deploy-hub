@@ -125,7 +125,8 @@ func (s *Service) pushMetrics(ctx context.Context) {
 	if err != nil {
 		s.Log.Warn("journal read failed", "error", err.Error())
 	}
-	samples := append(obs.JournalSamples(journal.ForApps(entries, s.registeredNames())), s.samples...)
+	names := s.registeredNames()
+	samples := append(obs.JournalSamples(journal.ForApps(entries, names), names), s.samples...)
 	s.Metrics.Push(context.WithoutCancel(ctx), samples)
 }
 
