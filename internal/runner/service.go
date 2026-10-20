@@ -130,8 +130,6 @@ func (s *Service) pushMetrics(ctx context.Context) {
 	s.Metrics.Push(context.WithoutCancel(ctx), samples)
 }
 
-// registeredNames lists the allowlisted apps: journal history of removed apps
-// must not keep feeding counters, or rates over a window report phantom failures.
 func (s *Service) registeredNames() []string {
 	apps, err := s.Apps.All()
 	if err != nil {

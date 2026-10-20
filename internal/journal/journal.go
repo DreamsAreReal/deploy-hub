@@ -125,7 +125,6 @@ func ForApp(entries []Entry, app string) []Entry {
 	return out
 }
 
-// ForApps keeps the entries of the given apps and the app-less ones (refusals).
 func ForApps(entries []Entry, apps []string) []Entry {
 	var out []Entry
 	for _, e := range entries {

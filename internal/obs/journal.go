@@ -22,20 +22,22 @@ func keyOf(e journal.Entry) opKey {
 	return k
 }
 
-func compareKeys(a, b opKey) int {
-	return cmp.Or(cmp.Compare(a.app, b.app), cmp.Compare(a.action, b.action), cmp.Compare(a.result, b.result))
-}
-
-// JournalSamples counts the journal per app, action and result. The deploy ok
-// and fail counters of every app in apps start at 0, so the first failure of an
-// app is an increase of an existing series, not a new series a rate misses.
-func JournalSamples(entries []journal.Entry, apps []string) []Sample {
+func deployCounters(apps []string) map[opKey]int {
 	counts := map[opKey]int{}
 	for _, app := range apps {
 		for _, result := range []string{journal.ResultOK, journal.ResultFail} {
 			counts[opKey{app: app, action: journal.ActionDeploy, result: result}] = 0
 		}
 	}
+	return counts
+}
+
+func compareKeys(a, b opKey) int {
+	return cmp.Or(cmp.Compare(a.app, b.app), cmp.Compare(a.action, b.action), cmp.Compare(a.result, b.result))
+}
+
+func JournalSamples(entries []journal.Entry, apps []string) []Sample {
+	counts := deployCounters(apps)
 	last := map[opKey]float64{}
 	incidents := map[string]float64{}
 	for _, e := range entries {
