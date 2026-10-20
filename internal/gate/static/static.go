@@ -34,15 +34,9 @@ var (
 	markup  = []string{extHTML, extHTM}
 )
 
-func NotApplicable(reason string) func(context.Context, gate.Workspace) gate.Outcome {
-	return func(context.Context, gate.Workspace) gate.Outcome {
-		return gate.Outcome{Status: gate.StatusNA, Reason: reason}
-	}
-}
-
 var (
-	NoCode = NotApplicable(reasonNoCode)
-	NoDeps = NotApplicable(reasonNoDeps)
+	NoCode = gate.NotApplicable(reasonNoCode)
+	NoDeps = gate.NotApplicable(reasonNoDeps)
 )
 
 func Passed(context.Context, gate.Workspace) (map[string]bool, error) {

@@ -12,28 +12,26 @@ import (
 	"strings"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/pack"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
 )
 
 const (
-	ValueDependencies = "dependencies"
-	approvedPrefix    = "npm:"
-	tsconfigFile      = "tsconfig.json"
-	minLockVersion    = 2
-	registryPrefix    = "https://"
-	formatJSON        = "json"
-	flagConfig        = "--config"
-	flagFormat        = "--format"
-	reasonIntegrity   = "dependencies are not locked with integrity hashes"
-	reasonDeps        = "dependencies are not approved"
-	reasonLint        = "linters and the strict type checker reported findings"
-	reasonComplexity  = "functions exceed the cognitive complexity limit"
-	reasonDeadCode    = "unused files, exports or dependencies"
-	lockVersionForm   = "%s: lockfileVersion %d is older than %d"
-	noIntegrityForm   = "%s: %s has no integrity hash or registry source"
-	unapprovedForm    = "%s is not in the approved dependency list"
-	eslintForm        = "%s:%d %s %s"
-	knipForm          = "%s: unused %s %s"
+	approvedPrefix   = "npm:"
+	tsconfigFile     = "tsconfig.json"
+	minLockVersion   = 2
+	registryPrefix   = "https://"
+	formatJSON       = "json"
+	flagConfig       = "--config"
+	flagFormat       = "--format"
+	reasonIntegrity  = "dependencies are not locked with integrity hashes"
+	reasonLint       = "linters and the strict type checker reported findings"
+	reasonComplexity = "functions exceed the cognitive complexity limit"
+	reasonDeadCode   = "unused files, exports or dependencies"
+	lockVersionForm  = "%s: lockfileVersion %d is older than %d"
+	noIntegrityForm  = "%s: %s has no integrity hash or registry source"
+	eslintForm       = "%s:%d %s %s"
+	knipForm         = "%s: unused %s %s"
 )
 
 var (
@@ -66,12 +64,7 @@ func Integrity(ctx context.Context, ws gate.Workspace) gate.Outcome {
 		return gate.Fail(err.Error())
 	}
 	findings := lockFindings(lock)
-	if len(findings) == 0 {
-		if perr := prepare(ctx, ws); perr != nil {
-			findings = append(findings, perr.Error())
-		}
-	}
-	return gate.Findings(reasonIntegrity, findings)
+	return pack.Locked(ctx, ws, reasonIntegrity, findings, prepare)
 }
 
 func lockFindings(lock lockfile) []string {
@@ -109,26 +102,7 @@ func Dependencies(_ context.Context, ws gate.Workspace) gate.Outcome {
 	if err != nil {
 		return gate.Fail(err.Error())
 	}
-	approved := approvedNames(ws.Policy.Dependencies)
-	names := lockedNames(lock)
-	var findings []string
-	for _, name := range names {
-		if !approved[name] {
-			findings = append(findings, fmt.Sprintf(unapprovedForm, approvedPrefix+name))
-		}
-	}
-	values := map[string]float64{ValueDependencies: float64(len(names))}
-	return gate.Judge(len(findings) == 0, reasonDeps, values, findings)
-}
-
-func approvedNames(deps []string) map[string]bool {
-	approved := map[string]bool{}
-	for _, d := range deps {
-		if name, ok := strings.CutPrefix(d, approvedPrefix); ok {
-			approved[name] = true
-		}
-	}
-	return approved
+	return pack.Approval(ws, approvedPrefix, lockedNames(lock), func(name string) string { return name })
 }
 
 func lockedNames(lock lockfile) []string {
@@ -167,10 +141,7 @@ func eslint(ctx context.Context, ws gate.Workspace, config string) ([]string, er
 	return out, nil
 }
 
-func Lint(ctx context.Context, ws gate.Workspace) gate.Outcome {
-	if err := prepare(ctx, ws); err != nil {
-		return gate.Fail(err.Error())
-	}
+func runLint(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	findings, err := eslint(ctx, ws, eslintConfigFile)
 	if err != nil {
 		return gate.Fail(err.Error())
@@ -220,10 +191,7 @@ func hasTypeScript(dir string) bool {
 	return found
 }
 
-func Complexity(ctx context.Context, ws gate.Workspace) gate.Outcome {
-	if err := prepare(ctx, ws); err != nil {
-		return gate.Fail(err.Error())
-	}
+func runComplexity(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	findings, err := eslint(ctx, ws, complexityConfigFile)
 	if err != nil {
 		return gate.Fail(err.Error())
@@ -236,10 +204,7 @@ type knipReport struct {
 	Issues []map[string]json.RawMessage `json:"issues"`
 }
 
-func DeadCode(ctx context.Context, ws gate.Workspace) gate.Outcome {
-	if err := prepare(ctx, ws); err != nil {
-		return gate.Fail(err.Error())
-	}
+func runDeadCode(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	res, err := node(ctx, ws, nil, toolScript(ws, "knip", "bin", "knip.js"), flagConfig, filepath.Join(tools(ws), knipConfigFile),
 		"--reporter", formatJSON, "--no-progress", "--no-config-hints")
 	var rep knipReport

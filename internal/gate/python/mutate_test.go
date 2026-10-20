@@ -3,12 +3,13 @@ package python
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/mutation"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/packtest"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/tokmut"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec/procexectest"
 	"github.com/DreamsAreReal/deploy-hub/internal/testutil"
@@ -19,15 +20,15 @@ const mutationCoverage = `{"totals":{},"files":{"src/shop/app.py":{"contexts":{"
 func mutationWorld(t *testing.T) *world {
 	t.Helper()
 	w := newWorld(t, map[string]string{lockFile: "", ProjectFile: "", fileApp: appSource, fileTest: "def test_ok() -> None:\n    assert True\n", readmeFile: "x"})
-	testutil.Write(t, w.ws.Report(CoverageReport), mutationCoverage)
-	testutil.Write(t, w.ws.Report(JUnitReport), junitGreen)
-	w.broken = func(src string) bool { return strings.Contains(src, "value >= LIMIT") }
-	w.kill = func(src string) error {
+	testutil.Write(t, w.WS.Report(CoverageReport), mutationCoverage)
+	testutil.Write(t, w.WS.Report(JUnitReport), junitGreen)
+	w.Broken = func(src string) bool { return strings.Contains(src, "value >= LIMIT") }
+	w.Kill = func(src string) error {
 		switch {
 		case strings.HasPrefix(src, "pass"):
-			return exitError(t, "2")
+			return packtest.ExitError(t, 2)
 		case strings.Contains(src, "value <= LIMIT"):
-			return exitError(t, "1")
+			return packtest.ExitError(t, 1)
 		default:
 			return nil
 		}
@@ -37,7 +38,7 @@ func mutationWorld(t *testing.T) *world {
 
 func TestMutationClassifiesEveryMutant(t *testing.T) {
 	w := mutationWorld(t)
-	rep, err := runMutation(context.Background(), w.ws)
+	rep, err := tokmut.Mutate(context.Background(), w.WS, mutationSuite)
 	testutil.NoErr(t, err)
 	testutil.Equal(t, rep.Counts, map[mutation.Status]int{
 		mutation.StatusKilled: 2, mutation.StatusSurvived: 1, mutation.StatusNotViable: 1, mutation.StatusNotCovered: 2,
@@ -48,76 +49,48 @@ func TestMutationClassifiesEveryMutant(t *testing.T) {
 		"src/shop/app.py:9 arithmetic: + -> - (not-covered)",
 	})
 	selective := 0
-	for _, line := range w.fake.Lines() {
+	for _, line := range w.Fake.Lines() {
 		if strings.Contains(line, cmdPytest) && strings.HasSuffix(line, "-x "+testOK) {
 			selective++
 		}
 	}
 	testutil.Equal(t, selective, 2)
-	testutil.True(t, w.fake.Count(cmdPytest+" -p deploy_hub_pytest -p no:cacheprovider -o addopts= -q -x") == 3, "three mutants ran tests")
+	testutil.True(t, w.Fake.Count(cmdPytest+" -p deploy_hub_pytest -p no:cacheprovider -o addopts= -q -x") == 3, "three mutants ran tests")
 	for i := range mutation.Workers() {
-		testutil.Missing(t, w.ws.Report(sandboxPrefix+itoa(i)))
-		testutil.Missing(t, w.ws.Report(venvPrefix+itoa(i)))
+		testutil.Missing(t, w.WS.Report(venvPrefix+itoa(i)))
 	}
-	testutil.Equal(t, testutil.Read(t, filepath.Join(w.ws.Src, filepath.FromSlash(fileApp))), appSource)
-	sync, _ := w.fake.Find(cmdSync)
-	testutil.Contains(t, sync.Env[2], envProject+w.ws.Report(venvPrefix))
+	sync, _ := w.Fake.Find(cmdSync)
+	testutil.Contains(t, sync.Env[2], envProject+w.WS.Report(venvPrefix))
 }
 
 func TestMutationCheckJudgesTheScore(t *testing.T) {
 	w := mutationWorld(t)
-	out := Mutation(context.Background(), w.ws)
+	out := Mutation(context.Background(), w.WS)
 	testutil.Equal(t, out.Status, gate.StatusFail)
 	testutil.Equal(t, out.Values[mutation.ValueScore], float64(40))
-	_, err := os.Stat(w.ws.Report(mutation.ReportFile))
+	_, err := os.Stat(w.WS.Report(mutation.ReportFile))
 	testutil.NoErr(t, err)
 }
 
 func TestMutationNeedsReportsAndSandboxes(t *testing.T) {
-	noCoverage := mutationWorld(t)
-	testutil.NoErr(t, os.Remove(noCoverage.ws.Report(CoverageReport)))
-	_, err := runMutation(context.Background(), noCoverage.ws)
-	testutil.Contains(t, err.Error(), "coverage report missing")
-	noJUnit := mutationWorld(t)
-	testutil.NoErr(t, os.Remove(noJUnit.ws.Report(JUnitReport)))
-	_, err = runMutation(context.Background(), noJUnit.ws)
-	testutil.Fails(t, err)
-	blocked := mutationWorld(t)
-	testutil.Write(t, blocked.ws.Report(pluginDir), "")
-	_, err = runMutation(context.Background(), blocked.ws)
-	testutil.Fails(t, err)
-	unlisted := mutationWorld(t)
-	unlisted.fake.Handler = func(c procexec.Command) (procexec.Result, error) {
-		if c.Name == gitBinary {
-			return procexec.Result{}, errSim
-		}
-		return unlisted.handle(c)
-	}
-	_, err = runMutation(context.Background(), unlisted.ws)
-	testutil.Contains(t, err.Error(), "git ls-files")
-	unreadable := mutationWorld(t)
-	testutil.Write(t, filepath.Join(unreadable.ws.Src, filepath.FromSlash(fileApp)), "x = \"\xff\"\n")
-	_, err = runMutation(context.Background(), unreadable.ws)
-	testutil.Contains(t, err.Error(), fileApp)
-	vanished := mutationWorld(t)
-	testutil.NoErr(t, os.Remove(filepath.Join(vanished.ws.Src, filepath.FromSlash(fileApp))))
-	_, err = runMutation(context.Background(), vanished.ws)
-	testutil.Fails(t, err)
-	noSandbox := mutationWorld(t)
-	noSandbox.on(cmdSync, "", errSim)
-	_, err = runMutation(context.Background(), noSandbox.ws)
-	testutil.Is(t, err, mutation.ErrIncomplete)
+	packtest.Breaks(t, mutationWorld, runMutation, map[string]func(*world){
+		"coverage report missing":      func(w *world) { testutil.NoErr(t, os.Remove(w.WS.Report(CoverageReport))) },
+		JUnitReport:                    func(w *world) { testutil.NoErr(t, os.Remove(w.WS.Report(JUnitReport))) },
+		pluginDir:                      func(w *world) { testutil.Write(t, w.WS.Report(pluginDir), "") },
+		"git ls-files":                 func(w *world) { w.FailGit() },
+		mutation.ErrIncomplete.Error(): func(w *world) { w.On(cmdSync, "", errSim) },
+	})
+}
+
+func runMutation(w *world) error {
+	_, err := tokmut.Mutate(context.Background(), w.WS, mutationSuite)
+	return err
 }
 
 func TestMutantOutcomes(t *testing.T) {
-	ctx := context.Background()
-	testutil.Equal(t, classify(ctx, nil), mutation.StatusSurvived)
-	testutil.Equal(t, classify(ctx, exitError(t, "1")), mutation.StatusKilled)
-	testutil.Equal(t, classify(ctx, exitError(t, "2")), mutation.StatusKilled)
-	testutil.Equal(t, classify(ctx, exitError(t, "3")), mutation.StatusErrored)
-	testutil.Equal(t, classify(ctx, errSim), mutation.StatusErrored)
-	expired, cancel := context.WithCancel(ctx)
-	cancel()
-	testutil.Equal(t, classify(expired, exitError(t, "1")), mutation.StatusTimedOut)
+	s, err := mutationSuite(context.Background(), mutationWorld(t).WS)
+	testutil.NoErr(t, err)
+	testutil.True(t, s.Killed(packtest.ExitError(t, 1)) && s.Killed(packtest.ExitError(t, 2)), "failed and interrupted pytest runs kill the mutant")
+	testutil.True(t, !s.Killed(packtest.ExitError(t, 3)) && !s.Killed(errSim), "usage and internal errors do not")
 	testutil.Equal(t, procexectest.Line(procexec.Command{Name: UVBinary, Args: []string{"run"}}), "uv run")
 }

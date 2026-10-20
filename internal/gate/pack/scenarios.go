@@ -21,11 +21,7 @@ const (
 )
 
 func Scenarios(packs []Pack) Run {
-	return func(ctx context.Context, ws gate.Workspace) gate.Outcome {
-		layout, err := layoutOf(ctx, ws, packs)
-		if err != nil {
-			return gate.Fail(err.Error())
-		}
+	return withLayout(packs, func(ctx context.Context, ws gate.Workspace, layout Layout) gate.Outcome {
 		if len(ws.App.Scenarios) == 0 && !hasCode(layout) {
 			return gate.Outcome{Status: gate.StatusNA, Reason: reasonNoScenarios}
 		}
@@ -34,7 +30,7 @@ func Scenarios(packs []Pack) Run {
 			return gate.Fail(err.Error())
 		}
 		return judgeScenarios(ws.App.Scenarios, passed)
-	}
+	})
 }
 
 func judgeScenarios(scenarios []policy.Scenario, passed map[string]bool) gate.Outcome {

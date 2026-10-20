@@ -12,11 +12,11 @@ import (
 	"strings"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/pack"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
 )
 
 const (
-	ValueDependencies = "dependencies"
 	ValueFunctions    = "functions"
 	ValueMaxCognitive = "max_cognitive_complexity"
 	approvedPrefix    = "pypi:"
@@ -27,12 +27,10 @@ const (
 	mypyCache         = "mypy-cache"
 	complexityCache   = "complexipy-cache"
 	reasonIntegrity   = "dependencies are not pinned and hashed"
-	reasonDeps        = "dependencies are not approved"
 	reasonLint        = "linters and the strict type checker reported findings"
 	reasonComplexity  = "functions exceed the cognitive complexity limit"
 	reasonDeadCode    = "unused code"
 	unpinnedForm      = "%s: %s is not pinned to one version with hashes"
-	unapprovedForm    = "%s is not in the approved dependency list"
 	ruffForm          = "%s:%d %s %s"
 	mypyForm          = "%s:%d %s [%s]"
 	complexityForm    = "%s: %s has cognitive complexity %d"
@@ -64,12 +62,7 @@ func Integrity(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	for _, r := range reqs {
 		findings = append(findings, unhashed(r)...)
 	}
-	if len(findings) == 0 {
-		if perr := prepare(ctx, ws); perr != nil {
-			findings = append(findings, perr.Error())
-		}
-	}
-	return gate.Findings(reasonIntegrity, findings)
+	return pack.Locked(ctx, ws, reasonIntegrity, findings, prepare)
 }
 
 func unhashed(path string) []string {
@@ -107,20 +100,7 @@ func Dependencies(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	if err != nil {
 		return gate.Fail(err.Error())
 	}
-	approved := map[string]bool{}
-	for _, d := range ws.Policy.Dependencies {
-		if name, ok := strings.CutPrefix(d, approvedPrefix); ok {
-			approved[normalize(name)] = true
-		}
-	}
-	var findings []string
-	for _, n := range names {
-		if !approved[n] {
-			findings = append(findings, fmt.Sprintf(unapprovedForm, approvedPrefix+n))
-		}
-	}
-	values := map[string]float64{ValueDependencies: float64(len(names))}
-	return gate.Judge(len(findings) == 0, reasonDeps, values, findings)
+	return pack.Approval(ws, approvedPrefix, names, normalize)
 }
 
 func dependencyNames(ctx context.Context, ws gate.Workspace) ([]string, error) {
@@ -159,10 +139,7 @@ func normalize(name string) string {
 	return nameSeparators.ReplaceAllString(strings.ToLower(name), "-")
 }
 
-func Lint(ctx context.Context, ws gate.Workspace) gate.Outcome {
-	if err := prepare(ctx, ws); err != nil {
-		return gate.Fail(err.Error())
-	}
+func runLint(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	var findings []string
 	for _, run := range []func(context.Context, gate.Workspace) ([]string, error){ruffCheck, ruffFormat, mypy} {
 		found, err := run(ctx, ws)
@@ -245,10 +222,7 @@ func parseMypy(text string, rel func(string) string) []string {
 	return out
 }
 
-func Complexity(ctx context.Context, ws gate.Workspace) gate.Outcome {
-	if err := prepare(ctx, ws); err != nil {
-		return gate.Fail(err.Error())
-	}
+func runComplexity(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	report := ws.Report(complexityReport)
 	_, err := toolsEnv(ws).tool(ctx, nil, complexipyTool, ws.Src, "--max-complexity-allowed", fmt.Sprint(ws.Policy.Thresholds.MaxCognitive),
 		"--quiet", "--no-ignore", "--output-format", formatJSON, "--output", report, "--cache-dir", ws.Report(complexityCache))
@@ -273,10 +247,7 @@ func Complexity(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	return gate.Judge(len(findings) == 0, reasonComplexity, values, findings)
 }
 
-func DeadCode(ctx context.Context, ws gate.Workspace) gate.Outcome {
-	if err := prepare(ctx, ws); err != nil {
-		return gate.Fail(err.Error())
-	}
+func runDeadCode(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	res, err := toolsEnv(ws).python(ctx, nil, flagModule, "vulture", "--config", policyFile(ws, vultureConfig), ws.Src)
 	text := res.Combined()
 	var findings []string

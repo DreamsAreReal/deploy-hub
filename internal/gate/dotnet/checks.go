@@ -13,22 +13,21 @@ import (
 	"strings"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/pack"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/source"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
 )
 
 const (
-	ValueDependencies = "dependencies"
 	approvedPrefix    = "nuget:"
 	diagnosticsReport = "diagnostics.json"
 	complexityRule    = "S3776"
 	projectType       = "Project"
 	reasonIntegrity   = "dependencies are not locked"
-	reasonDeps        = "dependencies are not approved"
 	reasonLint        = "compiler, analyzers or formatting reported findings"
 	reasonComplexity  = "functions exceed the cognitive complexity limit"
 	reasonDeadCode    = "unused code"
 	noLockForm        = "%s: no %s next to it (set RestorePackagesWithLockFile)"
-	unapprovedForm    = "%s is not in the approved dependency list"
 	diagnosticForm    = "%s:%s %s %s"
 	suppressionForm   = "%s:%d analyzer suppression: %s"
 	formatForm        = "%s: not formatted"
@@ -45,7 +44,7 @@ var (
 )
 
 func Integrity(ctx context.Context, ws gate.Workspace) gate.Outcome {
-	files, err := trackedFiles(ctx, ws, func(string) bool { return true })
+	files, err := source.Select(ctx, ws, func(string) bool { return true })
 	if err != nil {
 		return gate.Fail(err.Error())
 	}
@@ -55,12 +54,7 @@ func Integrity(ctx context.Context, ws gate.Workspace) gate.Outcome {
 			findings = append(findings, fmt.Sprintf(noLockForm, f, lockFile))
 		}
 	}
-	if len(findings) == 0 {
-		if perr := prepare(ctx, ws); perr != nil {
-			findings = append(findings, perr.Error())
-		}
-	}
-	return gate.Findings(reasonIntegrity, findings)
+	return pack.Locked(ctx, ws, reasonIntegrity, findings, prepare)
 }
 
 type nugetLock struct {
@@ -70,7 +64,7 @@ type nugetLock struct {
 }
 
 func Dependencies(ctx context.Context, ws gate.Workspace) gate.Outcome {
-	locks, err := trackedFiles(ctx, ws, func(f string) bool { return path.Base(f) == lockFile })
+	locks, err := source.Select(ctx, ws, func(f string) bool { return path.Base(f) == lockFile })
 	if err != nil {
 		return gate.Fail(err.Error())
 	}
@@ -78,19 +72,7 @@ func Dependencies(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	if err != nil {
 		return gate.Fail(err.Error())
 	}
-	approved := map[string]bool{}
-	for _, d := range ws.Policy.Dependencies {
-		if name, ok := strings.CutPrefix(d, approvedPrefix); ok {
-			approved[strings.ToLower(name)] = true
-		}
-	}
-	var findings []string
-	for _, n := range names {
-		if !approved[strings.ToLower(n)] {
-			findings = append(findings, fmt.Sprintf(unapprovedForm, approvedPrefix+n))
-		}
-	}
-	return gate.Judge(len(findings) == 0, reasonDeps, map[string]float64{ValueDependencies: float64(len(names))}, findings)
+	return pack.Approval(ws, approvedPrefix, names, strings.ToLower)
 }
 
 func lockedNames(dir string, locks []string) ([]string, error) {
@@ -219,7 +201,7 @@ func formatting(ctx context.Context, ws gate.Workspace) ([]string, error) {
 }
 
 func suppressionFindings(ctx context.Context, ws gate.Workspace) ([]string, error) {
-	files, err := trackedFiles(ctx, ws, func(f string) bool { return slices.Contains(suppressedFiles, path.Ext(f)) })
+	files, err := source.Select(ctx, ws, func(f string) bool { return slices.Contains(suppressedFiles, path.Ext(f)) })
 	var out []string
 	for _, f := range files {
 		data, rerr := os.ReadFile(filepath.Clean(filepath.Join(ws.Src, filepath.FromSlash(f))))
@@ -235,18 +217,17 @@ func suppressionFindings(ctx context.Context, ws gate.Workspace) ([]string, erro
 	return out, err
 }
 
-func Complexity(ctx context.Context, ws gate.Workspace) gate.Outcome {
-	ds, err := analyze(ctx, ws)
-	if err != nil {
-		return gate.Fail(err.Error())
-	}
-	return gate.Findings(reasonComplexity, selected(ds, func(rule string) bool { return rule == complexityRule }))
-}
+var (
+	Complexity = rules(reasonComplexity, func(rule string) bool { return rule == complexityRule })
+	DeadCode   = rules(reasonDeadCode, func(rule string) bool { return slices.Contains(deadCodeRules, rule) })
+)
 
-func DeadCode(ctx context.Context, ws gate.Workspace) gate.Outcome {
-	ds, err := analyze(ctx, ws)
-	if err != nil {
-		return gate.Fail(err.Error())
+func rules(reason string, keep func(string) bool) func(context.Context, gate.Workspace) gate.Outcome {
+	return func(ctx context.Context, ws gate.Workspace) gate.Outcome {
+		ds, err := analyze(ctx, ws)
+		if err != nil {
+			return gate.Fail(err.Error())
+		}
+		return gate.Findings(reason, selected(ds, keep))
 	}
-	return gate.Findings(reasonDeadCode, selected(ds, func(rule string) bool { return slices.Contains(deadCodeRules, rule) }))
 }

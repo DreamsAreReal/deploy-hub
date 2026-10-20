@@ -48,6 +48,13 @@ func Output(err error) string {
 	return ""
 }
 
+func ExitCode(err error) int {
+	if e, ok := errors.AsType[*exec.ExitError](err); ok {
+		return e.ExitCode()
+	}
+	return 0
+}
+
 const waitDelay = 5 * time.Second
 
 var ErrNotAllowed = errors.New("binary is not in the allowlist")

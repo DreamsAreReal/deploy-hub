@@ -2,19 +2,18 @@ package node
 
 import (
 	"context"
-	"errors"
-	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/junit"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/linecov"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/pack"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/packtest"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/policy"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec/procexectest"
@@ -43,114 +42,45 @@ const (
 	plainManifest  = `{"name":"plain"}`
 )
 
-var errSim = errors.New("simulated")
+var errSim = packtest.ErrSim
 
-func exitError(t *testing.T) error {
-	t.Helper()
-	err := exec.CommandContext(context.Background(), "sh", "-c", "exit 1").Run()
-	testutil.True(t, err != nil, "exit status")
-	return err
-}
-
-type reply struct {
-	out string
-	err error
+var nodePolicy = policy.Policy{
+	Thresholds:   policy.Thresholds{LineCoverage: 90, BranchCoverage: 50, MaxCognitive: 9, MutationScore: 90},
+	Limits:       policy.Limits{FuzzExamples: 250, MutantFloor: time.Second, MutantFactor: 2},
+	Dependencies: []string{"npm:vitest", "npm:b", "example.com/go"},
 }
 
 type world struct {
-	t       *testing.T
-	ws      gate.Workspace
-	fake    *procexectest.Fake
-	mu      sync.Mutex
-	files   []string
-	rules   map[string]reply
-	outputs map[string]string
-	kill    func(src string) error
-	broken  func(src string) bool
+	*packtest.World
 }
 
 func newWorld(t *testing.T, files map[string]string) *world {
 	t.Helper()
-	w := &world{t: t, rules: map[string]reply{}, outputs: map[string]string{}}
-	src := t.TempDir()
-	for name, content := range files {
-		testutil.Write(t, filepath.Join(src, filepath.FromSlash(name)), content)
-		w.files = append(w.files, name)
-	}
-	slices.Sort(w.files)
-	w.fake = &procexectest.Fake{Handler: w.handle}
-	w.ws = gate.Workspace{
-		Src: src, Out: t.TempDir(), PolicyDir: t.TempDir(), Exec: w.fake, Log: slog.New(slog.DiscardHandler),
-		Policy: policy.Policy{
-			Thresholds:   policy.Thresholds{LineCoverage: 90, BranchCoverage: 50, MaxCognitive: 9, MutationScore: 90},
-			Limits:       policy.Limits{FuzzExamples: 250, MutantFloor: time.Second, MutantFactor: 2},
-			Dependencies: []string{"npm:vitest", "npm:b", "example.com/go"},
-		},
-	}
-	testutil.Write(t, filepath.Join(w.ws.PolicyDir, policySub, toolsManifest), `{"name":"tools"}`)
-	testutil.Write(t, filepath.Join(w.ws.PolicyDir, policySub, toolsLock), `{"lockfileVersion":3}`)
+	w := &world{World: packtest.New(t, files, nodePolicy)}
+	w.Expand = func(content string) string { return strings.ReplaceAll(content, "STAGE", stage(w.WS)) }
+	w.Hook = w.hook
+	testutil.Write(t, filepath.Join(w.WS.PolicyDir, policySub, toolsManifest), `{"name":"tools"}`)
+	testutil.Write(t, filepath.Join(w.WS.PolicyDir, policySub, toolsLock), `{"lockfileVersion":3}`)
 	return w
 }
 
-func (w *world) on(substr, out string, err error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.rules[substr] = reply{out: out, err: err}
-}
-
-func (w *world) produce(flag, content string) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.outputs[flag] = content
-}
-
-func (w *world) handle(c procexec.Command) (procexec.Result, error) {
-	line := procexectest.Line(c)
-	if c.Name == gitBinary {
-		return procexec.Result{Stdout: strings.Join(w.files, "\x00") + "\x00"}, nil
-	}
-	w.write(c)
+func (w *world) hook(c procexec.Command, line string) (procexec.Result, error) {
 	if c.Name == NPMBinary && strings.Contains(line, cmdNpmCI) && !strings.Contains(line, "--ignore-scripts") {
-		testutil.Mkdir(w.t, filepath.Join(c.Dir, modulesDir, "vitest"))
-		testutil.Write(w.t, filepath.Join(c.Dir, modulesDir, "vitest", Manifest), `{"version":"5.0.5"}`)
+		testutil.Mkdir(w.T, filepath.Join(c.Dir, modulesDir, "vitest"))
+		testutil.Write(w.T, filepath.Join(c.Dir, modulesDir, "vitest", Manifest), `{"version":"5.0.5"}`)
 	}
-	if w.broken != nil && strings.Contains(line, cmdSyntax) && w.broken(testutil.Read(w.t, c.Args[len(c.Args)-1])) {
+	if w.Broken != nil && strings.Contains(line, cmdSyntax) && w.Broken(testutil.Read(w.T, c.Args[len(c.Args)-1])) {
 		return procexec.Result{}, errSim
 	}
-	if w.kill != nil && strings.Contains(line, "--bail") {
-		return procexec.Result{}, w.kill(testutil.Read(w.t, filepath.Join(c.Dir, filepath.FromSlash(fileCart))))
+	if w.Kill != nil && strings.Contains(line, "--bail") {
+		return procexec.Result{}, w.Kill(w.Read(fileCart, c))
 	}
-	return w.reply(line)
-}
-
-func (w *world) reply(line string) (procexec.Result, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	best := ""
-	for substr := range w.rules {
-		if strings.Contains(line, substr) && len(substr) > len(best) {
-			best = substr
-		}
-	}
-	r := w.rules[best]
-	return procexec.Result{Stdout: r.out}, r.err
-}
-
-func (w *world) write(c procexec.Command) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	for _, a := range c.Args {
-		for flag, content := range w.outputs {
-			if value, ok := strings.CutPrefix(a, flag); ok {
-				testutil.Write(w.t, value, strings.ReplaceAll(content, "STAGE", stage(w.ws)))
-			}
-		}
-	}
+	return procexec.Result{}, packtest.ErrPass
 }
 
 func staged(t *testing.T, w *world) {
 	t.Helper()
-	testutil.NoErr(t, prepare(context.Background(), w.ws))
+	testutil.NoErr(t, prepare(context.Background(), w.WS))
 }
 
 func TestManifestAndRunner(t *testing.T) {
@@ -177,81 +107,81 @@ func TestManifestAndRunner(t *testing.T) {
 func TestPrepareStagesAndInstalls(t *testing.T) {
 	w := newWorld(t, map[string]string{Manifest: manifestVite, Lockfile: lockGood, fileCart: cartSource})
 	staged(t, w)
-	lines := w.fake.Lines()
+	lines := w.Fake.Lines()
 	testutil.Equal(t, lines[1], "npm ci --no-audit --no-fund")
 	testutil.Equal(t, lines[2], "npm ci --ignore-scripts --no-audit --no-fund")
-	calls := w.fake.Calls()
-	testutil.Equal(t, calls[1].Dir, stage(w.ws))
-	testutil.Equal(t, calls[2].Dir, tools(w.ws))
-	testutil.Equal(t, calls[1].Env, []string{envCache + w.ws.Report(cacheDir)})
-	testutil.Equal(t, testutil.Read(t, filepath.Join(stage(w.ws), fileCart)), cartSource)
-	testutil.Equal(t, testutil.Read(t, filepath.Join(tools(w.ws), Manifest)), `{"name":"tools"}`)
-	testutil.Equal(t, testutil.Read(t, filepath.Join(tools(w.ws), Lockfile)), `{"lockfileVersion":3}`)
-	testutil.Contains(t, testutil.Read(t, filepath.Join(tools(w.ws), eslintConfigFile)), `"sonarjs/cognitive-complexity": ["error", 9]`)
-	testutil.Contains(t, testutil.Read(t, filepath.Join(tools(w.ws), complexityConfigFile)), `["error", 9]`)
-	testutil.Equal(t, testutil.Read(t, w.ws.Report(readyStamp)), Stack)
+	calls := w.Fake.Calls()
+	testutil.Equal(t, calls[1].Dir, stage(w.WS))
+	testutil.Equal(t, calls[2].Dir, tools(w.WS))
+	testutil.Equal(t, calls[1].Env, []string{envCache + w.WS.Report(cacheDir)})
+	testutil.Equal(t, testutil.Read(t, filepath.Join(stage(w.WS), fileCart)), cartSource)
+	testutil.Equal(t, testutil.Read(t, filepath.Join(tools(w.WS), Manifest)), `{"name":"tools"}`)
+	testutil.Equal(t, testutil.Read(t, filepath.Join(tools(w.WS), Lockfile)), `{"lockfileVersion":3}`)
+	testutil.Contains(t, testutil.Read(t, filepath.Join(tools(w.WS), eslintConfigFile)), `"sonarjs/cognitive-complexity": ["error", 9]`)
+	testutil.Contains(t, testutil.Read(t, filepath.Join(tools(w.WS), complexityConfigFile)), `["error", 9]`)
+	testutil.Equal(t, testutil.Read(t, w.WS.Report(readyStamp)), readyStamp)
 	staged(t, w)
-	testutil.Equal(t, len(w.fake.Lines()), 3)
-	version, err := installedVersion(stage(w.ws), "vitest")
+	testutil.Equal(t, len(w.Fake.Lines()), 3)
+	version, err := installedVersion(stage(w.WS), "vitest")
 	testutil.NoErr(t, err)
 	testutil.Equal(t, version, "5.0.5")
-	_, err = installedVersion(stage(w.ws), "missing")
+	_, err = installedVersion(stage(w.WS), "missing")
 	testutil.Fails(t, err)
 }
 
 func TestPrepareFailures(t *testing.T) {
-	testutil.Is(t, prepare(context.Background(), newWorld(t, map[string]string{Manifest: manifestVite}).ws), ErrNoLock)
+	testutil.Is(t, prepare(context.Background(), newWorld(t, map[string]string{Manifest: manifestVite}).WS), ErrNoLock)
 	ci := newWorld(t, map[string]string{Manifest: manifestVite, Lockfile: lockGood})
-	ci.on(cmdNpmCI, "", errSim)
-	testutil.Contains(t, prepare(context.Background(), ci.ws).Error(), "npm ci")
+	ci.On(cmdNpmCI, "", errSim)
+	testutil.Contains(t, prepare(context.Background(), ci.WS).Error(), "npm ci")
 	toolsCI := newWorld(t, map[string]string{Manifest: manifestVite, Lockfile: lockGood})
-	toolsCI.on("--ignore-scripts", "", errSim)
-	testutil.Fails(t, prepare(context.Background(), toolsCI.ws))
+	toolsCI.On("--ignore-scripts", "", errSim)
+	testutil.Fails(t, prepare(context.Background(), toolsCI.WS))
 	noPolicy := newWorld(t, map[string]string{Manifest: manifestVite, Lockfile: lockGood})
-	testutil.NoErr(t, os.RemoveAll(filepath.Join(noPolicy.ws.PolicyDir, policySub)))
-	testutil.Fails(t, prepare(context.Background(), noPolicy.ws))
+	testutil.NoErr(t, os.RemoveAll(filepath.Join(noPolicy.WS.PolicyDir, policySub)))
+	testutil.Fails(t, prepare(context.Background(), noPolicy.WS))
 	unlisted := newWorld(t, map[string]string{Manifest: manifestVite, Lockfile: lockGood})
-	unlisted.files = append(unlisted.files, "gone.ts")
-	testutil.Fails(t, prepare(context.Background(), unlisted.ws))
+	unlisted.Files = append(unlisted.Files, "gone.ts")
+	testutil.Fails(t, prepare(context.Background(), unlisted.WS))
 	blocked := newWorld(t, map[string]string{Manifest: manifestVite, Lockfile: lockGood})
-	testutil.Write(t, tools(blocked.ws), "")
-	testutil.Fails(t, prepare(context.Background(), blocked.ws))
+	testutil.Write(t, tools(blocked.WS), "")
+	testutil.Fails(t, prepare(context.Background(), blocked.WS))
 	scripts := newWorld(t, map[string]string{Manifest: manifestVite, Lockfile: lockGood})
-	testutil.Mkdir(t, filepath.Join(tools(scripts.ws), eslintConfigFile))
-	testutil.Fails(t, prepare(context.Background(), scripts.ws))
+	testutil.Mkdir(t, filepath.Join(tools(scripts.WS), eslintConfigFile))
+	testutil.Fails(t, prepare(context.Background(), scripts.WS))
 }
 
 func TestRelativePaths(t *testing.T) {
 	w := newWorld(t, nil)
-	testutil.Mkdir(t, stage(w.ws))
-	testutil.Equal(t, rel(w.ws, filepath.Join(stage(w.ws), "src", "a.ts")), "src/a.ts")
-	resolved, err := filepath.EvalSymlinks(stage(w.ws))
+	testutil.Mkdir(t, stage(w.WS))
+	testutil.Equal(t, rel(w.WS, filepath.Join(stage(w.WS), "src", "a.ts")), "src/a.ts")
+	resolved, err := filepath.EvalSymlinks(stage(w.WS))
 	testutil.NoErr(t, err)
-	testutil.Equal(t, rel(w.ws, filepath.Join(resolved, "b.ts")), "b.ts")
-	testutil.Equal(t, rel(w.ws, "/elsewhere/c.ts"), "/elsewhere/c.ts")
-	testutil.Equal(t, rel(newWorld(t, nil).ws, "x/y.ts"), "x/y.ts")
+	testutil.Equal(t, rel(w.WS, filepath.Join(resolved, "b.ts")), "b.ts")
+	testutil.Equal(t, rel(w.WS, "/elsewhere/c.ts"), "/elsewhere/c.ts")
+	testutil.Equal(t, rel(newWorld(t, nil).WS, "x/y.ts"), "x/y.ts")
 }
 
 func TestIntegrityAndDependencies(t *testing.T) {
 	stale := `{"lockfileVersion":1,"packages":{"":{},"node_modules/x":{"integrity":"","resolved":"https://r/x"},"node_modules/y":{"integrity":"sha","resolved":"git+ssh://y"}}}`
 	w := newWorld(t, map[string]string{Manifest: manifestVite, Lockfile: stale})
-	testutil.Equal(t, Integrity(context.Background(), w.ws).Findings, []string{
+	testutil.Equal(t, Integrity(context.Background(), w.WS).Findings, []string{
 		"package-lock.json: lockfileVersion 1 is older than 2",
 		"package-lock.json: x has no integrity hash or registry source",
 		"package-lock.json: y has no integrity hash or registry source",
 	})
-	testutil.Equal(t, w.fake.Count(cmdNpmCI), 0)
+	testutil.Equal(t, w.Fake.Count(cmdNpmCI), 0)
 	good := newWorld(t, map[string]string{Manifest: manifestVite, Lockfile: lockGood})
-	testutil.Equal(t, Integrity(context.Background(), good.ws).Status, gate.StatusPass)
+	testutil.Equal(t, Integrity(context.Background(), good.WS).Status, gate.StatusPass)
 	failing := newWorld(t, map[string]string{Manifest: manifestVite, Lockfile: lockGood})
-	failing.on(cmdNpmCI, "", errSim)
-	testutil.Contains(t, Integrity(context.Background(), failing.ws).Findings[0], "npm ci")
-	testutil.Equal(t, Integrity(context.Background(), newWorld(t, nil).ws).Reason, reasonNoLock)
-	testutil.Equal(t, Integrity(context.Background(), newWorld(t, map[string]string{Lockfile: "{"}).ws).Status, gate.StatusFail)
-	deps := Dependencies(context.Background(), good.ws)
+	failing.On(cmdNpmCI, "", errSim)
+	testutil.Contains(t, Integrity(context.Background(), failing.WS).Findings[0], "npm ci")
+	testutil.Equal(t, Integrity(context.Background(), newWorld(t, nil).WS).Reason, reasonNoLock)
+	testutil.Equal(t, Integrity(context.Background(), newWorld(t, map[string]string{Lockfile: "{"}).WS).Status, gate.StatusFail)
+	deps := Dependencies(context.Background(), good.WS)
 	testutil.Equal(t, deps.Findings, []string{"npm:bundled is not in the approved dependency list"})
-	testutil.Equal(t, deps.Values[ValueDependencies], float64(3))
-	testutil.Equal(t, Dependencies(context.Background(), newWorld(t, nil).ws).Reason, reasonNoLock)
+	testutil.Equal(t, deps.Values[pack.ValueDependencies], float64(3))
+	testutil.Equal(t, Dependencies(context.Background(), newWorld(t, nil).WS).Reason, reasonNoLock)
 	testutil.Equal(t, packageName("node_modules/@scope/a/node_modules/b"), "b")
 	testutil.Equal(t, packageName("plain"), "plain")
 }
@@ -261,42 +191,42 @@ const eslintOut = `[{"filePath":"STAGE/src/cart.ts","messages":[{"ruleId":"no-ma
 func TestLint(t *testing.T) {
 	w := newWorld(t, map[string]string{Manifest: manifestVite, Lockfile: lockGood, fileCart: cartSource, tsconfigFile: "{}"})
 	staged(t, w)
-	w.on(cmdESLint, strings.ReplaceAll(eslintOut, "STAGE", stage(w.ws)), errSim)
-	w.on(cmdTSC, "src/cart.ts(4,10): error TS2322: Type 'number' is not assignable to type 'string'.\nnoise\n", errSim)
-	out := Lint(context.Background(), w.ws)
+	w.On(cmdESLint, strings.ReplaceAll(eslintOut, "STAGE", stage(w.WS)), errSim)
+	w.On(cmdTSC, "src/cart.ts(4,10): error TS2322: Type 'number' is not assignable to type 'string'.\nnoise\n", errSim)
+	out := Lint(context.Background(), w.WS)
 	testutil.Equal(t, out.Findings, []string{
 		"src/cart.ts:3 no-magic-numbers No magic number: 42.",
 		"src/cart.ts:4 TS2322 Type 'number' is not assignable to type 'string'.",
 	})
-	eslintCall, _ := w.fake.Find(cmdESLint)
-	testutil.Equal(t, eslintCall.Args[1:], []string{flagConfig, filepath.Join(tools(w.ws), eslintConfigFile), "--no-config-lookup", flagFormat, formatJSON, "."})
-	tscCall, _ := w.fake.Find(cmdTSC)
-	testutil.Equal(t, tscCall.Args, []string{toolScript(w.ws, "typescript", "bin", "tsc"), "--noEmit", "--strict", "--pretty", "false", "-p", tsconfigFile})
-	testutil.Mkdir(t, filepath.Join(stage(w.ws), modulesDir, "typescript", "bin"))
-	testutil.Write(t, filepath.Join(stage(w.ws), modulesDir, "typescript", "bin", "tsc"), "")
-	Lint(context.Background(), w.ws)
-	calls := w.fake.Calls()
-	testutil.Equal(t, calls[len(calls)-1].Args[0], filepath.Join(stage(w.ws), modulesDir, "typescript", "bin", "tsc"))
+	eslintCall, _ := w.Fake.Find(cmdESLint)
+	testutil.Equal(t, eslintCall.Args[1:], []string{flagConfig, filepath.Join(tools(w.WS), eslintConfigFile), "--no-config-lookup", flagFormat, formatJSON, "."})
+	tscCall, _ := w.Fake.Find(cmdTSC)
+	testutil.Equal(t, tscCall.Args, []string{toolScript(w.WS, "typescript", "bin", "tsc"), "--noEmit", "--strict", "--pretty", "false", "-p", tsconfigFile})
+	testutil.Mkdir(t, filepath.Join(stage(w.WS), modulesDir, "typescript", "bin"))
+	testutil.Write(t, filepath.Join(stage(w.WS), modulesDir, "typescript", "bin", "tsc"), "")
+	Lint(context.Background(), w.WS)
+	calls := w.Fake.Calls()
+	testutil.Equal(t, calls[len(calls)-1].Args[0], filepath.Join(stage(w.WS), modulesDir, "typescript", "bin", "tsc"))
 }
 
 func TestLintFailures(t *testing.T) {
 	garbled := newWorld(t, map[string]string{Manifest: manifestVite, Lockfile: lockGood})
-	garbled.on(cmdESLint, "oops", errSim)
-	testutil.Contains(t, Lint(context.Background(), garbled.ws).Reason, "eslint")
+	garbled.On(cmdESLint, "oops", errSim)
+	testutil.Contains(t, Lint(context.Background(), garbled.WS).Reason, "eslint")
 	tscCrash := newWorld(t, map[string]string{Manifest: manifestVite, Lockfile: lockGood, fileCart: cartSource})
-	tscCrash.on(cmdESLint, "[]", nil)
-	tscCrash.on(cmdTSC, "", errSim)
-	testutil.Contains(t, Lint(context.Background(), tscCrash.ws).Reason, "node tsc")
+	tscCrash.On(cmdESLint, "[]", nil)
+	tscCrash.On(cmdTSC, "", errSim)
+	testutil.Contains(t, Lint(context.Background(), tscCrash.WS).Reason, "node tsc")
 	plain := newWorld(t, map[string]string{Manifest: manifestVite, Lockfile: lockGood, "src/a.js": "export const a = 1;\n"})
-	plain.on(cmdESLint, "[]", nil)
-	testutil.Equal(t, Lint(context.Background(), plain.ws).Status, gate.StatusPass)
-	testutil.Equal(t, plain.fake.Count(cmdTSC), 0)
+	plain.On(cmdESLint, "[]", nil)
+	testutil.Equal(t, Lint(context.Background(), plain.WS).Status, gate.StatusPass)
+	testutil.Equal(t, plain.Fake.Count(cmdTSC), 0)
 	noConfig := newWorld(t, map[string]string{Manifest: manifestVite, Lockfile: lockGood, fileCart: cartSource})
-	noConfig.on(cmdESLint, "[]", nil)
-	Lint(context.Background(), noConfig.ws)
-	tscCall, _ := noConfig.fake.Find(cmdTSC)
+	noConfig.On(cmdESLint, "[]", nil)
+	Lint(context.Background(), noConfig.WS)
+	tscCall, _ := noConfig.Fake.Find(cmdTSC)
 	testutil.True(t, !slices.Contains(tscCall.Args, "-p"), "no tsconfig, default options")
-	testutil.Equal(t, Lint(context.Background(), newWorld(t, nil).ws).Reason, reasonNoLock)
+	testutil.Equal(t, Lint(context.Background(), newWorld(t, nil).WS).Reason, reasonNoLock)
 	testutil.True(t, !hasTypeScript(filepath.Join(t.TempDir(), "missing")), "missing dir")
 	hidden := t.TempDir()
 	testutil.Write(t, filepath.Join(hidden, modulesDir, "dep", "index.ts"), "")
@@ -306,105 +236,104 @@ func TestLintFailures(t *testing.T) {
 func TestComplexityAndDeadCode(t *testing.T) {
 	w := newWorld(t, map[string]string{Manifest: manifestVite, Lockfile: lockGood})
 	staged(t, w)
-	w.on(complexityConfigFile, `[{"filePath":"`+stage(w.ws)+`/src/a.ts","messages":[{"ruleId":"sonarjs/cognitive-complexity","message":"Refactor","line":2}]}]`, errSim)
-	testutil.Equal(t, Complexity(context.Background(), w.ws).Findings, []string{"src/a.ts:2 sonarjs/cognitive-complexity Refactor"})
-	w.on(cmdKnip, `{"files":["src/old.ts"],"issues":[{"file":"src/a.ts","exports":[{"name":"unused"}],"dependencies":[{"name":"lodash"}],"duplicates":"skip"}]}`, errSim)
-	dead := DeadCode(context.Background(), w.ws)
+	w.On(complexityConfigFile, `[{"filePath":"`+stage(w.WS)+`/src/a.ts","messages":[{"ruleId":"sonarjs/cognitive-complexity","message":"Refactor","line":2}]}]`, errSim)
+	testutil.Equal(t, Complexity(context.Background(), w.WS).Findings, []string{"src/a.ts:2 sonarjs/cognitive-complexity Refactor"})
+	w.On(cmdKnip, `{"files":["src/old.ts"],"issues":[{"file":"src/a.ts","exports":[{"name":"unused"}],"dependencies":[{"name":"lodash"}],"duplicates":"skip"}]}`, errSim)
+	dead := DeadCode(context.Background(), w.WS)
 	testutil.Equal(t, dead.Findings, []string{"src/old.ts: unused file ", "src/a.ts: unused dependencies lodash", "src/a.ts: unused exports unused"})
-	knipCall, _ := w.fake.Find(cmdKnip)
-	testutil.Equal(t, knipCall.Args[1:], []string{flagConfig, filepath.Join(tools(w.ws), knipConfigFile), "--reporter", formatJSON, "--no-progress", "--no-config-hints"})
-	w.on(cmdKnip, "nope", errSim)
-	testutil.Contains(t, DeadCode(context.Background(), w.ws).Reason, "knip")
-	w.on(complexityConfigFile, "nope", errSim)
-	testutil.Contains(t, Complexity(context.Background(), w.ws).Reason, "eslint")
-	testutil.Equal(t, Complexity(context.Background(), newWorld(t, nil).ws).Reason, reasonNoLock)
-	testutil.Equal(t, DeadCode(context.Background(), newWorld(t, nil).ws).Reason, reasonNoLock)
+	knipCall, _ := w.Fake.Find(cmdKnip)
+	testutil.Equal(t, knipCall.Args[1:], []string{flagConfig, filepath.Join(tools(w.WS), knipConfigFile), "--reporter", formatJSON, "--no-progress", "--no-config-hints"})
+	w.On(cmdKnip, "nope", errSim)
+	testutil.Contains(t, DeadCode(context.Background(), w.WS).Reason, "knip")
+	w.On(complexityConfigFile, "nope", errSim)
+	testutil.Contains(t, Complexity(context.Background(), w.WS).Reason, "eslint")
+	testutil.Equal(t, Complexity(context.Background(), newWorld(t, nil).WS).Reason, reasonNoLock)
+	testutil.Equal(t, DeadCode(context.Background(), newWorld(t, nil).WS).Reason, reasonNoLock)
 }
 
 func vitestWorld(t *testing.T) *world {
 	t.Helper()
 	w := newWorld(t, map[string]string{Manifest: manifestVite, Lockfile: lockGood, fileCart: cartSource, fileSpec: "import fc from \"fast-check\";\n", viteConfig: "", readme: ""})
-	w.produce(flagOutputFile, junitGreen)
-	w.produce("--coverage.reportsDirectory=", "")
+	w.Produce(flagOutputFile, junitGreen)
+	w.Produce("--coverage.reportsDirectory=", "")
 	return w
 }
 
 func TestVitestRun(t *testing.T) {
 	w := vitestWorld(t)
 	staged(t, w)
-	testutil.Write(t, filepath.Join(w.ws.Report(coverageDir), istanbulFile), strings.ReplaceAll(istanbul, "STAGE", stage(w.ws)))
-	w.produce("--coverage.reportsDirectory=", "x")
-	w.outputs = map[string]string{flagOutputFile: junitGreen}
-	out := Tests(context.Background(), w.ws)
+	testutil.Write(t, filepath.Join(w.WS.Report(coverageDir), istanbulFile), strings.ReplaceAll(istanbul, "STAGE", stage(w.WS)))
+	w.Produce("--coverage.reportsDirectory=", "x")
+	w.Clear()
+	w.Produce(flagOutputFile, junitGreen)
+	out := Tests(context.Background(), w.WS)
 	testutil.Equal(t, out.Status, gate.StatusPass)
-	provider, _ := w.fake.Find("npm install")
+	provider, _ := w.Fake.Find("npm install")
 	testutil.Equal(t, procexectest.Line(provider), "npm install --no-save --no-audit --no-fund @vitest/coverage-v8@5.0.5")
-	run, _ := w.fake.Find(cmdVitest)
-	testutil.Equal(t, run.Args[1:], []string{cmdRun, flagJUnit, flagOutputFile + w.ws.Report(JUnitReport), "--coverage.enabled", "--coverage.provider=v8",
-		"--coverage.reporter=json", "--coverage.reportsDirectory=" + w.ws.Report(coverageDir)})
-	lines := LineCoverage(context.Background(), w.ws)
-	testutil.Equal(t, lines.Values, map[string]float64{ValueLineCoverage: float64(2) * 100 / 3, ValueLines: 3})
+	run, _ := w.Fake.Find(cmdVitest)
+	testutil.Equal(t, run.Args[1:], []string{cmdRun, flagJUnit, flagOutputFile + w.WS.Report(JUnitReport), "--coverage.enabled", "--coverage.provider=v8",
+		"--coverage.reporter=json", "--coverage.reportsDirectory=" + w.WS.Report(coverageDir)})
+	lines := linecov.LineCoverage(context.Background(), w.WS)
+	testutil.Equal(t, lines.Values, map[string]float64{linecov.ValueLineCoverage: float64(2) * 100 / 3, linecov.ValueLines: 3})
 	testutil.Equal(t, lines.Findings, []string{"src/cart.ts: 1 of 3 lines uncovered"})
-	testutil.Equal(t, lines.Reason, reasonLines)
-	branches := Branches(context.Background(), w.ws)
-	testutil.Equal(t, branches.Values, map[string]float64{ValueBranchCover: 50, ValueBranches: 2})
-	testutil.Equal(t, branches.Status, gate.StatusPass)
-	passed, err := Passed(context.Background(), w.ws)
+	testutil.Contains(t, lines.Reason, "line coverage")
+	passed, err := Passed(context.Background(), w.WS)
 	testutil.NoErr(t, err)
 	testutil.Equal(t, passed, map[string]bool{"test/cart.test.ts > cart > works": true})
+	branches := linecov.Branches(context.Background(), w.WS)
+	testutil.Equal(t, branches.Status, gate.StatusPass)
+	testutil.Equal(t, branches.Values, map[string]float64{linecov.ValueBranchCover: 50, linecov.ValueBranches: 2})
 }
 
 func TestTestFailures(t *testing.T) {
-	testutil.Equal(t, Tests(context.Background(), newWorld(t, nil).ws).Reason, reasonNoLock)
+	testutil.Equal(t, Tests(context.Background(), newWorld(t, nil).WS).Reason, reasonNoLock)
 	silent := newWorld(t, map[string]string{Manifest: manifestVite, Lockfile: lockGood})
-	silent.on(cmdVitest, "", errSim)
-	testutil.Contains(t, Tests(context.Background(), silent.ws).Reason, reasonNoReport)
+	silent.On(cmdVitest, "", errSim)
+	testutil.Contains(t, Tests(context.Background(), silent.WS).Reason, reasonNoReport)
 	noVersion := newWorld(t, map[string]string{Manifest: manifestVite, Lockfile: lockGood})
 	staged(t, noVersion)
-	testutil.NoErr(t, os.RemoveAll(filepath.Join(stage(noVersion.ws), modulesDir)))
-	testutil.Equal(t, Tests(context.Background(), noVersion.ws).Status, gate.StatusFail)
+	testutil.NoErr(t, os.RemoveAll(filepath.Join(stage(noVersion.WS), modulesDir)))
+	testutil.Equal(t, Tests(context.Background(), noVersion.WS).Status, gate.StatusFail)
 	badCoverage := vitestWorld(t)
 	staged(t, badCoverage)
-	testutil.Write(t, filepath.Join(badCoverage.ws.Report(coverageDir), istanbulFile), "{")
-	badCoverage.outputs = map[string]string{flagOutputFile: junitGreen}
-	testutil.Equal(t, Tests(context.Background(), badCoverage.ws).Status, gate.StatusFail)
+	testutil.Write(t, filepath.Join(badCoverage.WS.Report(coverageDir), istanbulFile), "{")
+	badCoverage.Clear()
+	badCoverage.Produce(flagOutputFile, junitGreen)
+	testutil.Equal(t, Tests(context.Background(), badCoverage.WS).Status, gate.StatusFail)
 	noManifest := newWorld(t, map[string]string{Manifest: "{", Lockfile: lockGood})
-	testutil.Equal(t, Tests(context.Background(), noManifest.ws).Status, gate.StatusFail)
+	testutil.Equal(t, Tests(context.Background(), noManifest.WS).Status, gate.StatusFail)
 	missing := newWorld(t, nil)
-	testutil.Contains(t, LineCoverage(context.Background(), missing.ws).Reason, "coverage report missing")
-	testutil.Contains(t, Branches(context.Background(), missing.ws).Reason, "coverage report missing")
-	_, err := Passed(context.Background(), missing.ws)
+	_, err := Passed(context.Background(), missing.WS)
 	testutil.Fails(t, err)
-	testutil.Equal(t, ratio(0, 0), float64(percentScale))
 }
 
 func TestNodeTestRunnerWithLcov(t *testing.T) {
 	w := newWorld(t, map[string]string{Manifest: plainManifest, Lockfile: lockGood, "src/grade.js": "export const a = 1;\nexport const b = 2;\n", "src/extra.js": "export const c = 3;\n// note\n"})
 	staged(t, w)
-	w.produce("--test-reporter-destination=", "")
-	w.outputs = map[string]string{}
-	testutil.Write(t, w.ws.Report(JUnitReport), `<testsuites><testcase name="top" classname="test" file="STAGE/test/a.test.js"/></testsuites>`)
-	testutil.Write(t, w.ws.Report(lcovFile), "TN:\nSF:src/grade.js\nDA:1,1\nDA:2,0\nBRDA:1,0,0,1\nBRDA:1,1,0,-\nBRDA:2,2,0,0\nend_of_record\nDA:9,9\n")
-	testutil.Equal(t, Tests(context.Background(), w.ws).Status, gate.StatusPass)
-	run, _ := w.fake.Find("--experimental-test-coverage")
+	w.Produce("--test-reporter-destination=", "")
+	w.Clear()
+	testutil.Write(t, w.WS.Report(JUnitReport), `<testsuites><testcase name="top" classname="test" file="STAGE/test/a.test.js"/></testsuites>`)
+	testutil.Write(t, w.WS.Report(lcovFile), "TN:\nSF:src/grade.js\nDA:1,1\nDA:2,0\nBRDA:1,0,0,1\nBRDA:1,1,0,-\nBRDA:2,2,0,0\nend_of_record\nDA:9,9\n")
+	testutil.Equal(t, Tests(context.Background(), w.WS).Status, gate.StatusPass)
+	run, _ := w.Fake.Find("--experimental-test-coverage")
 	testutil.Equal(t, run.Args[0], flagTest)
-	cov, err := loadCoverage(w.ws)
+	cov, err := linecov.Load(w.WS)
 	testutil.NoErr(t, err)
-	testutil.Equal(t, cov["src/grade.js"], &fileCoverage{Lines: map[int]int{1: 1, 2: 0}, Branches: 3, CoveredBranches: 1})
-	testutil.Equal(t, cov["src/extra.js"], &fileCoverage{Lines: map[int]int{1: 0}})
-	passed, err := Passed(context.Background(), w.ws)
+	testutil.Equal(t, cov["src/grade.js"], &linecov.File{Lines: map[int]int{1: 1, 2: 0}, Branches: 3, CoveredBranches: 1})
+	testutil.Equal(t, cov["src/extra.js"], &linecov.File{Lines: map[int]int{1: 0}})
+	passed, err := Passed(context.Background(), w.WS)
 	testutil.NoErr(t, err)
 	testutil.Equal(t, len(passed), 1)
 	blocked := newWorld(t, map[string]string{Manifest: plainManifest, Lockfile: lockGood})
 	staged(t, blocked)
-	testutil.Write(t, blocked.ws.Report(JUnitReport), `<testsuite><testcase name="t" classname="c"/></testsuite>`)
-	testutil.Mkdir(t, blocked.ws.Report(lcovFile))
-	testutil.Equal(t, Tests(context.Background(), blocked.ws).Status, gate.StatusFail)
+	testutil.Write(t, blocked.WS.Report(JUnitReport), `<testsuite><testcase name="t" classname="c"/></testsuite>`)
+	testutil.Mkdir(t, blocked.WS.Report(lcovFile))
+	testutil.Equal(t, Tests(context.Background(), blocked.WS).Status, gate.StatusFail)
 	gone := newWorld(t, map[string]string{Manifest: plainManifest, Lockfile: lockGood, "src/gone.js": "x"})
 	staged(t, gone)
-	testutil.Write(t, gone.ws.Report(JUnitReport), `<testsuite><testcase name="t" classname="c"/></testsuite>`)
-	testutil.NoErr(t, os.Remove(filepath.Join(stage(gone.ws), "src", "gone.js")))
-	testutil.Equal(t, Tests(context.Background(), gone.ws).Status, gate.StatusFail)
+	testutil.Write(t, gone.WS.Report(JUnitReport), `<testsuite><testcase name="t" classname="c"/></testsuite>`)
+	testutil.NoErr(t, os.Remove(filepath.Join(stage(gone.WS), "src", "gone.js")))
+	testutil.Equal(t, Tests(context.Background(), gone.WS).Status, gate.StatusFail)
 }
 
 func TestJestResults(t *testing.T) {
@@ -414,63 +343,63 @@ func TestJestResults(t *testing.T) {
 {"ancestorTitles":["math"],"title":"adds","status":"passed"},
 {"ancestorTitles":[],"title":"breaks","status":"failed","failureMessages":["Expected 1\nReceived 2"]},
 {"ancestorTitles":["math"],"title":"later","status":"pending"}]}]}`
-	w.produce(flagOutputFile, report)
-	out := Tests(context.Background(), w.ws)
+	w.Produce(flagOutputFile, report)
+	out := Tests(context.Background(), w.WS)
 	testutil.Equal(t, out.Findings, []string{"test/a.test.js > breaks failed: Expected 1", "test/a.test.js > math > later skipped: pending"})
-	run, _ := w.fake.Find("jest.js")
-	testutil.Contains(t, procexectest.Line(run), "--ci --coverage --coverageProvider=v8 --coverageReporters=json", "--json --outputFile="+w.ws.Report(JestReport))
+	run, _ := w.Fake.Find("jest.js")
+	testutil.Contains(t, procexectest.Line(run), "--ci --coverage --coverageProvider=v8 --coverageReporters=json", "--json --outputFile="+w.WS.Report(JestReport))
 	_, err := jestCases(filepath.Join(t.TempDir(), "missing.json"))
 	testutil.Fails(t, err)
 }
 
 func TestMochaArguments(t *testing.T) {
 	w := newWorld(t, map[string]string{Manifest: `{"devDependencies":{"mocha":"11"}}`, Lockfile: lockGood})
-	testutil.Equal(t, adapters[runnerMocha].test(w.ws)[0], toolScript(w.ws, "c8", "bin", "c8.js"))
-	testutil.Equal(t, adapters[runnerMocha].mutant(w.ws), []string{local(w.ws, "mocha", "bin", "mocha.js"), flagBail, flagReporter, "dot"})
-	args, env := adapters[runnerMocha].fuzz(w.ws, []string{"test/p.test.js"})
+	testutil.Equal(t, adapters[runnerMocha].test(w.WS)[0], toolScript(w.WS, "c8", "bin", "c8.js"))
+	testutil.Equal(t, adapters[runnerMocha].mutant(w.WS), []string{local(w.WS, "mocha", "bin", "mocha.js"), flagBail, flagReporter, "dot"})
+	args, env := adapters[runnerMocha].fuzz(w.WS, []string{"test/p.test.js"})
 	testutil.Equal(t, args[len(args)-1], "test/p.test.js")
-	testutil.Equal(t, env, []string{envNodeOptions + filepath.Join(tools(w.ws), fuzzSetupFile)})
-	jestArgs, jestEnv := adapters[runnerJest].fuzz(w.ws, []string{"t.test.js"})
-	testutil.Contains(t, strings.Join(jestArgs, " "), "--setupFilesAfterEnv "+filepath.Join(tools(w.ws), fuzzSetupCJS))
+	testutil.Equal(t, env, []string{envNodeOptions + filepath.Join(tools(w.WS), fuzzSetupFile)})
+	jestArgs, jestEnv := adapters[runnerJest].fuzz(w.WS, []string{"t.test.js"})
+	testutil.Contains(t, strings.Join(jestArgs, " "), "--setupFilesAfterEnv "+filepath.Join(tools(w.WS), fuzzSetupCJS))
 	testutil.Equal(t, jestEnv, []string(nil))
-	testutil.Equal(t, adapters[runnerNode].mutant(w.ws), []string{flagTest})
-	testutil.Equal(t, adapters[runnerJest].mutant(w.ws)[1:], []string{flagCI, flagBail})
+	testutil.Equal(t, adapters[runnerNode].mutant(w.WS), []string{flagTest})
+	testutil.Equal(t, adapters[runnerJest].mutant(w.WS)[1:], []string{flagCI, flagBail})
 }
 
-func TestFuzz(t *testing.T) {
+func TestFastCheckFuzz(t *testing.T) {
 	w := vitestWorld(t)
-	w.produce(flagOutputFile, junitGreen)
-	out := Fuzz(context.Background(), w.ws)
+	w.Produce(flagOutputFile, junitGreen)
+	out := Fuzz(context.Background(), w.WS)
 	testutil.Equal(t, out.Status, gate.StatusPass)
 	testutil.Equal(t, out.Values, map[string]float64{ValueFuzzFiles: 1})
-	run, _ := w.fake.Find(cmdVitest)
+	run, _ := w.Fake.Find(cmdVitest)
 	testutil.Equal(t, run.Args[len(run.Args)-1], fileSpec)
-	testutil.Equal(t, run.Env[1:], []string{envNodeOptions + filepath.Join(tools(w.ws), fuzzSetupFile), envFuzzRuns + "250"})
+	testutil.Equal(t, run.Env[1:], []string{envNodeOptions + filepath.Join(tools(w.WS), fuzzSetupFile), envFuzzRuns + "250"})
 	failing := vitestWorld(t)
-	failing.produce(flagOutputFile, `<testsuite><testcase classname="test/cart.test.ts" name="prop"><failure message="Counterexample"/></testcase></testsuite>`)
-	bad := Fuzz(context.Background(), failing.ws)
+	failing.Produce(flagOutputFile, `<testsuite><testcase classname="test/cart.test.ts" name="prop"><failure message="Counterexample"/></testcase></testsuite>`)
+	bad := Fuzz(context.Background(), failing.WS)
 	testutil.Equal(t, bad.Reason, reasonFuzz)
 	testutil.Equal(t, bad.Findings, []string{"test/cart.test.ts > prop failed: Counterexample"})
 	none := newWorld(t, map[string]string{Manifest: manifestVite, Lockfile: lockGood, fileSpec: "plain"})
-	testutil.Equal(t, Fuzz(context.Background(), none.ws).Reason, reasonNoFuzz)
+	testutil.Equal(t, Fuzz(context.Background(), none.WS).Reason, reasonNoFuzz)
 	silent := vitestWorld(t)
-	silent.outputs = map[string]string{}
-	testutil.Contains(t, Fuzz(context.Background(), silent.ws).Reason, reasonNoReport)
-	testutil.Equal(t, Fuzz(context.Background(), newWorld(t, nil).ws).Reason, reasonNoLock)
+	silent.Clear()
+	testutil.Contains(t, Fuzz(context.Background(), silent.WS).Reason, reasonNoReport)
+	testutil.Equal(t, Fuzz(context.Background(), newWorld(t, nil).WS).Reason, reasonNoLock)
 	brokenManifest := newWorld(t, map[string]string{Manifest: "{", Lockfile: lockGood, fileSpec: "fast-check"})
-	testutil.Equal(t, Fuzz(context.Background(), brokenManifest.ws).Status, gate.StatusFail)
+	testutil.Equal(t, Fuzz(context.Background(), brokenManifest.WS).Status, gate.StatusFail)
 	unreadable := vitestWorld(t)
-	unreadable.files = append(unreadable.files, "test/gone.test.ts")
+	unreadable.Files = append(unreadable.Files, "test/gone.test.ts")
 	staged(t, newWorld(t, map[string]string{Manifest: manifestVite, Lockfile: lockGood}))
 	testutil.NoErr(t, prepareWithoutFiles(unreadable))
-	testutil.Equal(t, Fuzz(context.Background(), unreadable.ws).Status, gate.StatusFail)
+	testutil.Equal(t, Fuzz(context.Background(), unreadable.WS).Status, gate.StatusFail)
 }
 
 func prepareWithoutFiles(w *world) error {
-	files := w.files
-	w.files = slices.DeleteFunc(slices.Clone(files), func(f string) bool { return strings.Contains(f, "gone") })
-	defer func() { w.files = files }()
-	return prepare(context.Background(), w.ws)
+	files := w.Files
+	w.Files = slices.DeleteFunc(slices.Clone(files), func(f string) bool { return strings.Contains(f, "gone") })
+	defer func() { w.Files = files }()
+	return prepare(context.Background(), w.WS)
 }
 
 func TestClassificationHelpers(t *testing.T) {
@@ -483,10 +412,10 @@ func TestClassificationHelpers(t *testing.T) {
 	testutil.True(t, isConfig(viteConfig) && !isConfig("src/configure.ts"), "config files")
 	testutil.Equal(t, codeLines("a.ts", []byte("const a = 1;\n// note\n\nconst b = 2;\n")), []int{1, 4})
 	testutil.Equal(t, countPositive([]int{0, 2, 1, 0}), 2)
-	testutil.Equal(t, exitCode(errSim), 0)
+	testutil.Equal(t, procexec.ExitCode(errSim), 0)
 	testutil.Equal(t, firstLine("a\nb"), "a")
 	c := junit.Case{Classname: "suite", Name: "case"}
-	testutil.Equal(t, testID(newWorld(t, nil).ws)(c), "suite > case")
+	testutil.Equal(t, testID(newWorld(t, nil).WS)(c), "suite > case")
 	unknown := junit.Case{}
 	setStatus(&unknown, "todo", "")
 	testutil.Equal(t, unknown.Skipped.Message, "todo")
@@ -494,17 +423,17 @@ func TestClassificationHelpers(t *testing.T) {
 
 func TestToolsInstallOnce(t *testing.T) {
 	w := newWorld(t, nil)
-	dir, err := Tools(context.Background(), w.ws)
+	dir, err := Tools(context.Background(), w.WS)
 	testutil.NoErr(t, err)
-	testutil.Equal(t, dir, tools(w.ws))
+	testutil.Equal(t, dir, tools(w.WS))
 	testutil.Contains(t, testutil.Read(t, filepath.Join(dir, HTMLValidateConfig)), `"require-sri": ["error", {"target": "crossorigin"}]`)
 	testutil.Contains(t, testutil.Read(t, filepath.Join(dir, StylelintConfig)), "stylelint-config-standard")
-	_, err = Tools(context.Background(), w.ws)
+	_, err = Tools(context.Background(), w.WS)
 	testutil.NoErr(t, err)
-	testutil.Equal(t, w.fake.Count("--ignore-scripts"), 1)
-	testutil.Equal(t, ToolScript(w.ws, "x", "y.js"), filepath.Join(tools(w.ws), modulesDir, "x", "y.js"))
+	testutil.Equal(t, w.Fake.Count("--ignore-scripts"), 1)
+	testutil.Equal(t, ToolScript(w.WS, "x", "y.js"), filepath.Join(tools(w.WS), modulesDir, "x", "y.js"))
 	failing := newWorld(t, nil)
-	failing.on("--ignore-scripts", "", errSim)
-	_, err = Tools(context.Background(), failing.ws)
+	failing.On("--ignore-scripts", "", errSim)
+	_, err = Tools(context.Background(), failing.WS)
 	testutil.Fails(t, err)
 }

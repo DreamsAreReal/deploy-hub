@@ -186,18 +186,24 @@ func layoutOf(ctx context.Context, ws gate.Workspace, packs []Pack) (Layout, err
 	return Discover(files, packs), err
 }
 
-func Stacks(packs []Pack) Run {
+func withLayout(packs []Pack, judge func(context.Context, gate.Workspace, Layout) gate.Outcome) Run {
 	return func(ctx context.Context, ws gate.Workspace) gate.Outcome {
 		layout, err := layoutOf(ctx, ws, packs)
 		if err != nil {
 			return gate.Fail(err.Error())
 		}
+		return judge(ctx, ws, layout)
+	}
+}
+
+func Stacks(packs []Pack) Run {
+	return withLayout(packs, func(_ context.Context, _ gate.Workspace, layout Layout) gate.Outcome {
 		values := map[string]float64{ValueProjects: float64(len(layout.Projects))}
 		for _, p := range layout.Projects {
 			values[p.Pack.Stack]++
 		}
 		return gate.Judge(len(layout.Orphans) == 0, reasonOrphans, values, layout.Orphans)
-	}
+	})
 }
 
 type Labeled struct {
@@ -206,17 +212,13 @@ type Labeled struct {
 }
 
 func Dispatch(packs []Pack, check string) Run {
-	return func(ctx context.Context, ws gate.Workspace) gate.Outcome {
-		layout, err := layoutOf(ctx, ws, packs)
-		if err != nil {
-			return gate.Fail(err.Error())
-		}
+	return withLayout(packs, func(ctx context.Context, ws gate.Workspace, layout Layout) gate.Outcome {
 		outs := make([]Labeled, 0, len(layout.Projects))
 		for _, p := range layout.Projects {
 			outs = append(outs, Labeled{Label: p.Label(), Outcome: runIn(ctx, ws, p, check)})
 		}
 		return Merge(outs)
-	}
+	})
 }
 
 func runIn(ctx context.Context, ws gate.Workspace, p Project, check string) gate.Outcome {

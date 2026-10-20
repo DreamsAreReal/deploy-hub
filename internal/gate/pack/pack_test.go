@@ -132,13 +132,18 @@ func TestDispatchRunsEveryProject(t *testing.T) {
 	empty := Dispatch(testPacks(run), checkName)(context.Background(), repoWS(t, readme))
 	testutil.Equal(t, empty.Status, gate.StatusNA)
 	testutil.Equal(t, empty.Reason, reasonNoCode)
+	failsWithoutRepository(t, Dispatch(testPacks(run), checkName))
+}
+
+func failsWithoutRepository(t *testing.T, run Run) {
+	t.Helper()
 	broken := repoWS(t)
 	broken.Exec = &procexectest.Fake{Handler: func(procexec.Command) (procexec.Result, error) { return procexec.Result{}, errSim }}
-	testutil.Contains(t, Dispatch(testPacks(run), checkName)(context.Background(), broken).Reason, "git ls-files")
+	testutil.Contains(t, run(context.Background(), broken).Reason, "git ls-files")
 	blockedOut := repoWS(t, manifestA, "x.go")
 	blockedOut.Out = filepath.Join(t.TempDir(), "file")
 	testutil.Write(t, blockedOut.Out, "")
-	testutil.Equal(t, Dispatch(testPacks(run), checkName)(context.Background(), blockedOut).Status, gate.StatusFail)
+	testutil.Equal(t, run(context.Background(), blockedOut).Status, gate.StatusFail)
 }
 
 func TestMergeKeepsTheWorstStatus(t *testing.T) {
@@ -190,13 +195,7 @@ func TestScenariosUseEveryProject(t *testing.T) {
 	testutil.Equal(t, Scenarios(packs)(context.Background(), ws).Status, gate.StatusFail)
 	packs[1].Passed = func(context.Context, gate.Workspace) (map[string]bool, error) { return nil, errSim }
 	testutil.Equal(t, Scenarios(packs)(context.Background(), ws).Reason, "beta:web: simulated")
-	broken := repoWS(t)
-	broken.Exec = &procexectest.Fake{Handler: func(procexec.Command) (procexec.Result, error) { return procexec.Result{}, errSim }}
-	testutil.Contains(t, Scenarios(packs)(context.Background(), broken).Reason, "git ls-files")
-	blockedOut := repoWS(t, manifestA, "x.go")
-	blockedOut.Out = filepath.Join(t.TempDir(), "file")
-	testutil.Write(t, blockedOut.Out, "")
-	testutil.Equal(t, Scenarios(packs)(context.Background(), blockedOut).Status, gate.StatusFail)
+	failsWithoutRepository(t, Scenarios(packs))
 }
 
 func TestCheckNamesAreUnique(t *testing.T) {

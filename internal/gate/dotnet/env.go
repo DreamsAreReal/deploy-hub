@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/pack"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/source"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
 )
@@ -72,17 +73,14 @@ func run(ctx context.Context, ws gate.Workspace, dir string, env []string, args 
 	return res, nil
 }
 
+var (
+	prepared = pack.Prepared(prepare)
+	Tests    = prepared(runTests)
+	Fuzz     = prepared(runFuzz)
+)
+
 func prepare(ctx context.Context, ws gate.Workspace) error {
-	if _, err := os.Stat(ws.Report(readyStamp)); err == nil {
-		return nil
-	}
-	steps := []func(context.Context, gate.Workspace) error{stageProject, lockedRestore, writeConfig, analysisRestore}
-	for _, step := range steps {
-		if err := step(ctx, ws); err != nil {
-			return err
-		}
-	}
-	return os.WriteFile(ws.Report(readyStamp), []byte(Stack), stampPerm)
+	return pack.Once(ctx, ws, readyStamp, stageProject, lockedRestore, writeConfig, analysisRestore)
 }
 
 func stageProject(ctx context.Context, ws gate.Workspace) error {
@@ -149,16 +147,7 @@ func analysisRestore(ctx context.Context, ws gate.Workspace) error {
 }
 
 func rel(ws gate.Workspace, p string) string {
-	roots := []string{stage(ws)}
-	if resolved, err := filepath.EvalSymlinks(stage(ws)); err == nil {
-		roots = append(roots, resolved)
-	}
-	for _, root := range roots {
-		if trimmed, ok := strings.CutPrefix(p, root+string(filepath.Separator)); ok {
-			return filepath.ToSlash(trimmed)
-		}
-	}
-	return p
+	return gate.RelTo(stage(ws), p)
 }
 
 func isTest(rel string) bool {
@@ -169,17 +158,6 @@ func isTest(rel string) bool {
 		}
 	}
 	return false
-}
-
-func trackedFiles(ctx context.Context, ws gate.Workspace, keep func(string) bool) ([]string, error) {
-	files, err := source.Tracked(ctx, ws.Exec, ws.Src)
-	var out []string
-	for _, f := range files {
-		if keep(f) {
-			out = append(out, f)
-		}
-	}
-	return out, err
 }
 
 func isProject(f string) bool {

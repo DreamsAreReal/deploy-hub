@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/junit"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/linecov"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/source"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
 )
@@ -27,30 +29,22 @@ const (
 	BatsBinary        = "bats"
 	BashBinary        = "bash"
 	JUnitReport       = "report.xml"
-	CoverageReport    = "coverage.json"
 	traceScript       = "trace.bash"
 	traceLog          = "trace.log"
 	testSuffix        = ".bats"
 	ValueFunctions    = "functions"
 	ValueMaxCognitive = "max_cognitive_complexity"
-	ValueLineCoverage = "line_coverage"
-	ValueBranchCover  = "branch_coverage"
-	ValueLines        = "lines"
-	ValueBranches     = "branches"
-	percentScale      = 100
+	traceBufferScale  = 100
 	reportPerm        = 0o600
 	reasonLint        = "shellcheck or shfmt reported findings"
 	reasonComplexity  = "functions exceed the cognitive complexity limit"
 	reasonNoTests     = "no bats test files"
 	reasonNoReport    = "bats produced no report"
-	reasonLines       = "line coverage is below the policy threshold"
-	reasonBranches    = "branch coverage is below the policy threshold"
 	reasonNoDeps      = "shell scripts have no package dependencies"
 	reasonNoFuzz      = "shell scripts have no property-based fuzzing tool; their inputs are exercised by bats tests"
 	reasonDeadCode    = "unused functions or variables"
 	shellcheckForm    = "%s:%d SC%d %s"
 	complexityForm    = "%s: %s has cognitive complexity %d"
-	uncoveredForm     = "%s: %d of %d lines uncovered"
 	formatForm        = "%s: not formatted"
 	traceSetup        = "exec {DEPLOY_HUB_TRACE_FD}>>\"$DEPLOY_HUB_TRACE\"\nBASH_XTRACEFD=$DEPLOY_HUB_TRACE_FD\nPS4='+${BASH_SOURCE[0]}:${LINENO}: '\nset -x\n"
 	envTrace          = "DEPLOY_HUB_TRACE="
@@ -66,44 +60,23 @@ var (
 	deadCodes = []int{unusedVariable, unusedFunction}
 )
 
-func NotApplicable(reason string) func(context.Context, gate.Workspace) gate.Outcome {
-	return func(context.Context, gate.Workspace) gate.Outcome {
-		return gate.Outcome{Status: gate.StatusNA, Reason: reason}
-	}
-}
-
 var (
-	Integrity    = NotApplicable(reasonNoDeps)
-	Dependencies = NotApplicable(reasonNoDeps)
-	Fuzz         = NotApplicable(reasonNoFuzz)
+	Integrity    = gate.NotApplicable(reasonNoDeps)
+	Dependencies = gate.NotApplicable(reasonNoDeps)
+	Fuzz         = gate.NotApplicable(reasonNoFuzz)
 )
 
-func tracked(ctx context.Context, ws gate.Workspace, keep func(string) bool) ([]string, error) {
-	files, err := source.Tracked(ctx, ws.Exec, ws.Src)
-	var out []string
-	for _, f := range files {
-		if keep(f) {
-			out = append(out, f)
-		}
-	}
-	return out, err
-}
-
 func scripts(ctx context.Context, ws gate.Workspace) ([]string, error) {
-	return tracked(ctx, ws, func(f string) bool { return slices.Contains(Sources, path.Ext(f)) })
+	return source.Select(ctx, ws, func(f string) bool { return slices.Contains(Sources, path.Ext(f)) })
 }
 
 func Lint(ctx context.Context, ws gate.Workspace) gate.Outcome {
-	files, err := scripts(ctx, ws)
+	files, checks, err := checked(ctx, ws, false)
 	if err != nil {
 		return gate.Fail(err.Error())
 	}
 	if len(files) == 0 {
 		return gate.Pass(nil)
-	}
-	checks, err := shellcheck(ctx, ws, files, func(code int) bool { return !slices.Contains(deadCodes, code) })
-	if err != nil {
-		return gate.Fail(err.Error())
 	}
 	res, err := ws.Run(ctx, ShfmtBinary, append([]string{"-l"}, files...)...)
 	unformatted := strings.Fields(res.Stdout)
@@ -117,18 +90,20 @@ func Lint(ctx context.Context, ws gate.Workspace) gate.Outcome {
 }
 
 func DeadCode(ctx context.Context, ws gate.Workspace) gate.Outcome {
-	files, err := scripts(ctx, ws)
-	if err != nil {
-		return gate.Fail(err.Error())
-	}
-	if len(files) == 0 {
-		return gate.Pass(nil)
-	}
-	findings, err := shellcheck(ctx, ws, files, func(code int) bool { return slices.Contains(deadCodes, code) })
+	_, findings, err := checked(ctx, ws, true)
 	if err != nil {
 		return gate.Fail(err.Error())
 	}
 	return gate.Findings(reasonDeadCode, findings)
+}
+
+func checked(ctx context.Context, ws gate.Workspace, dead bool) ([]string, []string, error) {
+	files, err := scripts(ctx, ws)
+	if err != nil || len(files) == 0 {
+		return files, nil, err
+	}
+	findings, err := shellcheck(ctx, ws, files, func(code int) bool { return slices.Contains(deadCodes, code) == dead })
+	return files, findings, err
 }
 
 func shellcheck(ctx context.Context, ws gate.Workspace, files []string, keep func(int) bool) ([]string, error) {
@@ -165,7 +140,7 @@ func Complexity(ctx context.Context, ws gate.Workspace) gate.Outcome {
 		if perr != nil {
 			return gate.Fail(perr.Error())
 		}
-		for _, name := range sortedKeys(s.functions) {
+		for _, name := range slices.Sorted(maps.Keys(s.functions)) {
 			score := s.functions[name]
 			functions, worst = functions+1, max(worst, score)
 			if score > ws.Policy.Thresholds.MaxCognitive {
@@ -189,22 +164,13 @@ func analyzeFile(ws gate.Workspace, rel string) (script, error) {
 	return analyze(f), nil
 }
 
-func sortedKeys[V any](m map[string]V) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	return keys
-}
-
 func traceEnv(ws gate.Workspace, log string) ([]string, error) {
 	err := os.WriteFile(ws.Report(traceScript), []byte(traceSetup), reportPerm)
 	return []string{envBashEnv + ws.Report(traceScript), envTrace + log}, err
 }
 
 func batsFiles(ctx context.Context, ws gate.Workspace) ([]string, error) {
-	return tracked(ctx, ws, func(f string) bool { return path.Ext(f) == testSuffix })
+	return source.Select(ctx, ws, func(f string) bool { return path.Ext(f) == testSuffix })
 }
 
 func Tests(ctx context.Context, ws gate.Workspace) gate.Outcome {
@@ -235,12 +201,6 @@ func testID(c junit.Case) string {
 	return c.Classname + idSeparator + c.Name
 }
 
-type fileCoverage struct {
-	Lines           map[uint]int `json:"lines"`
-	Branches        int          `json:"branches"`
-	CoveredBranches int          `json:"covered_branches"`
-}
-
 func readTrace(file string) (map[string]map[uint]int, error) {
 	counts := map[string]map[uint]int{}
 	f, err := os.Open(filepath.Clean(file))
@@ -252,7 +212,7 @@ func readTrace(file string) (map[string]map[uint]int, error) {
 	}
 	defer func() { _ = f.Close() }()
 	sc := bufio.NewScanner(f)
-	sc.Buffer(nil, bufio.MaxScanTokenSize*percentScale)
+	sc.Buffer(nil, bufio.MaxScanTokenSize*traceBufferScale)
 	for sc.Scan() {
 		m := traceLine.FindStringSubmatch(sc.Text())
 		if m == nil {
@@ -291,7 +251,7 @@ func writeCoverage(ctx context.Context, ws gate.Workspace) error {
 	if err != nil {
 		return err
 	}
-	cov := map[string]*fileCoverage{}
+	cov := linecov.Report{}
 	for _, f := range files {
 		s, aerr := analyzeFile(ws, f)
 		if aerr != nil {
@@ -299,17 +259,13 @@ func writeCoverage(ctx context.Context, ws gate.Workspace) error {
 		}
 		cov[f] = coverageOf(s, countsFor(ws, counts, f))
 	}
-	data, err := json.Marshal(cov)
-	if err == nil {
-		err = os.WriteFile(ws.Report(CoverageReport), data, reportPerm)
-	}
-	return err
+	return cov.Save(ws)
 }
 
-func coverageOf(s script, counts map[uint]int) *fileCoverage {
-	fc := &fileCoverage{Lines: map[uint]int{}, Branches: len(s.branches)}
+func coverageOf(s script, counts map[uint]int) *linecov.File {
+	fc := &linecov.File{Lines: map[int]int{}, Branches: len(s.branches)}
 	for _, l := range s.lines {
-		fc.Lines[l] = counts[l]
+		fc.Lines[int(l)] = counts[l]
 	}
 	for _, b := range s.branches {
 		if b.covered(counts) {
@@ -317,59 +273,6 @@ func coverageOf(s script, counts map[uint]int) *fileCoverage {
 		}
 	}
 	return fc
-}
-
-func loadCoverage(ws gate.Workspace) (map[string]*fileCoverage, error) {
-	cov := map[string]*fileCoverage{}
-	data, err := os.ReadFile(ws.Report(CoverageReport))
-	if err != nil {
-		return nil, fmt.Errorf("coverage report missing: run the tests check first: %w", err)
-	}
-	return cov, json.Unmarshal(data, &cov)
-}
-
-func ratio(part, whole int) float64 {
-	if whole == 0 {
-		return percentScale
-	}
-	return float64(part) * percentScale / float64(whole)
-}
-
-func LineCoverage(_ context.Context, ws gate.Workspace) gate.Outcome {
-	cov, err := loadCoverage(ws)
-	if err != nil {
-		return gate.Fail(err.Error())
-	}
-	covered, total := 0, 0
-	var findings []string
-	for _, name := range sortedKeys(cov) {
-		hit := 0
-		for _, c := range cov[name].Lines {
-			if c > 0 {
-				hit++
-			}
-		}
-		lines := len(cov[name].Lines)
-		covered, total = covered+hit, total+lines
-		if hit < lines {
-			findings = append(findings, fmt.Sprintf(uncoveredForm, name, lines-hit, lines))
-		}
-	}
-	pct := ratio(covered, total)
-	return gate.Judge(pct >= ws.Policy.Thresholds.LineCoverage, reasonLines, map[string]float64{ValueLineCoverage: pct, ValueLines: float64(total)}, findings)
-}
-
-func Branches(_ context.Context, ws gate.Workspace) gate.Outcome {
-	cov, err := loadCoverage(ws)
-	if err != nil {
-		return gate.Fail(err.Error())
-	}
-	covered, total := 0, 0
-	for _, f := range cov {
-		covered, total = covered+f.CoveredBranches, total+f.Branches
-	}
-	pct := ratio(covered, total)
-	return gate.Judge(pct >= ws.Policy.Thresholds.BranchCoverage, reasonBranches, map[string]float64{ValueBranchCover: pct, ValueBranches: float64(total)}, nil)
 }
 
 func Passed(_ context.Context, ws gate.Workspace) (map[string]bool, error) {

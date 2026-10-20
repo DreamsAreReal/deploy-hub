@@ -2,10 +2,8 @@ package dotnet
 
 import (
 	"context"
-	"encoding/json"
 	"encoding/xml"
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"path"
@@ -17,30 +15,22 @@ import (
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/junit"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/linecov"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/source"
 )
 
 const (
-	TRXReport         = "results.trx"
-	CoverageReport    = "coverage.json"
-	resultsDir        = "results"
-	coberturaFile     = "coverage.cobertura.xml"
-	fuzzPrefix        = "fuzz-"
-	ValueLineCoverage = "line_coverage"
-	ValueBranchCover  = "branch_coverage"
-	ValueLines        = "lines"
-	ValueBranches     = "branches"
-	percentScale      = 100
-	outcomePassed     = "Passed"
-	outcomeFailed     = "Failed"
-	envFuzzBudget     = "CsCheck_Iter="
-	reasonLines       = "line coverage is below the policy threshold"
-	reasonBranches    = "branch coverage is below the policy threshold"
-	reasonFuzz        = "property-based fuzz tests failed"
-	reasonNoFuzz      = "no fuzz targets: tests must use a property-based library (CsCheck or FsCheck)"
-	reasonNoReport    = "dotnet test produced no report"
-	uncoveredForm     = "%s: %d of %d lines uncovered"
-	coveragePerm      = 0o600
-	sexagesimal       = 60
+	TRXReport      = "results.trx"
+	resultsDir     = "results"
+	coberturaFile  = "coverage.cobertura.xml"
+	fuzzPrefix     = "fuzz-"
+	outcomePassed  = "Passed"
+	outcomeFailed  = "Failed"
+	envFuzzBudget  = "CsCheck_Iter="
+	reasonFuzz     = "property-based fuzz tests failed"
+	reasonNoFuzz   = "no fuzz targets: tests must use a property-based library (CsCheck or FsCheck)"
+	reasonNoReport = "dotnet test produced no report"
+	sexagesimal    = 60
 )
 
 var (
@@ -102,10 +92,7 @@ func testProps(ws gate.Workspace) []string {
 	return append(analysisProps(ws), quietAnalyzers...)
 }
 
-func Tests(ctx context.Context, ws gate.Workspace) gate.Outcome {
-	if err := prepare(ctx, ws); err != nil {
-		return gate.Fail(err.Error())
-	}
+func runTests(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	args := append([]string{cmdTest, flagNoRestore, "--results-directory", ws.Report(resultsDir), flagLogger, "trx;LogFileName=" + ws.Report(TRXReport),
 		"--collect:XPlat Code Coverage"}, testProps(ws)...)
 	_, runErr := run(ctx, ws, stage(ws), nil, args...)
@@ -117,12 +104,6 @@ func Tests(ctx context.Context, ws gate.Workspace) gate.Outcome {
 		return gate.Fail(cerr.Error())
 	}
 	return junit.Judge(cases, testName)
-}
-
-type fileCoverage struct {
-	Lines           map[int]int `json:"lines"`
-	Branches        int         `json:"branches"`
-	CoveredBranches int         `json:"covered_branches"`
 }
 
 type cobertura struct {
@@ -145,7 +126,7 @@ func exists(p string) bool {
 }
 
 func normalizeCoverage(_ context.Context, ws gate.Workspace) error {
-	cov := map[string]*fileCoverage{}
+	cov := linecov.Report{}
 	branches := map[branchKey][2]int{}
 	err := filepath.WalkDir(ws.Report(resultsDir), func(p string, d fs.DirEntry, werr error) error {
 		if werr != nil || d.IsDir() || d.Name() != coberturaFile {
@@ -160,11 +141,7 @@ func normalizeCoverage(_ context.Context, ws gate.Workspace) error {
 		fc := cov[key.file]
 		fc.CoveredBranches, fc.Branches = fc.CoveredBranches+counts[0], fc.Branches+counts[1]
 	}
-	data, err := json.Marshal(cov)
-	if err == nil {
-		err = os.WriteFile(ws.Report(CoverageReport), data, coveragePerm)
-	}
-	return err
+	return cov.Save(ws)
 }
 
 type branchKey struct {
@@ -181,7 +158,7 @@ type coberturaClass = struct {
 	} `xml:"lines>line"`
 }
 
-func mergeCobertura(ws gate.Workspace, file string, cov map[string]*fileCoverage, branches map[branchKey][2]int) error {
+func mergeCobertura(ws gate.Workspace, file string, cov linecov.Report, branches map[branchKey][2]int) error {
 	data, err := os.ReadFile(filepath.Clean(file))
 	var report cobertura
 	if err == nil {
@@ -193,12 +170,8 @@ func mergeCobertura(ws gate.Workspace, file string, cov map[string]*fileCoverage
 	return err
 }
 
-func mergeClass(name string, c coberturaClass, cov map[string]*fileCoverage, branches map[branchKey][2]int) {
-	fc := cov[name]
-	if fc == nil {
-		fc = &fileCoverage{Lines: map[int]int{}}
-		cov[name] = fc
-	}
+func mergeClass(name string, c coberturaClass, cov linecov.Report, branches map[branchKey][2]int) {
+	fc := cov.File(name)
 	for _, l := range c.Lines {
 		fc.Lines[l.Number] = max(fc.Lines[l.Number], l.Hits)
 		m := conditionCoverage.FindStringSubmatch(l.Condition)
@@ -212,74 +185,8 @@ func mergeClass(name string, c coberturaClass, cov map[string]*fileCoverage, bra
 	}
 }
 
-func loadCoverage(ws gate.Workspace) (map[string]*fileCoverage, error) {
-	cov := map[string]*fileCoverage{}
-	data, err := os.ReadFile(ws.Report(CoverageReport))
-	if err != nil {
-		return nil, fmt.Errorf("coverage report missing: run the tests check first: %w", err)
-	}
-	return cov, json.Unmarshal(data, &cov)
-}
-
-func ratio(part, whole int) float64 {
-	if whole == 0 {
-		return percentScale
-	}
-	return float64(part) * percentScale / float64(whole)
-}
-
-func LineCoverage(_ context.Context, ws gate.Workspace) gate.Outcome {
-	cov, err := loadCoverage(ws)
-	if err != nil {
-		return gate.Fail(err.Error())
-	}
-	names := make([]string, 0, len(cov))
-	for name := range cov {
-		names = append(names, name)
-	}
-	slices.Sort(names)
-	covered, total := 0, 0
-	var findings []string
-	for _, name := range names {
-		hit := hitLines(cov[name].Lines)
-		lines := len(cov[name].Lines)
-		covered, total = covered+hit, total+lines
-		if hit < lines {
-			findings = append(findings, fmt.Sprintf(uncoveredForm, name, lines-hit, lines))
-		}
-	}
-	pct := ratio(covered, total)
-	return gate.Judge(pct >= ws.Policy.Thresholds.LineCoverage, reasonLines, map[string]float64{ValueLineCoverage: pct, ValueLines: float64(total)}, findings)
-}
-
-func hitLines(lines map[int]int) int {
-	hit := 0
-	for _, h := range lines {
-		if h > 0 {
-			hit++
-		}
-	}
-	return hit
-}
-
-func Branches(_ context.Context, ws gate.Workspace) gate.Outcome {
-	cov, err := loadCoverage(ws)
-	if err != nil {
-		return gate.Fail(err.Error())
-	}
-	covered, total := 0, 0
-	for _, f := range cov {
-		covered, total = covered+f.CoveredBranches, total+f.Branches
-	}
-	pct := ratio(covered, total)
-	return gate.Judge(pct >= ws.Policy.Thresholds.BranchCoverage, reasonBranches, map[string]float64{ValueBranchCover: pct, ValueBranches: float64(total)}, nil)
-}
-
-func Fuzz(ctx context.Context, ws gate.Workspace) gate.Outcome {
-	if err := prepare(ctx, ws); err != nil {
-		return gate.Fail(err.Error())
-	}
-	locks, err := trackedFiles(ctx, ws, func(f string) bool { return path.Base(f) == lockFile })
+func runFuzz(ctx context.Context, ws gate.Workspace) gate.Outcome {
+	locks, err := source.Select(ctx, ws, func(f string) bool { return path.Base(f) == lockFile })
 	if err != nil {
 		return gate.Fail(err.Error())
 	}

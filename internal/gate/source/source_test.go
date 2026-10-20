@@ -172,6 +172,17 @@ func TestCopyTracked(t *testing.T) {
 	testutil.Perm(t, filepath.Join(dest, "c.txt"), copyFilePerm)
 }
 
+func TestSelectFiltersTrackedFiles(t *testing.T) {
+	ws := repo(t, map[string]string{fileNested: pkgA, "notes.md": "c"})
+	testutil.Write(t, filepath.Join(ws.Src, "untracked.go"), "package u\n")
+	files, err := Select(context.Background(), ws, func(f string) bool { return filepath.Ext(f) == ".go" })
+	testutil.NoErr(t, err)
+	testutil.Equal(t, files, []string{fileNested})
+	ws.Src = t.TempDir()
+	_, err = Select(context.Background(), ws, func(string) bool { return true })
+	testutil.Contains(t, err.Error(), "git ls-files")
+}
+
 func TestCopyTrackedFailures(t *testing.T) {
 	ws := repo(t, map[string]string{fileNested: pkgA})
 	blocker := filepath.Join(t.TempDir(), "file")

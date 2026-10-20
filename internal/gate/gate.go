@@ -60,6 +60,12 @@ func Fail(reason string, findings ...string) Outcome {
 	return Outcome{Status: StatusFail, Reason: reason, Findings: findings}
 }
 
+func NotApplicable(reason string) func(context.Context, Workspace) Outcome {
+	return func(context.Context, Workspace) Outcome {
+		return Outcome{Status: StatusNA, Reason: reason}
+	}
+}
+
 func Judge(ok bool, reason string, values map[string]float64, findings []string) Outcome {
 	if ok {
 		return Outcome{Status: StatusPass, Values: values, Findings: findings}
@@ -251,12 +257,16 @@ func Tail(s string) string {
 }
 
 func (ws Workspace) Rel(path string) string {
-	roots := []string{ws.Src}
-	if resolved, err := filepath.EvalSymlinks(ws.Src); err == nil {
+	return RelTo(ws.Src, path)
+}
+
+func RelTo(root, path string) string {
+	roots := []string{root}
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
 		roots = append(roots, resolved)
 	}
-	for _, root := range roots {
-		if rel, ok := strings.CutPrefix(path, root+string(filepath.Separator)); ok {
+	for _, r := range roots {
+		if rel, ok := strings.CutPrefix(path, r+string(filepath.Separator)); ok {
 			return filepath.ToSlash(rel)
 		}
 	}

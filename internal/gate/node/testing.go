@@ -5,9 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"slices"
@@ -17,46 +15,37 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/junit"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/lexis"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/linecov"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/source"
 )
 
 const (
-	JUnitReport       = "junit.xml"
-	JestReport        = "jest.json"
-	CoverageReport    = "coverage.json"
-	coverageDir       = "coverage"
-	istanbulFile      = "coverage-final.json"
-	lcovFile          = "lcov.info"
-	v8Dir             = "v8"
-	fuzzPrefix        = "fuzz-"
-	ValueLineCoverage = "line_coverage"
-	ValueBranchCover  = "branch_coverage"
-	ValueLines        = "lines"
-	ValueBranches     = "branches"
-	ValueFuzzFiles    = "fuzz_files"
-	percentScale      = 100
-	fastCheck         = "fast-check"
-	idSeparator       = " > "
-	reasonLines       = "line coverage is below the policy threshold"
-	reasonBranches    = "branch coverage is below the policy threshold"
-	reasonFuzz        = "property-based fuzz tests failed"
-	reasonNoFuzz      = "no fuzz targets: input handlers and parsers must have fast-check property tests"
-	reasonNoReport    = "the test runner produced no report"
-	uncoveredForm     = "%s: %d of %d lines uncovered"
-	envFuzzRuns       = "DEPLOY_HUB_FUZZ_RUNS="
-	envNodeOptions    = "NODE_OPTIONS=--import="
-	coveragePerm      = 0o600
-	flagJUnit         = "--reporter=junit"
-	flagCI            = "--ci"
-	flagJSON          = "--json"
-	flagBail          = "--bail"
-	flagReporter      = "--reporter"
-	flagTest          = "--test"
-	cmdRun            = "run"
-	reporterXUnit     = "xunit"
-	lcovEnd           = "end_of_record"
-	flagReporterOpt   = "--reporter-option"
-	flagTestJUnit     = "--test-reporter=junit"
+	JUnitReport     = "junit.xml"
+	JestReport      = "jest.json"
+	coverageDir     = "coverage"
+	istanbulFile    = "coverage-final.json"
+	lcovFile        = "lcov.info"
+	v8Dir           = "v8"
+	fuzzPrefix      = "fuzz-"
+	ValueFuzzFiles  = "fuzz_files"
+	fastCheck       = "fast-check"
+	idSeparator     = " > "
+	reasonFuzz      = "property-based fuzz tests failed"
+	reasonNoFuzz    = "no fuzz targets: input handlers and parsers must have fast-check property tests"
+	reasonNoReport  = "the test runner produced no report"
+	envFuzzRuns     = "DEPLOY_HUB_FUZZ_RUNS="
+	envNodeOptions  = "NODE_OPTIONS=--import="
+	flagJUnit       = "--reporter=junit"
+	flagCI          = "--ci"
+	flagJSON        = "--json"
+	flagBail        = "--bail"
+	flagReporter    = "--reporter"
+	flagTest        = "--test"
+	cmdRun          = "run"
+	reporterXUnit   = "xunit"
+	lcovEnd         = "end_of_record"
+	flagReporterOpt = "--reporter-option"
+	flagTestJUnit   = "--test-reporter=junit"
 )
 
 type adapter struct {
@@ -141,10 +130,7 @@ func withCoverageProvider(ctx context.Context, ws gate.Workspace, r runner) erro
 	return err
 }
 
-func Tests(ctx context.Context, ws gate.Workspace) gate.Outcome {
-	if err := prepare(ctx, ws); err != nil {
-		return gate.Fail(err.Error())
-	}
+func runTests(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	r, err := project(ws)
 	if err == nil {
 		err = withCoverageProvider(ctx, ws, r)
@@ -222,23 +208,8 @@ func testID(ws gate.Workspace) func(junit.Case) string {
 	}
 }
 
-type fileCoverage struct {
-	Lines           map[int]int `json:"lines"`
-	Branches        int         `json:"branches"`
-	CoveredBranches int         `json:"covered_branches"`
-}
-
-type coverage map[string]*fileCoverage
-
-func (c coverage) file(name string) *fileCoverage {
-	if c[name] == nil {
-		c[name] = &fileCoverage{Lines: map[int]int{}}
-	}
-	return c[name]
-}
-
 func normalizeCoverage(ctx context.Context, ws gate.Workspace) error {
-	cov := coverage{}
+	cov := linecov.Report{}
 	if err := readIstanbul(ws, cov); err != nil {
 		return err
 	}
@@ -248,14 +219,10 @@ func normalizeCoverage(ctx context.Context, ws gate.Workspace) error {
 	if err := addUnloaded(ctx, ws, cov); err != nil {
 		return err
 	}
-	data, err := json.Marshal(cov)
-	if err == nil {
-		err = os.WriteFile(ws.Report(CoverageReport), data, coveragePerm)
-	}
-	return err
+	return cov.Save(ws)
 }
 
-func readIstanbul(ws gate.Workspace, cov coverage) error {
+func readIstanbul(ws gate.Workspace, cov linecov.Report) error {
 	data, err := os.ReadFile(filepath.Join(ws.Report(coverageDir), istanbulFile))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -273,7 +240,7 @@ func readIstanbul(ws gate.Workspace, cov coverage) error {
 		err = json.Unmarshal(data, &files)
 	}
 	for name, f := range files {
-		fc := cov.file(rel(ws, name))
+		fc := cov.File(rel(ws, name))
 		for id, st := range f.StatementMap {
 			fc.Lines[st.Start.Line] = max(fc.Lines[st.Start.Line], f.S[id])
 		}
@@ -295,7 +262,7 @@ func countPositive(values []int) int {
 	return n
 }
 
-func readLcov(ws gate.Workspace, cov coverage) error {
+func readLcov(ws gate.Workspace, cov linecov.Report) error {
 	f, err := os.Open(ws.Report(lcovFile))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -304,7 +271,7 @@ func readLcov(ws gate.Workspace, cov coverage) error {
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	var current *fileCoverage
+	var current *linecov.File
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		current = lcovLine(ws, cov, current, sc.Text())
@@ -312,12 +279,12 @@ func readLcov(ws gate.Workspace, cov coverage) error {
 	return sc.Err()
 }
 
-func lcovLine(ws gate.Workspace, cov coverage, current *fileCoverage, line string) *fileCoverage {
+func lcovLine(ws gate.Workspace, cov linecov.Report, current *linecov.File, line string) *linecov.File {
 	key, value, _ := strings.Cut(line, ":")
 	fields := strings.Split(value, ",")
 	switch {
 	case key == "SF":
-		return cov.file(rel(ws, filepath.Join(stage(ws), value)))
+		return cov.File(rel(ws, filepath.Join(stage(ws), value)))
 	case current == nil || key == lcovEnd:
 		return nil
 	case key == "DA" && len(fields) >= 2:
@@ -333,7 +300,7 @@ func lcovLine(ws gate.Workspace, cov coverage, current *fileCoverage, line strin
 	return current
 }
 
-func addUnloaded(ctx context.Context, ws gate.Workspace, cov coverage) error {
+func addUnloaded(ctx context.Context, ws gate.Workspace, cov linecov.Report) error {
 	files, err := productionFiles(ctx, ws)
 	for _, f := range files {
 		if cov[f] != nil {
@@ -343,7 +310,7 @@ func addUnloaded(ctx context.Context, ws gate.Workspace, cov coverage) error {
 		if rerr != nil {
 			return rerr
 		}
-		fc := cov.file(f)
+		fc := cov.File(f)
 		for _, line := range codeLines(f, data) {
 			fc.Lines[line] = 0
 		}
@@ -373,75 +340,10 @@ func isConfig(rel string) bool {
 }
 
 func productionFiles(ctx context.Context, ws gate.Workspace) ([]string, error) {
-	files, err := source.Tracked(ctx, ws.Exec, ws.Src)
-	var out []string
-	for _, f := range files {
-		if slices.Contains(Sources, path.Ext(f)) && !isTest(f) && !isConfig(f) {
-			out = append(out, f)
-		}
-	}
-	return out, err
+	return source.Select(ctx, ws, func(f string) bool { return slices.Contains(Sources, path.Ext(f)) && !isTest(f) && !isConfig(f) })
 }
 
-func loadCoverage(ws gate.Workspace) (coverage, error) {
-	cov := coverage{}
-	data, err := os.ReadFile(ws.Report(CoverageReport))
-	if err != nil {
-		return nil, fmt.Errorf("coverage report missing: run the tests check first: %w", err)
-	}
-	return cov, json.Unmarshal(data, &cov)
-}
-
-func ratio(part, whole int) float64 {
-	if whole == 0 {
-		return percentScale
-	}
-	return float64(part) * percentScale / float64(whole)
-}
-
-func LineCoverage(_ context.Context, ws gate.Workspace) gate.Outcome {
-	cov, err := loadCoverage(ws)
-	if err != nil {
-		return gate.Fail(err.Error())
-	}
-	covered, total := 0, 0
-	var findings []string
-	for _, name := range sortedKeys(cov) {
-		lines := cov[name].Lines
-		hit := 0
-		for _, h := range lines {
-			if h > 0 {
-				hit++
-			}
-		}
-		covered, total = covered+hit, total+len(lines)
-		if hit < len(lines) {
-			findings = append(findings, fmt.Sprintf(uncoveredForm, name, len(lines)-hit, len(lines)))
-		}
-	}
-	pct := ratio(covered, total)
-	values := map[string]float64{ValueLineCoverage: pct, ValueLines: float64(total)}
-	return gate.Judge(pct >= ws.Policy.Thresholds.LineCoverage, reasonLines, values, findings)
-}
-
-func Branches(_ context.Context, ws gate.Workspace) gate.Outcome {
-	cov, err := loadCoverage(ws)
-	if err != nil {
-		return gate.Fail(err.Error())
-	}
-	covered, total := 0, 0
-	for _, f := range cov {
-		covered, total = covered+f.CoveredBranches, total+f.Branches
-	}
-	pct := ratio(covered, total)
-	values := map[string]float64{ValueBranchCover: pct, ValueBranches: float64(total)}
-	return gate.Judge(pct >= ws.Policy.Thresholds.BranchCoverage, reasonBranches, values, nil)
-}
-
-func Fuzz(ctx context.Context, ws gate.Workspace) gate.Outcome {
-	if err := prepare(ctx, ws); err != nil {
-		return gate.Fail(err.Error())
-	}
+func runFuzz(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	files, err := fuzzFiles(ctx, ws)
 	if err != nil {
 		return gate.Fail(err.Error())
@@ -468,12 +370,9 @@ func Fuzz(ctx context.Context, ws gate.Workspace) gate.Outcome {
 }
 
 func fuzzFiles(ctx context.Context, ws gate.Workspace) ([]string, error) {
-	files, err := source.Tracked(ctx, ws.Exec, ws.Src)
+	files, err := source.Select(ctx, ws, func(f string) bool { return isTest(f) && slices.Contains(Sources, path.Ext(f)) })
 	var out []string
 	for _, f := range files {
-		if !isTest(f) || !slices.Contains(Sources, path.Ext(f)) {
-			continue
-		}
 		data, rerr := os.ReadFile(filepath.Join(ws.Src, filepath.FromSlash(f)))
 		if rerr != nil {
 			return nil, rerr
@@ -495,12 +394,4 @@ func Passed(ctx context.Context, ws gate.Workspace) (map[string]bool, error) {
 		return nil, err
 	}
 	return junit.Passed(cases, testID(ws)), nil
-}
-
-func exitCode(err error) int {
-	var exit *exec.ExitError
-	if errors.As(err, &exit) {
-		return exit.ExitCode()
-	}
-	return 0
 }

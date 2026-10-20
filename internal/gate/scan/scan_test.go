@@ -27,32 +27,12 @@ const (
 	gateImage  = "app:gate"
 )
 
-type reply struct {
-	res procexec.Result
-	err error
-	run func(c procexec.Command)
-}
+type (
+	reply  = procexectest.Reply
+	script = procexectest.Script
+)
 
-type script map[string]reply
-
-func (s script) handle(c procexec.Command) (procexec.Result, error) {
-	line := procexectest.Line(c)
-	best := ""
-	for prefix := range s {
-		if strings.HasPrefix(line, prefix) && len(prefix) > len(best) {
-			best = prefix
-		}
-	}
-	if best == "" {
-		return procexec.Result{}, errors.New("unexpected command: " + line)
-	}
-	if s[best].run != nil {
-		s[best].run(c)
-	}
-	return s[best].res, s[best].err
-}
-
-func ok(stdout string) reply { return reply{res: procexec.Result{Stdout: stdout}} }
+func ok(stdout string) reply { return reply{Res: procexec.Result{Stdout: stdout}} }
 
 func workspace(t *testing.T, s script) gate.Workspace {
 	t.Helper()
@@ -60,7 +40,7 @@ func workspace(t *testing.T, s script) gate.Workspace {
 	testutil.Mkdir(t, filepath.Join(src, ".github"))
 	return gate.Workspace{
 		Src: src, Out: t.TempDir(), PolicyDir: "/policy", Module: "example.com/app",
-		Exec: &procexectest.Fake{Handler: s.handle}, Log: slog.New(slog.DiscardHandler),
+		Exec: &procexectest.Fake{Handler: s.Handle}, Log: slog.New(slog.DiscardHandler),
 		Policy: policy.Policy{
 			Licenses: []string{mit, apache2, bsd3}, SASTRules: []string{"p/default", "p/golang"},
 			Images: policy.Images{Semgrep: "semgrep/semgrep@sha256:abc", ZAP: "zap@sha256:def"},
@@ -84,20 +64,20 @@ func writeReport(content string) func(c procexec.Command) {
 func TestGitleaks(t *testing.T) {
 	leak := `[{"RuleID":"aws-access-token","File":"cfg.yml","StartLine":3,"Commit":"0123456789abcdef"}]`
 	out := Gitleaks(context.Background(), workspace(t, script{
-		GitleaksBinary + " git": {run: writeReport(leak)},
-		GitleaksBinary + " dir": {run: writeReport(`[{"RuleID":"jwt","File":"x.env","StartLine":1,"Commit":"abc"}]`)},
+		GitleaksBinary + " git": {Run: writeReport(leak)},
+		GitleaksBinary + " dir": {Run: writeReport(`[{"RuleID":"jwt","File":"x.env","StartLine":1,"Commit":"abc"}]`)},
 	}))
 	testutil.Equal(t, out.Findings, []string{"aws-access-token cfg.yml:3 (commit 01234567)", "jwt x.env:1 (commit abc)"})
-	clean := Gitleaks(context.Background(), workspace(t, script{GitleaksBinary: {run: writeReport("[]")}}))
+	clean := Gitleaks(context.Background(), workspace(t, script{GitleaksBinary: {Run: writeReport("[]")}}))
 	testutil.Equal(t, clean.Status, gate.StatusPass)
-	testutil.Contains(t, Gitleaks(context.Background(), workspace(t, script{GitleaksBinary: {err: errExit}})).Reason, GitleaksBinary+" git")
+	testutil.Contains(t, Gitleaks(context.Background(), workspace(t, script{GitleaksBinary: {Err: errExit}})).Reason, GitleaksBinary+" git")
 	testutil.Contains(t, Gitleaks(context.Background(), workspace(t, script{GitleaksBinary: ok("")})).Reason, "report unreadable: open ")
-	testutil.Contains(t, Gitleaks(context.Background(), workspace(t, script{GitleaksBinary: {run: writeReport("{")}})).Reason, "report unreadable")
+	testutil.Contains(t, Gitleaks(context.Background(), workspace(t, script{GitleaksBinary: {Run: writeReport("{")}})).Reason, "report unreadable")
 }
 
 func TestTrufflehog(t *testing.T) {
 	line := `{"DetectorName":"Github","Verified":true,"SourceMetadata":{"Data":{"Git":{"file":"a.go","line":7,"commit":"abcdef0123456"}}}}`
-	out := Trufflehog(context.Background(), workspace(t, script{TrufflehogBinary + " git": {res: procexec.Result{Stdout: line + "\n\n"}, err: errExit}}))
+	out := Trufflehog(context.Background(), workspace(t, script{TrufflehogBinary + " git": {Res: procexec.Result{Stdout: line + "\n\n"}, Err: errExit}}))
 	testutil.Equal(t, out.Findings, []string{"Github a.go:7 (commit abcdef01) verified=true"})
 	testutil.Equal(t, Trufflehog(context.Background(), workspace(t, script{TrufflehogBinary: ok("")})).Status, gate.StatusPass)
 	testutil.Contains(t, Trufflehog(context.Background(), workspace(t, script{TrufflehogBinary: ok("not json")})).Reason, "unreadable")
@@ -120,10 +100,10 @@ func TestSAST(t *testing.T) {
 	var staged string
 	w.Exec = &procexectest.Fake{Handler: script{
 		gitList: ok("main.go\x00.semgrepignore\x00"),
-		dockerRun + " --rm -v": {res: procexec.Result{Stdout: report}, err: errExit, run: func(procexec.Command) {
+		dockerRun + " --rm -v": {Res: procexec.Result{Stdout: report}, Err: errExit, Run: func(procexec.Command) {
 			staged = testutil.Read(t, filepath.Join(w.Report(semgrepCopy), semgrepIgnore))
 		}},
-	}.handle}
+	}.Handle}
 	out := SAST(context.Background(), w)
 	testutil.Equal(t, out.Findings, []string{"ERROR go.exec main.go:3", "semgrep could not analyse /src/big.go: timeout"})
 	testutil.Equal(t, out.Values[ValueSASTScanned], float64(1))
@@ -132,10 +112,10 @@ func TestSAST(t *testing.T) {
 	testutil.Contains(t, call, w.Report(semgrepCopy)+":/src:ro", "semgrep/semgrep@sha256:abc semgrep scan", "--config p/default --config p/golang /src")
 	clean := workspace(t, script{gitList: ok(""), dockerRun: ok(`{"results":[],"errors":[],"paths":{"scanned":["a"]}}`)})
 	testutil.Equal(t, SAST(context.Background(), clean).Status, gate.StatusPass)
-	crashed := workspace(t, script{gitList: ok(""), dockerRun: {res: procexec.Result{Stderr: "pull denied"}, err: errExit}})
+	crashed := workspace(t, script{gitList: ok(""), dockerRun: {Res: procexec.Result{Stderr: "pull denied"}, Err: errExit}})
 	testutil.Contains(t, SAST(context.Background(), crashed).Reason, "unreadable")
-	testutil.Contains(t, SAST(context.Background(), workspace(t, script{gitList: {err: errExit}})).Reason, "cannot stage sources")
-	toolErr := workspace(t, script{gitList: ok(""), dockerRun: {res: procexec.Result{Stdout: `{"results":[]}`}, err: errExit}})
+	testutil.Contains(t, SAST(context.Background(), workspace(t, script{gitList: {Err: errExit}})).Reason, "cannot stage sources")
+	toolErr := workspace(t, script{gitList: ok(""), dockerRun: {Res: procexec.Result{Stdout: `{"results":[]}`}, Err: errExit}})
 	testutil.Contains(t, SAST(context.Background(), toolErr).Reason, "tool failed")
 }
 
@@ -155,28 +135,28 @@ func TestSASTStagingFailures(t *testing.T) {
 
 func TestSCA(t *testing.T) {
 	report := `{"results":[{"source":{"path":"/r/go.mod"},"packages":[{"package":{"name":"golang.org/x/net","version":"0.1.0"},"vulnerabilities":[{"id":"GO-1"},{"id":"GHSA-x"}]}]}]}`
-	out := SCA(context.Background(), workspace(t, script{OSVBinary + " scan source": {res: procexec.Result{Stdout: report}, err: errExit}}))
+	out := SCA(context.Background(), workspace(t, script{OSVBinary + " scan source": {Res: procexec.Result{Stdout: report}, Err: errExit}}))
 	testutil.Equal(t, out.Findings, []string{"GO-1 golang.org/x/net@0.1.0 (/r/go.mod)", "GHSA-x golang.org/x/net@0.1.0 (/r/go.mod)"})
 	testutil.Equal(t, SCA(context.Background(), workspace(t, script{OSVBinary: ok(`{"results":[]}`)})).Status, gate.StatusPass)
-	testutil.Contains(t, SCA(context.Background(), workspace(t, script{OSVBinary: {err: errExit}})).Reason, "unreadable")
+	testutil.Contains(t, SCA(context.Background(), workspace(t, script{OSVBinary: {Err: errExit}})).Reason, "unreadable")
 }
 
 func TestWorkflows(t *testing.T) {
 	ziz := `[{"ident":"excessive-permissions","determinations":{"severity":"Medium"},"locations":[{"symbolic":{"key":{"Local":{"verbatim_path":"SRC/.github/workflows/ci.yml"}}},"concrete":{"location":{"start_point":{"row":4}}}}]},{"ident":"x","determinations":{"severity":"Low"},"locations":[]}]`
 	w := workspace(t, nil)
 	w.Exec = &procexectest.Fake{Handler: script{
-		ZizmorBinary:     {res: procexec.Result{Stdout: strings.ReplaceAll(ziz, "SRC", w.Src)}, err: errExit},
-		ActionlintBinary: {res: procexec.Result{Stdout: `[{"message":"bad expr","filepath":"ci.yml","line":9,"kind":"expression"}]`}, err: errExit},
-	}.handle}
+		ZizmorBinary:     {Res: procexec.Result{Stdout: strings.ReplaceAll(ziz, "SRC", w.Src)}, Err: errExit},
+		ActionlintBinary: {Res: procexec.Result{Stdout: `[{"message":"bad expr","filepath":"ci.yml","line":9,"kind":"expression"}]`}, Err: errExit},
+	}.Handle}
 	out := Workflows(context.Background(), w)
 	testutil.Equal(t, out.Findings, []string{"Medium excessive-permissions .github/workflows/ci.yml:5", "Low x :0", "ci.yml:9: bad expr (expression)"})
 	testutil.Contains(t, procexectest.LinesOf(w.Exec)[0], "--persona=auditor", "--config /policy/workflow-audit.yml")
 	clean := workspace(t, script{ZizmorBinary: ok("[]"), ActionlintBinary: ok("[]")})
 	testutil.Equal(t, Workflows(context.Background(), clean).Status, gate.StatusPass)
-	testutil.Contains(t, Workflows(context.Background(), workspace(t, script{ZizmorBinary: {err: errExit}})).Reason, "unreadable")
-	lintCrash := workspace(t, script{ZizmorBinary: ok("[]"), ActionlintBinary: {res: procexec.Result{Stderr: "no project"}, err: errExit}})
+	testutil.Contains(t, Workflows(context.Background(), workspace(t, script{ZizmorBinary: {Err: errExit}})).Reason, "unreadable")
+	lintCrash := workspace(t, script{ZizmorBinary: ok("[]"), ActionlintBinary: {Res: procexec.Result{Stderr: "no project"}, Err: errExit}})
 	testutil.Contains(t, Workflows(context.Background(), lintCrash).Reason, "unreadable")
-	lintErr := workspace(t, script{ZizmorBinary: ok("[]"), ActionlintBinary: {res: procexec.Result{Stdout: "[]"}, err: errExit}})
+	lintErr := workspace(t, script{ZizmorBinary: ok("[]"), ActionlintBinary: {Res: procexec.Result{Stdout: "[]"}, Err: errExit}})
 	testutil.Contains(t, Workflows(context.Background(), lintErr).Reason, "tool failed")
 	bare := workspace(t, nil)
 	testutil.NoErr(t, os.Remove(filepath.Join(bare.Src, ".github")))
@@ -198,7 +178,7 @@ func TestDockerfiles(t *testing.T) {
 	testutil.Equal(t, out.Findings, []string{"Dockerfile:1: DL3007 latest tag (warning)"})
 	testutil.Equal(t, procexectest.LinesOf(w.Exec)[1], "hadolint --no-fail --format json Dockerfile")
 	testutil.Equal(t, Dockerfiles(context.Background(), workspace(t, script{gitList: ok("main.go\x00")})).Reason, reasonNoDocker)
-	testutil.Equal(t, Dockerfiles(context.Background(), workspace(t, script{gitList: {err: errExit}})).Status, gate.StatusFail)
+	testutil.Equal(t, Dockerfiles(context.Background(), workspace(t, script{gitList: {Err: errExit}})).Status, gate.StatusFail)
 	clean := workspace(t, script{gitList: ok("Dockerfile.prod\x00"), HadolintBinary: ok("[]")})
 	testutil.Equal(t, Dockerfiles(context.Background(), clean).Status, gate.StatusPass)
 }
@@ -258,7 +238,7 @@ func TestIaCAndImage(t *testing.T) {
 	testutil.Equal(t, out.Findings, []string{"HIGH DS002 Dockerfile:1: root user", "CVE-1 libc@1.0 (app (alpine) LOW)", "CRITICAL aws app (alpine):2: secret"})
 	testutil.Contains(t, procexectest.LinesOf(w.Exec)[0], "--severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL", w.Src)
 	testutil.Equal(t, Image(context.Background(), workspace(t, nil)).Reason, reasonNoImage)
-	img := workspace(t, script{TrivyBinary + " image": ok(`{"Results":[]}`), dockerSave: {run: saveImage}})
+	img := workspace(t, script{TrivyBinary + " image": ok(`{"Results":[]}`), dockerSave: {Run: saveImage}})
 	img.Image = gateImage
 	testutil.Equal(t, Image(context.Background(), img).Status, gate.StatusPass)
 	lines := procexectest.LinesOf(img.Exec)
@@ -266,7 +246,7 @@ func TestIaCAndImage(t *testing.T) {
 	testutil.Contains(t, lines[1], "--scanners vuln,secret,misconfig", "--input "+img.Report(ImageArchive))
 	testutil.Equal(t, Image(context.Background(), img).Status, gate.StatusPass)
 	testutil.Equal(t, len(procexectest.LinesOf(img.Exec)), 3)
-	noSave := workspace(t, script{dockerSave: {err: errExit}})
+	noSave := workspace(t, script{dockerSave: {Err: errExit}})
 	noSave.Image = gateImage
 	testutil.Contains(t, Image(context.Background(), noSave).Reason, "docker save "+gateImage)
 	testutil.Contains(t, IaC(context.Background(), workspace(t, script{TrivyBinary: ok("{")})).Reason, "unreadable")
@@ -303,8 +283,8 @@ func TestSBOMAndLicenses(t *testing.T) {
 {"name":"action","purl":"pkg:github/actions/checkout@v4"},
 {"name":"os","purl":"pkg:deb/debian/libc@1"}]}`
 	w := workspace(t, script{
-		SyftBinary + " scan dir:": {run: writeSBOM(source)}, SyftBinary + " scan docker-archive:": {run: writeSBOM(`{"components":[{"name":"busybox","purl":"pkg:apk/busybox@1"}]}`)},
-		dockerSave: {run: saveImage}, gitBinary: ok("pyproject.toml\x00web/package.json\x00README.md\x00"),
+		SyftBinary + " scan dir:": {Run: writeSBOM(source)}, SyftBinary + " scan docker-archive:": {Run: writeSBOM(`{"components":[{"name":"busybox","purl":"pkg:apk/busybox@1"}]}`)},
+		dockerSave: {Run: saveImage}, gitBinary: ok("pyproject.toml\x00web/package.json\x00README.md\x00"),
 	})
 	testutil.Write(t, filepath.Join(w.Src, "pyproject.toml"), "[tool.x]\nname = \"no\"\n\n[project]\nversion = \"0.1.0\"\nname = \"My_App\"\n")
 	testutil.Write(t, filepath.Join(w.Src, "web", "package.json"), `{"name":"@scope/web"}`)
@@ -326,19 +306,19 @@ func TestSBOMAndLicenses(t *testing.T) {
 	testutil.Missing(t, w.Report(trackedCopy))
 	testutil.Equal(t, manifestPurls("package.json", []byte("{")), []string(nil))
 	testutil.Equal(t, manifestPurls("pyproject.toml", []byte("[tool]\n")), []string(nil))
-	unlisted := workspace(t, script{SyftBinary: {run: writeSBOM(source)}, gitBinary: {err: errExit}})
+	unlisted := workspace(t, script{SyftBinary: {Run: writeSBOM(source)}, gitBinary: {Err: errExit}})
 	testutil.Equal(t, SBOM(context.Background(), unlisted).Status, gate.StatusFail)
-	missing := workspace(t, script{SyftBinary: {run: writeSBOM(source)}, gitBinary: ok("gone.toml\x00")})
+	missing := workspace(t, script{SyftBinary: {Run: writeSBOM(source)}, gitBinary: ok("gone.toml\x00")})
 	testutil.Contains(t, SBOM(context.Background(), missing).Reason, "gone.toml")
-	unsaved := workspace(t, script{SyftBinary: {run: writeSBOM(source)}, dockerSave: {err: errExit}, gitBinary: ok("")})
+	unsaved := workspace(t, script{SyftBinary: {Run: writeSBOM(source)}, dockerSave: {Err: errExit}, gitBinary: ok("")})
 	unsaved.Image = gateImage
 	testutil.Contains(t, SBOM(context.Background(), unsaved).Reason, "docker save")
-	empty := workspace(t, script{SyftBinary: {run: writeSBOM(`{"components":[]}`)}, gitBinary: ok("")})
+	empty := workspace(t, script{SyftBinary: {Run: writeSBOM(`{"components":[]}`)}, gitBinary: ok("")})
 	testutil.Equal(t, SBOM(context.Background(), empty).Reason, reasonEmptySBOM)
-	testutil.Contains(t, SBOM(context.Background(), workspace(t, script{SyftBinary: {err: errExit}, gitBinary: ok("")})).Reason, "syft dir:")
+	testutil.Contains(t, SBOM(context.Background(), workspace(t, script{SyftBinary: {Err: errExit}, gitBinary: ok("")})).Reason, "syft dir:")
 	testutil.Equal(t, SBOM(context.Background(), workspace(t, script{SyftBinary: ok(""), gitBinary: ok("")})).Status, gate.StatusFail)
-	testutil.Contains(t, SBOM(context.Background(), workspace(t, script{SyftBinary: {run: writeSBOM("{")}, gitBinary: ok("")})).Reason, "SBOM unreadable")
-	clean := workspace(t, script{SyftBinary: {run: writeSBOM(`{"components":[{"purl":"pkg:golang/a@v1","licenses":[{"license":{"id":"MIT"}}]}]}`)}, gitBinary: ok("")})
+	testutil.Contains(t, SBOM(context.Background(), workspace(t, script{SyftBinary: {Run: writeSBOM("{")}, gitBinary: ok("")})).Reason, "SBOM unreadable")
+	clean := workspace(t, script{SyftBinary: {Run: writeSBOM(`{"components":[{"purl":"pkg:golang/a@v1","licenses":[{"license":{"id":"MIT"}}]}]}`)}, gitBinary: ok("")})
 	clean.Module = ""
 	testutil.Equal(t, SBOM(context.Background(), clean).Status, gate.StatusPass)
 }

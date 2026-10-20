@@ -6,6 +6,7 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/dotnet"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/golang"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/linecov"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/mutation"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/node"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/pack"
@@ -62,8 +63,8 @@ func shellPack() pack.Pack {
 			pack.CheckComplexity:   shell.Complexity,
 			pack.CheckDeadCode:     shell.DeadCode,
 			pack.CheckTests:        shell.Tests,
-			pack.CheckLineCoverage: shell.LineCoverage,
-			pack.CheckBranches:     shell.Branches,
+			pack.CheckLineCoverage: linecov.LineCoverage,
+			pack.CheckBranches:     linecov.Branches,
 			pack.CheckFuzz:         shell.Fuzz,
 			pack.CheckMutation:     shell.Mutation,
 			pack.CheckVulns:        shell.Dependencies,
@@ -85,8 +86,8 @@ func dotnetPack() pack.Pack {
 			pack.CheckComplexity:   dotnet.Complexity,
 			pack.CheckDeadCode:     dotnet.DeadCode,
 			pack.CheckTests:        dotnet.Tests,
-			pack.CheckLineCoverage: dotnet.LineCoverage,
-			pack.CheckBranches:     dotnet.Branches,
+			pack.CheckLineCoverage: linecov.LineCoverage,
+			pack.CheckBranches:     linecov.Branches,
 			pack.CheckFuzz:         dotnet.Fuzz,
 			pack.CheckMutation:     dotnet.Mutation,
 			pack.CheckVulns:        scan.DependencyVulnerabilities,
@@ -107,8 +108,8 @@ func nodePack() pack.Pack {
 			pack.CheckComplexity:   node.Complexity,
 			pack.CheckDeadCode:     node.DeadCode,
 			pack.CheckTests:        node.Tests,
-			pack.CheckLineCoverage: node.LineCoverage,
-			pack.CheckBranches:     node.Branches,
+			pack.CheckLineCoverage: linecov.LineCoverage,
+			pack.CheckBranches:     linecov.Branches,
 			pack.CheckFuzz:         node.Fuzz,
 			pack.CheckMutation:     node.Mutation,
 			pack.CheckVulns:        scan.DependencyVulnerabilities,

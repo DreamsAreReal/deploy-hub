@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -68,6 +69,11 @@ func Tracked(ctx context.Context, ex procexec.Runner, dir string) ([]string, err
 		}
 	}
 	return files, nil
+}
+
+func Select(ctx context.Context, ws gate.Workspace, keep func(string) bool) ([]string, error) {
+	files, err := Tracked(ctx, ws.Exec, ws.Src)
+	return slices.DeleteFunc(files, func(f string) bool { return !keep(f) }), err
 }
 
 type textFile struct {

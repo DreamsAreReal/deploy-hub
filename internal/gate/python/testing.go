@@ -6,40 +6,34 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/junit"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/linecov"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/source"
+	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
 )
 
 const (
-	JUnitReport       = "junit.xml"
-	CoverageReport    = "coverage.json"
-	coverageData      = ".coverage"
-	coverageConfig    = "coverage.ini"
-	pluginDir         = "plugin"
-	pluginModule      = "deploy_hub_pytest"
-	pluginFile        = pluginModule + Source
-	hypothesisDir     = "hypothesis"
-	ValueLineCoverage = "line_coverage"
-	ValueBranchCover  = "branch_coverage"
-	ValueStatements   = "statements"
-	ValueBranches     = "branches"
-	ValueFuzzTests    = "fuzz_tests"
-	percentScale      = 100
-	exitNoTests       = 5
-	reasonLines       = "line coverage is below the policy threshold"
-	reasonBranches    = "branch coverage is below the policy threshold"
-	reasonFuzz        = "property-based fuzz tests failed"
-	reasonNoFuzz      = "no fuzz targets: input handlers and parsers must have hypothesis property tests"
-	uncoveredForm     = "%s: %d of %d lines uncovered"
-	nodeSeparator     = "::"
-	pluginPerm        = 0o600
-	pluginDirPerm     = 0o700
+	JUnitReport     = "junit.xml"
+	CoverageReport  = "coverage.json"
+	coverageData    = ".coverage"
+	coverageConfig  = "coverage.ini"
+	pluginDir       = "plugin"
+	pluginModule    = "deploy_hub_pytest"
+	pluginFile      = pluginModule + Source
+	hypothesisDir   = "hypothesis"
+	ValueStatements = "statements"
+	ValueFuzzTests  = "fuzz_tests"
+	exitNoTests     = 5
+	reasonFuzz      = "property-based fuzz tests failed"
+	reasonNoFuzz    = "no fuzz targets: input handlers and parsers must have hypothesis property tests"
+	nodeSeparator   = "::"
+	pluginPerm      = 0o600
+	pluginDirPerm   = 0o700
 )
 
 const pluginSource = `import os
@@ -90,10 +84,7 @@ func pytestArgs(extra ...string) []string {
 	return append([]string{flagModule, "pytest", flagPlugin, pluginModule, flagPlugin, "no:cacheprovider", "-o", "addopts=", "-q"}, extra...)
 }
 
-func Tests(ctx context.Context, ws gate.Workspace) gate.Outcome {
-	if err := prepare(ctx, ws); err != nil {
-		return gate.Fail(err.Error())
-	}
+func runTests(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	plugins, err := pluginPath(ws)
 	if err != nil {
 		return gate.Fail(err.Error())
@@ -153,27 +144,18 @@ func loadCoverage(ws gate.Workspace) (coverageJSON, error) {
 	return c, json.Unmarshal(data, &c)
 }
 
-func ratio(part, whole int) float64 {
-	if whole == 0 {
-		return percentScale
-	}
-	return float64(part) * percentScale / float64(whole)
-}
-
 func LineCoverage(_ context.Context, ws gate.Workspace) gate.Outcome {
 	c, err := loadCoverage(ws)
 	if err != nil {
 		return gate.Fail(err.Error())
 	}
-	pct := ratio(c.Totals.CoveredLines, c.Totals.Statements)
 	var findings []string
 	for name, f := range c.Files {
 		if len(f.Missing) > 0 {
-			findings = append(findings, fmt.Sprintf(uncoveredForm, name, len(f.Missing), len(f.Missing)+len(f.Executed)))
+			findings = append(findings, linecov.Uncovered(name, len(f.Missing), len(f.Missing)+len(f.Executed)))
 		}
 	}
-	values := map[string]float64{ValueLineCoverage: pct, ValueStatements: float64(c.Totals.Statements)}
-	return gate.Judge(pct >= ws.Policy.Thresholds.LineCoverage, reasonLines, values, sortedStrings(findings))
+	return linecov.Lines(ws, c.Totals.CoveredLines, c.Totals.Statements, ValueStatements, sortedStrings(findings))
 }
 
 func Branches(_ context.Context, ws gate.Workspace) gate.Outcome {
@@ -181,15 +163,10 @@ func Branches(_ context.Context, ws gate.Workspace) gate.Outcome {
 	if err != nil {
 		return gate.Fail(err.Error())
 	}
-	pct := ratio(c.Totals.CoveredBranches, c.Totals.Branches)
-	values := map[string]float64{ValueBranchCover: pct, ValueBranches: float64(c.Totals.Branches)}
-	return gate.Judge(pct >= ws.Policy.Thresholds.BranchCoverage, reasonBranches, values, nil)
+	return linecov.BranchOutcome(ws, c.Totals.CoveredBranches, c.Totals.Branches)
 }
 
-func Fuzz(ctx context.Context, ws gate.Workspace) gate.Outcome {
-	if err := prepare(ctx, ws); err != nil {
-		return gate.Fail(err.Error())
-	}
+func runFuzz(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	plugins, err := pluginPath(ws)
 	if err != nil {
 		return gate.Fail(err.Error())
@@ -197,7 +174,7 @@ func Fuzz(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	envs := append(testEnv(ws, plugins, ws.Report(hypothesisDir)), fmt.Sprintf("DEPLOY_HUB_FUZZ_EXAMPLES=%d", ws.Policy.Limits.FuzzExamples))
 	report := ws.Report("fuzz-" + JUnitReport)
 	_, runErr := projectEnv(ws).python(ctx, envs, pytestArgs("-m", "hypothesis", "-o", "junit_family=xunit1", "--junitxml="+report)...)
-	if exitCode(runErr) == exitNoTests {
+	if procexec.ExitCode(runErr) == exitNoTests {
 		return gate.Fail(reasonNoFuzz)
 	}
 	cases, lerr := junit.Load(report)
@@ -210,14 +187,6 @@ func Fuzz(ctx context.Context, ws gate.Workspace) gate.Outcome {
 		out.Reason = reasonFuzz
 	}
 	return out
-}
-
-func exitCode(err error) int {
-	var exit *exec.ExitError
-	if errors.As(err, &exit) {
-		return exit.ExitCode()
-	}
-	return 0
 }
 
 func Passed(_ context.Context, ws gate.Workspace) (map[string]bool, error) {
@@ -235,14 +204,7 @@ func isTest(rel string) bool {
 }
 
 func sourceFiles(ctx context.Context, ws gate.Workspace) ([]string, error) {
-	files, err := source.Tracked(ctx, ws.Exec, ws.Src)
-	var out []string
-	for _, f := range files {
-		if path.Ext(f) == Source || path.Ext(f) == Stubs {
-			out = append(out, f)
-		}
-	}
-	return out, err
+	return source.Select(ctx, ws, func(f string) bool { return path.Ext(f) == Source || path.Ext(f) == Stubs })
 }
 
 func sortedStrings(in []string) []string {

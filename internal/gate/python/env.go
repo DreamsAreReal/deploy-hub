@@ -10,6 +10,7 @@ import (
 	"sort"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/pack"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
 )
 
@@ -153,6 +154,15 @@ func (e env) withTestTools(ctx context.Context) error {
 	}
 	return e.install(ctx, filepath.Join(e.ws.PolicyDir, policySub, testReqs))
 }
+
+var (
+	prepared   = pack.Prepared(prepare)
+	Lint       = prepared(runLint)
+	Complexity = prepared(runComplexity)
+	DeadCode   = prepared(runDeadCode)
+	Tests      = prepared(runTests)
+	Fuzz       = prepared(runFuzz)
+)
 
 func prepare(ctx context.Context, ws gate.Workspace) error {
 	if exists(ws.Report(readyStamp)) {

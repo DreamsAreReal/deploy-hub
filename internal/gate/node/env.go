@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
-	"strings"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/pack"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/source"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
 )
@@ -125,20 +125,24 @@ func node(ctx context.Context, ws gate.Workspace, env []string, args ...string) 
 	return run(ctx, ws, stage(ws), env, NodeBinary, args...)
 }
 
+var (
+	prepared   = pack.Prepared(prepare)
+	Lint       = prepared(runLint)
+	Complexity = prepared(runComplexity)
+	DeadCode   = prepared(runDeadCode)
+	Tests      = prepared(runTests)
+	Fuzz       = prepared(runFuzz)
+)
+
 func prepare(ctx context.Context, ws gate.Workspace) error {
-	if _, err := os.Stat(ws.Report(readyStamp)); err == nil {
-		return nil
-	}
+	return pack.Once(ctx, ws, readyStamp, requireLock, stageProject, installTools)
+}
+
+func requireLock(_ context.Context, ws gate.Workspace) error {
 	if _, err := os.Stat(filepath.Join(ws.Src, Lockfile)); err != nil {
 		return ErrNoLock
 	}
-	steps := []func(context.Context, gate.Workspace) error{stageProject, installTools}
-	for _, step := range steps {
-		if err := step(ctx, ws); err != nil {
-			return err
-		}
-	}
-	return os.WriteFile(ws.Report(readyStamp), []byte(Stack), stampPerm)
+	return nil
 }
 
 func stageProject(ctx context.Context, ws gate.Workspace) error {
@@ -175,13 +179,7 @@ func installTools(ctx context.Context, ws gate.Workspace) error {
 }
 
 func Tools(ctx context.Context, ws gate.Workspace) (string, error) {
-	if _, err := os.Stat(ws.Report(toolsStamp)); err == nil {
-		return tools(ws), nil
-	}
-	if err := installTools(ctx, ws); err != nil {
-		return "", err
-	}
-	return tools(ws), os.WriteFile(ws.Report(toolsStamp), []byte(toolsDir), stampPerm)
+	return tools(ws), pack.Once(ctx, ws, toolsStamp, installTools)
 }
 
 func ToolScript(ws gate.Workspace, parts ...string) string {
@@ -200,16 +198,7 @@ func installedVersion(dir, pkg string) (string, error) {
 }
 
 func rel(ws gate.Workspace, path string) string {
-	roots := []string{stage(ws)}
-	if resolved, err := filepath.EvalSymlinks(stage(ws)); err == nil {
-		roots = append(roots, resolved)
-	}
-	for _, root := range roots {
-		if trimmed, ok := strings.CutPrefix(path, root+string(filepath.Separator)); ok {
-			return filepath.ToSlash(trimmed)
-		}
-	}
-	return path
+	return gate.RelTo(stage(ws), path)
 }
 
 func itoa(n int) string {
