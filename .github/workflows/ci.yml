@@ -40,6 +40,9 @@ jobs:
           COMMIT: ${{ github.sha }}
         run: |
           export PATH="$RUNNER_TEMP/toolchain:$PATH"
+          while sleep 20; do
+            echo "resources: $(free -m | awk '/^Mem:/ {print "mem_available_mb=" $7}') $(df -m / "$RUNNER_TEMP" | awk 'NR > 1 {print $6 "_free_mb=" $4}' | tr '\n' ' ')$(ps -eo rss,comm --sort=-rss | awk 'NR == 2 {print "top=" $2 ":" int($1 / 1024) "mb"}')"
+          done &
           deploy-hub gate --app deploy-hub --repo "$REPO" --commit "$COMMIT" --policy "$GITHUB_WORKSPACE/policy/gate.yaml" --src "$GITHUB_WORKSPACE" --out "$RUNNER_TEMP/gate"
 
       - name: Build linux binary
