@@ -54,6 +54,7 @@ const (
 	flagTest          = "--test"
 	cmdRun            = "run"
 	reporterXUnit     = "xunit"
+	lcovEnd           = "end_of_record"
 	flagReporterOpt   = "--reporter-option"
 	flagTestJUnit     = "--test-reporter=junit"
 )
@@ -317,7 +318,7 @@ func lcovLine(ws gate.Workspace, cov coverage, current *fileCoverage, line strin
 	switch {
 	case key == "SF":
 		return cov.file(rel(ws, filepath.Join(stage(ws), value)))
-	case current == nil:
+	case current == nil || key == lcovEnd:
 		return nil
 	case key == "DA" && len(fields) >= 2:
 		n, _ := strconv.Atoi(fields[0])
