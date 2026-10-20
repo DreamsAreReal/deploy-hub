@@ -30,7 +30,7 @@ const (
 	filePerm         = 0o600
 	overrideDigits   = 5
 	header           = "# Managed by deploy-hub caddy-sync — do not edit by hand.\n"
-	globalBlock      = "{\n\temail %s\n}\n\n"
+	globalBlock      = "{\n\temail %s\n\tgrace_period 10s\n}\n\n"
 	extraImport      = "import /etc/caddy/extra/*.caddy\n\n"
 	siteBlock        = "%s.%s.sslip.io {\n\tlog\n\treverse_proxy 127.0.0.1:%s {\n\t\tlb_try_duration 30s\n\t\tlb_try_interval 250ms\n\t}\n}\n\n"
 	msgUpToDate      = "caddy-sync: Caddyfile already up to date (no reload)"

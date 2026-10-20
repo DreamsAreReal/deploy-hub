@@ -96,7 +96,7 @@ func TestRoutesAndRender(t *testing.T) {
 	if len(routes) != 2 || routes[0] != (Route{"web", "9001"}) || routes[1] != (Route{"api", "19002"}) {
 		t.Fatalf("routes: %+v", routes)
 	}
-	want := header + "{\n\temail a@b\n}\n\n" +
+	want := header + "{\n\temail a@b\n\tgrace_period 10s\n}\n\n" +
 		"import /etc/caddy/extra/*.caddy\n\n" +
 		"web.s.sslip.io {\n\tlog\n\treverse_proxy 127.0.0.1:9001 {\n\t\tlb_try_duration 30s\n\t\tlb_try_interval 250ms\n\t}\n}\n\n" +
 		"api.s.sslip.io {\n\tlog\n\treverse_proxy 127.0.0.1:19002 {\n\t\tlb_try_duration 30s\n\t\tlb_try_interval 250ms\n\t}\n}\n\n"

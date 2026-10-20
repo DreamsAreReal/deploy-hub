@@ -569,6 +569,13 @@ The proxy retries the upstream (`lb_try_duration 30s`, `lb_try_interval
 250ms`), so while a container is being recreated requests wait for it instead
 of getting an instant 502.
 
+The global block sets `grace_period 10s`. A blue-green switch reloads Caddy
+twice (standby port, then the main port again), and by default Caddy keeps the
+connections of a replaced config open forever: a client with a busy keep-alive
+connection (the task runner) would keep reaching the removed standby port and
+get 502 for minutes. With the grace period those connections are closed after
+10 s and the client reconnects to the current config.
+
 Every app vhost has `log`: Caddy writes one JSON access line per request to
 journald, and the shared observability stack ships it to VictoriaLogs
 (`log_type:access`). The file also imports `/etc/caddy/extra/*.caddy`, the
