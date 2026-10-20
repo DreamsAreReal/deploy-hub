@@ -16,27 +16,43 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/lexis"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
 )
 
 const (
-	GitBinary    = "git"
-	extGo        = ".go"
-	extYML       = ".yml"
-	extYAML      = ".yaml"
-	shebang      = "#!"
-	hashComment  = "#"
-	binarySniff  = 8000
-	locationForm = "%s:%d"
-	copyDirPerm  = 0o700
-	copyFilePerm = 0o600
+	GitBinary     = "git"
+	extGo         = ".go"
+	extYML        = ".yml"
+	extYAML       = ".yaml"
+	goModFile     = "go.mod"
+	goModComment  = "//"
+	goModIndirect = "indirect"
+	shebang       = "#!"
+	hashComment   = "#"
+	binarySniff   = 8000
+	locationForm  = "%s:%d"
+	copyDirPerm   = 0o700
+	copyFilePerm  = 0o600
 )
+
+var lex = lexis.Lex
 
 var hashCommented = map[string]bool{
 	".sh": true, ".bash": true, ".py": true, ".toml": true, ".mk": true,
 	".service": true, ".timer": true, ".conf": true, ".env": true,
 	".gitignore": true, ".dockerignore": true,
 }
+
+var prose = map[string]bool{".md": true, ".markdown": true, ".txt": true, ".rst": true, ".adoc": true}
+
+var generated = map[string]bool{
+	"go.sum": true, "poetry.lock": true, "Cargo.lock": true, "yarn.lock": true, "uv.lock": true, "pnpm-lock.yaml": true,
+	"package-lock.json": true, "packages.lock.json": true, "Gemfile.lock": true, "composer.lock": true, "Pipfile.lock": true,
+	"gradle.lockfile": true, "flake.lock": true,
+}
+
+var requirementsFile = regexp.MustCompile(`^(requirements|constraints).*\.txt$`)
 
 var hashCommentedNames = regexp.MustCompile(`^(Dockerfile.*|.*\.Dockerfile|Makefile|\.gitignore|\.dockerignore|\.env.*)$`)
 
@@ -90,18 +106,63 @@ func Comments(ctx context.Context, ws gate.Workspace) gate.Outcome {
 }
 
 func commentsIn(f textFile) []string {
-	base := path.Base(f.rel)
-	ext := path.Ext(base)
-	switch {
-	case ext == extGo:
-		return goComments(f)
-	case ext == extYML || ext == extYAML:
-		return yamlComments(f)
-	case hashCommented[ext] || hashCommentedNames.MatchString(base):
-		return hashComments(f)
-	default:
-		return nil
+	if scan := scannerFor(f.rel); scan != nil {
+		return scan(f)
 	}
+	return nil
+}
+
+func scannerFor(rel string) func(textFile) []string {
+	base, ext := path.Base(rel), path.Ext(rel)
+	switch {
+	case requirementsFile.MatchString(base):
+		return hashComments
+	case generated[base] || prose[ext]:
+		return nil
+	case base == goModFile:
+		return goModComments
+	case ext == extGo:
+		return goComments
+	case ext == extYML || ext == extYAML:
+		return yamlComments
+	}
+	return lexedComments
+}
+
+func lexedComments(f textFile) []string {
+	toks, known, err := lex(f.rel, f.data)
+	switch {
+	case err != nil:
+		return []string{f.rel + ": " + err.Error()}
+	case known:
+		return noteLines(f.rel, toks)
+	case hashCommented[path.Ext(f.rel)] || hashCommentedNames.MatchString(path.Base(f.rel)):
+		return hashComments(f)
+	}
+	return nil
+}
+
+func goModComments(f textFile) []string {
+	var findings []string
+	for i, line := range strings.Split(string(f.data), "\n") {
+		_, note, found := strings.Cut(line, goModComment)
+		if found && strings.TrimSpace(note) != goModIndirect {
+			findings = append(findings, fmt.Sprintf(locationForm, f.rel, i+1))
+		}
+	}
+	return findings
+}
+
+func noteLines(rel string, toks []lexis.Token) []string {
+	var findings []string
+	last := 0
+	for _, t := range toks {
+		if t.Note && t.Line != last {
+			findings = append(findings, fmt.Sprintf(locationForm, rel, t.Line))
+			last = t.Line
+		}
+	}
+	return findings
 }
 
 func goComments(f textFile) []string {

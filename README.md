@@ -59,13 +59,13 @@ versions and checksums: [`policy/tools.yaml`](policy/tools.yaml).
 |---|---|---|
 | `registration` | app missing from the policy or deployed from another repository | — |
 | `hygiene` | state/backup/debug/report files, keys, scanner-suppression files tracked in git | — |
-| `comments` | any comment in Go, YAML, Dockerfile, shell, Makefile, systemd files | go/scanner, YAML parser |
+| `comments` | any comment or documentation string in source and configuration files of any language (Python docstrings included); prose (`.md`, `.txt`, …) and tool-generated lockfiles are not source, `// indirect` is the only note allowed in `go.mod` | go/scanner, YAML parser, chroma lexers |
 | `markers` | work markers (the four listed in the policy) anywhere in tracked files | — |
 | `modules` | `go mod verify` / `go mod tidy -diff` failures, checksum DB disabled | go |
 | `dependencies` | a module (direct, transitive or test-only) not in the approved list | go list |
 | `lint` | any linter finding under the central config (magic numbers/strings, gosec, unused code, shadowing, …) | golangci-lint |
 | `cognitive-complexity` | a function above 9 | gocognit |
-| `duplication` | 2% or more duplicated code lines (token windows of 50, imports excluded) | built in |
+| `duplication` | 2% or more duplicated code lines across every programming-language file (token windows of 50; imports, includes and comments excluded) | built in, chroma lexers |
 | `dead-code` | unreachable functions, including ones reachable only from tests | deadcode |
 | `tests` | any failed, skipped or crashed test; unit, integration and e2e together, `-race` | go test |
 | `line-coverage` | below 90% of code lines | go test -cover |

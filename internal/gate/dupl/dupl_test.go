@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/lexis"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/policy"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec/procexectest"
@@ -53,6 +54,47 @@ func TestImportsAndPackageClausesAreIgnored(t *testing.T) {
 	rep := Analyze(map[string][]byte{fileA: a, fileB: b, fileC: c}, 5)
 	testutil.Equal(t, rep.DuplicatedLines, 0)
 	testutil.Equal(t, rep.CodeLines, 3)
+}
+
+const (
+	filePy  = "a.py"
+	filePy2 = "b.py"
+)
+
+const pyBody = `def total(values):
+    result = 0
+    for v in values:
+        if v > 0:
+            result += v * 2
+    return result
+`
+
+func TestClonesAcrossStacks(t *testing.T) {
+	py := "import os\nfrom a import b\n" + pyBody
+	rep := Analyze(map[string][]byte{filePy: []byte(py), filePy2: []byte("# note\n" + pyBody), "c.js": []byte("const x = 1;\n")}, 20)
+	testutil.Equal(t, rep.Findings(), []string{"a.py: lines 3-8", "b.py: lines 2-7"})
+	testutil.Equal(t, rep.CodeLines, 13)
+	imports := Analyze(map[string][]byte{"a.ts": []byte("import { a, b, c, d } from \"x\";\nexport const p = a;\n"), "b.ts": []byte("import { a, b, c, d } from \"x\";\nexport const q = 2;\n")}, 5)
+	testutil.Equal(t, imports.DuplicatedLines, 0)
+	testutil.Equal(t, imports.CodeLines, 2)
+	includes := Analyze(map[string][]byte{"a.c": []byte("#include <stdio.h>\n#include <stdlib.h>\nint a;\n"), "b.c": []byte("#include <stdio.h>\n#include <stdlib.h>\nint b;\n")}, 4)
+	testutil.Equal(t, includes.DuplicatedLines, 0)
+}
+
+func TestCheckCoversEveryCodeFile(t *testing.T) {
+	files := map[string][]byte{filePy: []byte(pyBody), filePy2: []byte(pyBody), "notes.md": []byte(pyBody), "c.html": []byte(pyBody)}
+	out := Check(context.Background(), workspace(t, files, nil))
+	testutil.Equal(t, out.Status, gate.StatusFail)
+	testutil.Equal(t, out.Values[ValueCodeLines], float64(12))
+}
+
+func TestUnreadableSourcesFailTheCheck(t *testing.T) {
+	saved := lex
+	t.Cleanup(func() { lex = saved })
+	lex = func(string, []byte) ([]lexis.Token, bool, error) { return nil, true, errors.New("lexer broke") }
+	out := Check(context.Background(), workspace(t, map[string][]byte{"z.py": []byte("x = 1\n"), filePy: []byte("y = 2\n")}, nil))
+	testutil.Equal(t, out.Reason, reasonUnreadable)
+	testutil.Equal(t, out.Findings, []string{"a.py: lexer broke", "z.py: lexer broke"})
 }
 
 func TestWindowLargerThanCode(t *testing.T) {
@@ -126,7 +168,7 @@ func TestClonesAtDifferentOffsetsAreFound(t *testing.T) {
 func TestExactWindowAndOrderedFindings(t *testing.T) {
 	snippetSrc := "package x\n\nvar v = f(1, 2)\n"
 	exact := map[string][]byte{"d.go": []byte(snippetSrc), "c.go": []byte(snippetSrc), "b.go": []byte(snippetSrc), "a.go": []byte(snippetSrc)}
-	window := len(tokenize("a.go", []byte(snippetSrc), map[string]uint64{}).tokens)
+	window := len(goTokens("a.go", []byte(snippetSrc), map[string]uint64{}).tokens)
 	rep := Analyze(exact, window)
 	testutil.Equal(t, rep.Findings(), []string{"a.go: lines 3-3", "b.go: lines 3-3", "c.go: lines 3-3", "d.go: lines 3-3"})
 	testutil.Equal(t, Analyze(exact, window+1).DuplicatedLines, 0)
