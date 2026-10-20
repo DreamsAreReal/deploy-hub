@@ -20,6 +20,8 @@ import (
 
 var errTool = errors.New("exit status 1")
 
+const checkCrash = "crash"
+
 func clock() func() time.Time {
 	t := time.Unix(1_800_000_000, 0)
 	return func() time.Time {
@@ -96,6 +98,19 @@ func TestUnfinishedCheckFails(t *testing.T) {
 	v := Runner{Now: clock(), Log: ws.Log, Checks: []Check{slow}}.Run(context.Background(), ws, Subject{App: "x", Own: true})
 	testutil.True(t, !v.Passed, "timeout blocks")
 	testutil.Contains(t, v.Results[0].Reason, "check did not complete")
+}
+
+func TestCrashedCheckFailsAndTheGateGoesOn(t *testing.T) {
+	var logs bytes.Buffer
+	ws := workspace(t, &logs)
+	crash := Check{Name: checkCrash, Run: func(context.Context, Workspace) Outcome { panic("nil map") }}
+	v := Runner{Now: clock(), Log: ws.Log, Checks: []Check{crash, check("next", KindSecurity, NeedSource, Pass(nil))}}.Run(context.Background(), ws, Subject{App: "x", Own: true})
+	testutil.True(t, !v.Passed, "a crash blocks")
+	testutil.Equal(t, v.Failed(), []string{checkCrash})
+	testutil.Equal(t, v.Results[0].Reason, "check crashed: nil map")
+	testutil.Equal(t, v.Results[0].Values, map[string]float64{ValueCrashed: 1})
+	testutil.Equal(t, v.Results[1].Status, StatusPass)
+	testutil.Contains(t, logs.String(), `"msg":"gate check panicked"`, `"check":"`+checkCrash+`"`, `"panic":"nil map"`, `"stack":"goroutine`)
 }
 
 func TestOutcomeHelpers(t *testing.T) {

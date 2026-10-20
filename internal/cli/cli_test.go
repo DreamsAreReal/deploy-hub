@@ -362,14 +362,14 @@ func TestLoggerFallbacks(t *testing.T) {
 	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	log, closeLog := openLogger(Config{LogFile: filepath.Join(blocker, "x.log")}, "runner", handler{logToFile: true}, &stderr)
+	log, closeLog := openLogger(Config{LogFile: filepath.Join(blocker, "x.log")}, "runner", handler{onServer: true}, &stderr, &obs.LevelCounts{})
 	log.Warn("visible")
 	closeLog()
 	if !strings.Contains(stderr.String(), "log file unavailable") || !strings.Contains(stderr.String(), "visible") {
 		t.Fatalf("stderr %s", stderr.String())
 	}
 	stderr.Reset()
-	log, closeLog = openLogger(Config{}, "render", handler{}, &stderr)
+	log, closeLog = openLogger(Config{}, "render", handler{}, &stderr, &obs.LevelCounts{})
 	log.Info("hidden")
 	log.Warn("shown")
 	closeLog()
@@ -377,13 +377,13 @@ func TestLoggerFallbacks(t *testing.T) {
 		t.Fatalf("local commands default to warn: %s", stderr.String())
 	}
 	stderr.Reset()
-	log, _ = openLogger(Config{LogLevel: "debug"}, "render", handler{}, &stderr)
+	log, _ = openLogger(Config{LogLevel: "debug"}, "render", handler{}, &stderr, &obs.LevelCounts{})
 	log.Debug("dbg")
 	if !strings.Contains(stderr.String(), "dbg") {
 		t.Fatal("explicit level wins")
 	}
 	stderr.Reset()
-	log, _ = openLogger(Config{}, CmdGate, handler{verbose: true}, &stderr)
+	log, _ = openLogger(Config{}, CmdGate, handler{verbose: true}, &stderr, &obs.LevelCounts{})
 	log.Info("progress")
 	testutil.Contains(t, stderr.String(), "progress")
 }

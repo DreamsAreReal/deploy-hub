@@ -158,21 +158,14 @@ type syncResult struct {
 func (s Syncer) Run(ctx context.Context) error {
 	res, err := s.sync(ctx)
 	samples := []obs.Sample{
-		{Name: obs.MetricCaddySyncSuccess, Labels: obs.Labels{}, Value: boolValue(err == nil)},
-		{Name: obs.MetricCaddyReloads, Labels: obs.Labels{}, Value: boolValue(res.reloaded)},
+		{Name: obs.MetricCaddySyncSuccess, Labels: obs.Labels{}, Value: obs.Bool(err == nil)},
+		{Name: obs.MetricCaddyReloads, Labels: obs.Labels{}, Value: obs.Bool(res.reloaded)},
 	}
 	if err == nil {
 		samples = append(samples, obs.Sample{Name: obs.MetricCaddyRoutes, Labels: obs.Labels{}, Value: float64(res.routes)})
 	}
 	s.Metrics.Push(ctx, samples)
 	return err
-}
-
-func boolValue(v bool) float64 {
-	if v {
-		return 1
-	}
-	return 0
 }
 
 func (s Syncer) sync(ctx context.Context) (syncResult, error) {

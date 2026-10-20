@@ -46,19 +46,12 @@ func (s *Service) status(ctx context.Context) int {
 		s.Out.Println(st.line())
 		labels := obs.Labels{obs.LabelApp: a.Name}
 		s.samples = append(s.samples,
-			obs.Sample{Name: obs.MetricAppUp, Labels: labels, Value: boolValue(st.up())},
-			obs.Sample{Name: obs.MetricAppHealthy, Labels: labels, Value: boolValue(st.healthy())},
+			obs.Sample{Name: obs.MetricAppUp, Labels: labels, Value: obs.Bool(st.up())},
+			obs.Sample{Name: obs.MetricAppHealthy, Labels: labels, Value: obs.Bool(st.healthy())},
 		)
 	}
 	s.samples = append(s.samples, obs.Sample{Name: obs.MetricAppsRegistered, Labels: obs.Labels{}, Value: float64(len(apps))})
 	return ExitOK
-}
-
-func boolValue(v bool) float64 {
-	if v {
-		return 1
-	}
-	return 0
 }
 
 func (s *Service) appStatus(ctx context.Context, a registry.Entry, entries []journal.Entry) appStatus {
