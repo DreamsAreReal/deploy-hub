@@ -44,6 +44,11 @@ func TestCommentsAcrossLanguages(t *testing.T) {
 	}
 }
 
+func TestGoDirectivesAreNotComments(t *testing.T) {
+	src := "//go:build !darwin\n\npackage a\n\nimport _ \"embed\"\n\n//go:embed x.txt\nvar X []byte\n\n//line a.go:1\n//export F\n// go: spaced\n// yes\n/* yes */\nvar s = 1 //go:noinline\n"
+	testutil.Equal(t, noteLines(t, "a.go", src), []int{12, 13, 14})
+}
+
 func TestPythonDocstringsAreComments(t *testing.T) {
 	src := "\"\"\"module\"\"\"\nimport os\n\n\ndef f():\n    r'''doc'''\n    x = \"\"\"value\"\"\"\n    print(\"\"\"inline\"\"\", x)\n    return \"\"\"multi\nline\"\"\"\n\n\ndef g():\n    \"plain\"\n    '''\n    block\n    '''\n    return 1\n"
 	testutil.Equal(t, noteLines(t, "m.py", src), []int{1, 6, 15})
