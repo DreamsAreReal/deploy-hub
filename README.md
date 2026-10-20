@@ -163,14 +163,19 @@ check. Forks and other code get only the security checks (secrets, SAST,
 dependencies, licenses, workflows, image, DAST); the quality checks are
 reported as `n/a`. Checks that need an image or an HTTP surface are `n/a` for
 app kinds without one (`binary`, `worker`). Nothing else is ever skipped, and a
-check that cannot finish (tool crash, timeout) fails.
+check that cannot finish (tool crash, timeout) fails. Each check gets
+`check_timeout`; mutation testing gets `long_check_timeout`.
 
 **Mutation testing** is a built-in engine with every mandatory operator:
 condition inversion, comparison and boundary changes, arithmetic and logical
 operator swaps, `++`/`--`, removed negations, changed return values, removed
-statements and disabled error handling. Each mutant is compiled with
-`go test -overlay` and tested by its own package first, then by every package
-that depends on it. Mutants on lines no test executes count as survivors;
+statements and disabled error handling. Before mutating, every test runs alone
+once with coverage over all production packages, which gives the tests that
+execute each line. Each mutant is compiled with `go test -overlay` and run
+against only those tests, wherever they live; a line outside every coverage
+block runs its own package and every package that depends on it, and a
+package with a test that fails when run alone always runs whole. A smaller
+selection can only lower the score. Mutants on lines no test executes count as survivors;
 mutants that do not compile are not mutants and are not counted. There is no
 way to exclude a mutant. Every mutant's test run is its own process group with
 a memory budget (the machine's memory divided by the workers plus one); a run

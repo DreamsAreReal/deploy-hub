@@ -40,6 +40,8 @@ const (
 	overlayEnv      = "GOFLAGS=-overlay="
 	cacheDir        = "mutation-cache"
 	cacheEnv        = "GOCACHE="
+	countOnce       = "-count=1"
+	goTest          = "test"
 	testFailed      = "FAIL"
 	buildFailed     = "[build failed]"
 	setupFailed     = "[setup failed]"
@@ -69,7 +71,7 @@ type target struct {
 	src        []byte
 	pkg        golang.Package
 	dependents []string
-	covered    bool
+	key        string
 }
 
 type engine struct {
@@ -77,6 +79,7 @@ type engine struct {
 	baselines map[string]time.Duration
 	dir       string
 	cache     string
+	index     *testIndex
 }
 
 type Report struct {
@@ -122,10 +125,6 @@ func totalMutants(counts map[Status]int) int {
 }
 
 func Run(ctx context.Context, ws gate.Workspace) (Report, error) {
-	covered, err := golang.CoveredLines(ws)
-	if err != nil {
-		return Report{}, err
-	}
 	sandbox := ws.Report(sandboxDir)
 	defer func() { _ = os.RemoveAll(sandbox) }()
 	if rerr := os.RemoveAll(sandbox); rerr != nil {
@@ -145,7 +144,10 @@ func Run(ctx context.Context, ws gate.Workspace) (Report, error) {
 	if berr := e.measureBaselines(ctx, pkgs); berr != nil {
 		return Report{}, berr
 	}
-	targets, err := e.targets(pkgs, covered)
+	if e.index, err = e.buildIndex(ctx, pkgs); err != nil {
+		return Report{}, err
+	}
+	targets, err := e.targets(pkgs)
 	if err != nil {
 		return Report{}, err
 	}
@@ -159,7 +161,7 @@ func (e *engine) measureBaselines(ctx context.Context, pkgs golang.Packages) err
 			continue
 		}
 		started := time.Now()
-		_, err := e.ws.RunEnv(ctx, []string{e.cache}, golang.GoBinary, "test", "-count=1", p.ImportPath)
+		_, err := e.ws.RunEnv(ctx, []string{e.cache}, golang.GoBinary, goTest, countOnce, p.ImportPath)
 		if err != nil {
 			return fmt.Errorf("%s: %s: %s", reasonBaseline, p.ImportPath, gate.Tail(procexec.Output(err)))
 		}
@@ -168,12 +170,12 @@ func (e *engine) measureBaselines(ctx context.Context, pkgs golang.Packages) err
 	return nil
 }
 
-func (e *engine) targets(pkgs golang.Packages, covered map[string]map[int]bool) ([]target, error) {
+func (e *engine) targets(pkgs golang.Packages) ([]target, error) {
 	var out []target
 	for _, p := range pkgs.Production() {
 		deps := pkgs.Dependents(p.ImportPath)
 		for _, name := range p.GoFiles {
-			found, err := fileTargets(p, name, deps, covered[p.ImportPath+"/"+name])
+			found, err := fileTargets(p, name, deps)
 			if err != nil {
 				return nil, err
 			}
@@ -183,7 +185,7 @@ func (e *engine) targets(pkgs golang.Packages, covered map[string]map[int]bool) 
 	return out, nil
 }
 
-func fileTargets(p golang.Package, name string, deps []string, lines map[int]bool) ([]target, error) {
+func fileTargets(p golang.Package, name string, deps []string) ([]target, error) {
 	path := filepath.Join(p.Dir, name)
 	var points []Mutant
 	src, err := os.ReadFile(filepath.Clean(path))
@@ -195,14 +197,9 @@ func fileTargets(p golang.Package, name string, deps []string, lines map[int]boo
 	}
 	out := make([]target, 0, len(points))
 	for _, m := range points {
-		out = append(out, target{mutant: m, src: src, pkg: p, dependents: deps, covered: executed(lines, m.Line)})
+		out = append(out, target{mutant: m, src: src, pkg: p, dependents: deps, key: p.ImportPath + "/" + name})
 	}
 	return out, nil
-}
-
-func executed(lines map[int]bool, line int) bool {
-	covered, known := lines[line]
-	return covered || !known
 }
 
 func (e *engine) execute(ctx context.Context, targets []target) (Report, error) {
@@ -325,7 +322,8 @@ func snippet(s string) string {
 }
 
 func (e *engine) run(ctx context.Context, id int, t target) Status {
-	if !t.covered {
+	sel := e.index.selectFor(t.key, t.mutant.Line, append([]string{t.pkg.ImportPath}, t.dependents...))
+	if sel.none() {
 		return StatusNotCovered
 	}
 	dir := filepath.Join(e.dir, strconv.Itoa(id))
@@ -335,12 +333,31 @@ func (e *engine) run(ctx context.Context, id int, t target) Status {
 		e.ws.Log.Error("mutant staging failed", "file", t.mutant.File, "error", err.Error())
 		return StatusErrored
 	}
+	if sel.full {
+		return e.runWhole(ctx, ov, t)
+	}
+	return e.runSelected(ctx, ov, sel)
+}
+
+func (e *engine) runWhole(ctx context.Context, ov string, t target) Status {
 	status := StatusSurvived
 	if t.pkg.HasTests() {
 		status = e.test(ctx, ov, []string{t.pkg.ImportPath})
 	}
 	if status == StatusSurvived && len(t.dependents) > 0 {
 		status = e.test(ctx, ov, t.dependents)
+	}
+	return status
+}
+
+func (e *engine) runSelected(ctx context.Context, ov string, sel selection) Status {
+	status := StatusSurvived
+	if len(sel.tests) > 0 {
+		pkgs, run := selectedArgs(sel.tests)
+		status = e.test(ctx, ov, pkgs, run...)
+	}
+	if status == StatusSurvived && len(sel.whole) > 0 {
+		status = e.test(ctx, ov, sel.whole)
 	}
 	return status
 }
@@ -372,11 +389,11 @@ func (e *engine) timeout(pkgs []string) time.Duration {
 	return max(e.ws.Policy.Limits.MutantFloor, longest*time.Duration(e.ws.Policy.Limits.MutantFactor))
 }
 
-func (e *engine) test(ctx context.Context, ov string, pkgs []string) Status {
+func (e *engine) test(ctx context.Context, ov string, pkgs []string, extra ...string) Status {
 	limit := e.timeout(pkgs)
 	tctx, cancel := context.WithTimeout(ctx, deadline(limit, e.ws.Policy.Limits.MutantFloor))
 	defer cancel()
-	args := append([]string{"test", "-count=1", "-failfast", "-timeout=" + limit.String()}, pkgs...)
+	args := append(append([]string{goTest, countOnce, "-failfast", "-timeout=" + limit.String()}, extra...), pkgs...)
 	res, err := e.ws.RunEnv(tctx, []string{overlayEnv + ov, e.cache}, golang.GoBinary, args...)
 	out := res.Combined()
 	switch {
