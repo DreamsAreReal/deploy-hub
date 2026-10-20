@@ -25,6 +25,7 @@ import (
 const (
 	gitBinary     = "git"
 	readmeFile    = "README.md"
+	invalidScript = "if then fi"
 	badScriptFile = "bad.sh"
 	fileGrade     = "bin/grade.sh"
 	fileTest      = "test/grade.bats"
@@ -83,7 +84,7 @@ func TestAnalysisOfAScript(t *testing.T) {
 	}
 	testutil.Equal(t, covered, 3)
 	testutil.True(t, branch{arm: 20, condition: 19, implicit: true}.covered(map[uint]int{19: 3, 20: 2}), "condition ran without its branch")
-	_, err = parse(badScriptFile, []byte("if then fi"))
+	_, err = parse(badScriptFile, []byte(invalidScript))
 	testutil.Fails(t, err)
 }
 
@@ -234,7 +235,7 @@ func TestComplexityCheck(t *testing.T) {
 	testutil.Equal(t, out.Values, map[string]float64{ValueFunctions: 2, ValueMaxCognitive: 5})
 	w.ws.Policy.Thresholds.MaxCognitive = 5
 	testutil.Equal(t, Complexity(context.Background(), w.ws).Status, gate.StatusPass)
-	invalid := newWorld(t, map[string]string{badScriptFile: "if then fi"})
+	invalid := newWorld(t, map[string]string{badScriptFile: invalidScript})
 	testutil.Equal(t, Complexity(context.Background(), invalid.ws).Status, gate.StatusFail)
 	gone := project(t)
 	gone.files = append(gone.files, "gone.sh")
@@ -279,7 +280,7 @@ func TestTestFailures(t *testing.T) {
 	silent := project(t)
 	silent.on(BatsBinary, "", errSim)
 	testutil.Contains(t, Tests(context.Background(), silent.ws).Reason, reasonNoReport)
-	badScript := newWorld(t, map[string]string{badScriptFile: "if then fi", fileTest: "x"})
+	badScript := newWorld(t, map[string]string{badScriptFile: invalidScript, fileTest: "x"})
 	badScript.junit = junitGreen
 	testutil.Equal(t, Tests(context.Background(), badScript.ws).Status, gate.StatusFail)
 	blocked := project(t)
