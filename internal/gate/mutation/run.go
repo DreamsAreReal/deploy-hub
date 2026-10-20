@@ -95,6 +95,10 @@ func (r Report) Score() float64 {
 
 func Check(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	rep, err := Run(ctx, ws)
+	return Judge(ws, rep, err)
+}
+
+func Judge(ws gate.Workspace, rep Report, err error) gate.Outcome {
 	if err != nil {
 		return gate.Fail(err.Error())
 	}
@@ -203,31 +207,47 @@ func (e *engine) execute(ctx context.Context, targets []target) (Report, error) 
 	if err := os.MkdirAll(e.dir, dirPerm); err != nil {
 		return Report{}, err
 	}
-	statuses := make([]Status, len(targets))
-	jobs := make(chan int)
+	jobs := make([]Job, 0, len(targets))
+	for i, t := range targets {
+		jobs = append(jobs, Job{Mutant: t.mutant, Run: func(ctx context.Context, _ int) Status { return e.run(ctx, i, t) }})
+	}
+	return Execute(ctx, e.ws, jobs, Workers())
+}
+
+type Job struct {
+	Mutant Mutant
+	Run    func(ctx context.Context, worker int) Status
+}
+
+func Workers() int {
+	return max(minWorkers, runtime.NumCPU()/cpuShare)
+}
+
+func Execute(ctx context.Context, ws gate.Workspace, jobs []Job, workers int) (Report, error) {
+	statuses := make([]Status, len(jobs))
+	queue := make(chan int)
 	var wg sync.WaitGroup
-	p := &progress{log: e.ws.Log, total: len(targets), step: max(1, len(targets)/progressSteps), started: time.Now()}
-	workers := max(minWorkers, runtime.NumCPU()/cpuShare)
-	e.ws.Log.Info("mutation testing started", "mutants", len(targets), "workers", workers)
-	for range workers {
+	p := &progress{log: ws.Log, total: len(jobs), step: max(1, len(jobs)/progressSteps), started: time.Now()}
+	ws.Log.Info("mutation testing started", "mutants", len(jobs), "workers", workers)
+	for w := range workers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for i := range jobs {
-				statuses[i] = e.run(ctx, i, targets[i])
+			for i := range queue {
+				statuses[i] = jobs[i].Run(ctx, w)
 				p.done(statuses[i])
 			}
 		}()
 	}
-	for i := range targets {
-		jobs <- i
+	for i := range jobs {
+		queue <- i
 	}
-	close(jobs)
+	close(queue)
 	wg.Wait()
 	if ctx.Err() != nil {
 		return Report{}, fmt.Errorf("%w: %w", ErrIncomplete, ctx.Err())
 	}
-	rep := e.report(targets, statuses)
+	rep := report(ws, jobs, statuses)
 	if n := rep.Counts[StatusErrored]; n > 0 {
 		return Report{}, fmt.Errorf("%w: %d %s", ErrIncomplete, n, reasonErrored)
 	}
@@ -265,14 +285,14 @@ type entry struct {
 	Status   Status `json:"status"`
 }
 
-func (e *engine) report(targets []target, statuses []Status) Report {
+func report(ws gate.Workspace, jobs []Job, statuses []Status) Report {
 	rep := Report{Counts: map[Status]int{}}
-	for i, t := range targets {
-		m := t.mutant
+	for i, j := range jobs {
+		m := j.Mutant
 		rep.Counts[statuses[i]]++
-		rep.Entries = append(rep.Entries, entry{File: e.ws.Rel(m.File), Line: m.Line, Operator: m.Operator, Original: m.Original, Mutated: m.Mutated, Status: statuses[i]})
+		rep.Entries = append(rep.Entries, entry{File: ws.Rel(m.File), Line: m.Line, Operator: m.Operator, Original: m.Original, Mutated: m.Mutated, Status: statuses[i]})
 		if statuses[i] == StatusSurvived || statuses[i] == StatusNotCovered {
-			rep.Survivors = append(rep.Survivors, fmt.Sprintf(survivorFormat, e.ws.Rel(m.File), m.Line, m.Operator, snippet(m.Original), snippet(m.Mutated), statuses[i]))
+			rep.Survivors = append(rep.Survivors, fmt.Sprintf(survivorFormat, ws.Rel(m.File), m.Line, m.Operator, snippet(m.Original), snippet(m.Mutated), statuses[i]))
 		}
 	}
 	return rep

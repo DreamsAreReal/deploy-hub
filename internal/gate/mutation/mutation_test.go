@@ -524,3 +524,31 @@ func TestKilledMutantsAreNotRetriedAndProgressIsLogged(t *testing.T) {
 	testutil.Equal(t, strings.Count(logs.String(), `"msg":"mutation progress"`), 6)
 	testutil.True(t, executed(map[int]bool{}, 3) && executed(map[int]bool{3: true}, 3) && !executed(map[int]bool{3: false}, 3), "unknown lines are executed")
 }
+
+func TestExecuteHandsWorkersTheirIndex(t *testing.T) {
+	var (
+		mu   sync.Mutex
+		seen = map[int]bool{}
+	)
+	ws := gate.Workspace{Src: "/src", Log: slog.New(slog.DiscardHandler)}
+	jobs := make([]Job, 0, 8)
+	for i := range 8 {
+		jobs = append(jobs, Job{Mutant: NewMutant("/src/a.py", i+1, OpArithmetic, "a + b", 10, Edit{Offset: 12, Length: 1, Text: "-"}), Run: func(_ context.Context, worker int) Status {
+			mu.Lock()
+			seen[worker] = true
+			mu.Unlock()
+			return StatusKilled
+		}})
+	}
+	rep, err := Execute(context.Background(), ws, jobs, 3)
+	testutil.NoErr(t, err)
+	testutil.Equal(t, rep.Counts[StatusKilled], 8)
+	for w := range seen {
+		testutil.True(t, w >= 0 && w < 3, "worker index in range")
+	}
+	testutil.Equal(t, rep.Entries[0], entry{File: "a.py", Line: 1, Operator: OpArithmetic, Original: "a + b", Mutated: "a - b", Status: StatusKilled})
+	testutil.Equal(t, Workers(), max(minWorkers, runtime.NumCPU()/cpuShare))
+	out := Judge(gate.Workspace{Out: t.TempDir(), Policy: policy.Policy{Thresholds: policy.Thresholds{MutationScore: 90}}}, rep, nil)
+	testutil.Equal(t, out.Status, gate.StatusPass)
+	testutil.Equal(t, Judge(ws, Report{}, ErrIncomplete).Reason, reasonIncomplet)
+}
