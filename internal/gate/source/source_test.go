@@ -17,6 +17,7 @@ import (
 )
 
 const (
+	docsState   = "docs/STATE.md"
 	pkgA        = "package a\n"
 	ignoreFile  = ".semgrepignore"
 	fileMain    = "main.go"
@@ -140,11 +141,18 @@ func TestMarkers(t *testing.T) {
 }
 
 func TestHygiene(t *testing.T) {
-	ws := repo(t, map[string]string{"docs/STATE.md": "x", "main.go.bak": "x", ignoreFile: "", "ok.go": "package ok\n"})
+	ws := repo(t, map[string]string{docsState: "x", "main.go.bak": "x", ignoreFile: "", "ok.go": "package ok\n"})
 	out := Hygiene(context.Background(), ws)
 	testutil.Equal(t, out.Findings, []string{
-		ignoreFile + " matches " + ignoreFile, "docs/STATE.md matches *state*.md", "main.go.bak matches *.bak",
+		ignoreFile + " matches " + ignoreFile, docsState + " matches *state*.md", "main.go.bak matches *.bak",
 	})
+}
+
+func TestHygieneHonoursAllowedFiles(t *testing.T) {
+	ws := repo(t, map[string]string{docsState: "x", "docs/tasks/a/STATE.md": "x", "docs/x.bak": "x", "STATE.md": "x"})
+	ws.App = policy.App{Allowed: []string{docsState, "docs/tasks/*/STATE.md"}}
+	out := Hygiene(context.Background(), ws)
+	testutil.Equal(t, out.Findings, []string{"STATE.md matches *state*.md", "docs/x.bak matches *.bak"})
 }
 
 func TestNotARepository(t *testing.T) {

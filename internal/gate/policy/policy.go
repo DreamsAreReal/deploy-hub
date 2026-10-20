@@ -99,6 +99,7 @@ type App struct {
 	Scenarios []Scenario  `yaml:"scenarios"`
 	Load      LoadProfile `yaml:"load"`
 	Localized []string    `yaml:"localized"`
+	Allowed   []string    `yaml:"allowed_files"`
 }
 
 type Scenario struct {
@@ -273,24 +274,31 @@ func (a App) validate(name string) error {
 		errs = append(errs, s.validate(name, seen))
 	}
 	for _, p := range a.Localized {
-		errs = append(errs, validLocalized(name, p))
+		errs = append(errs, validPattern(name, "localized", p))
+	}
+	for _, p := range a.Allowed {
+		errs = append(errs, validPattern(name, "allowed_files", p))
 	}
 	return errors.Join(errs...)
 }
 
-func validLocalized(app, pattern string) error {
+func validPattern(app, field, pattern string) error {
 	_, err := path.Match(pattern, "")
 	if err != nil || pattern == "" || path.IsAbs(pattern) || slices.Contains(strings.Split(pattern, "/"), "..") {
-		return fmt.Errorf("%w: app %s: localized pattern %q must be a relative path pattern", ErrPolicy, app, pattern)
+		return fmt.Errorf("%w: app %s: %s pattern %q must be a relative path pattern", ErrPolicy, app, field, pattern)
 	}
 	return nil
 }
 
 func (a App) IsLocalized(rel string) bool {
-	return slices.ContainsFunc(a.Localized, func(p string) bool { return localizedMatch(p, rel) })
+	return slices.ContainsFunc(a.Localized, func(p string) bool { return pathMatch(p, rel) })
 }
 
-func localizedMatch(pattern, rel string) bool {
+func (a App) AllowsFile(rel string) bool {
+	return slices.ContainsFunc(a.Allowed, func(p string) bool { return pathMatch(p, rel) })
+}
+
+func pathMatch(pattern, rel string) bool {
 	switch {
 	case strings.HasSuffix(pattern, "/"):
 		return strings.HasPrefix(rel, pattern) || strings.Contains(rel, "/"+pattern)

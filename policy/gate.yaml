@@ -263,7 +263,12 @@ apps:
       - internal/seed/*.json
       - widget/
       - testdata/
+      - tools/e2e/
+      - docs/
       - "*_test.go"
+    allowed_files:
+      - docs/STATE.md
+      - docs/tasks/*/STATE.md
     scenarios:
       - id: unknown-or-retired-token-is-refused
         category: security

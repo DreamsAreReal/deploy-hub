@@ -282,7 +282,9 @@ func Hygiene(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	}
 	var findings []string
 	for _, rel := range files {
-		findings = append(findings, forbidden(rel, ws.Policy.ForbiddenFiles)...)
+		if !ws.App.AllowsFile(rel) {
+			findings = append(findings, forbidden(rel, ws.Policy.ForbiddenFiles)...)
+		}
 	}
 	return gate.Findings("forbidden files are tracked", findings)
 }
