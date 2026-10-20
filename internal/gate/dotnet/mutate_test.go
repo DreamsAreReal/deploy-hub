@@ -42,7 +42,7 @@ func TestDotnetMutation(t *testing.T) {
 	}
 	testutil.Equal(t, testutil.Read(t, filepath.Join(w.ws.Src, filepath.FromSlash(fileCore))), coreSource)
 	test, _ := w.fake.Find("test --no-build")
-	testutil.Equal(t, test.Args, []string{"test", "--no-build", flagNoRestore, flagVerbosity, verbosityQuiet})
+	testutil.Equal(t, test.Args, []string{cmdTest, "--no-build", flagNoRestore, flagVerbosity, verbosityQuiet})
 	testutil.True(t, strings.HasPrefix(test.Dir, w.ws.Report(sandboxPrefix)), "mutants run in a sandbox")
 	build, _ := w.fake.Find("build -p:RunAnalyzers=false")
 	testutil.Equal(t, build.Args, append([]string{"build"}, plainBuild...))

@@ -120,6 +120,10 @@ func (w *world) handle(c procexec.Command) (procexec.Result, error) {
 	if w.kill != nil && strings.Contains(line, "--bail") {
 		return procexec.Result{}, w.kill(testutil.Read(w.t, filepath.Join(c.Dir, filepath.FromSlash(fileCart))))
 	}
+	return w.reply(line)
+}
+
+func (w *world) reply(line string) (procexec.Result, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	best := ""

@@ -38,6 +38,7 @@ const (
 	cmdTestRun  = "--collect:XPlat Code Coverage"
 	readmeFile  = "README.md"
 	editorFile  = ".editorconfig"
+	flagResults = "--results-directory"
 )
 
 var errSim = errors.New("simulated")
@@ -111,14 +112,17 @@ func (w *world) handle(c procexec.Command) (procexec.Result, error) {
 		return procexec.Result{Stdout: strings.Join(w.files, "\x00") + "\x00"}, nil
 	}
 	w.writeReports(c)
-	if w.kill != nil && strings.HasPrefix(c.Dir, w.ws.Report(sandboxPrefix)) && strings.Contains(line, "build --no-restore") {
-		if w.broken(testutil.Read(w.t, filepath.Join(c.Dir, filepath.FromSlash(fileCore)))) {
-			return procexec.Result{}, errSim
-		}
+	if w.kill != nil && strings.HasPrefix(c.Dir, w.ws.Report(sandboxPrefix)) && strings.Contains(line, "build --no-restore") &&
+		w.broken(testutil.Read(w.t, filepath.Join(c.Dir, filepath.FromSlash(fileCore)))) {
+		return procexec.Result{}, errSim
 	}
 	if w.kill != nil && strings.Contains(line, "test --no-build") {
 		return procexec.Result{}, w.kill(testutil.Read(w.t, filepath.Join(c.Dir, filepath.FromSlash(fileCore))))
 	}
+	return w.reply(line)
+}
+
+func (w *world) reply(line string) (procexec.Result, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	best := ""
@@ -138,7 +142,7 @@ func (w *world) writeReports(c procexec.Command) {
 		if trx, ok := strings.CutPrefix(a, "trx;LogFileName="); ok && w.trx != "" {
 			testutil.Write(w.t, trx, w.trx)
 		}
-		if a == "--results-directory" && w.cobertura != "" {
+		if a == flagResults && w.cobertura != "" {
 			testutil.Write(w.t, filepath.Join(c.Args[i+1], "run-1", coberturaFile), strings.ReplaceAll(w.cobertura, "STAGE", stage(w.ws)))
 			testutil.Write(w.t, filepath.Join(c.Args[i+1], "run-2", coberturaFile), strings.ReplaceAll(w.cobertura, "STAGE", stage(w.ws)))
 		}
@@ -277,7 +281,7 @@ func TestTestsAndCoverage(t *testing.T) {
 	out := Tests(context.Background(), w.ws)
 	testutil.Equal(t, out.Status, gate.StatusPass)
 	run, _ := w.fake.Find(cmdTestRun)
-	testutil.Equal(t, run.Args[:7], []string{"test", flagNoRestore, "--results-directory", w.ws.Report(resultsDir), flagLogger, "trx;LogFileName=" + w.ws.Report(TRXReport), cmdTestRun})
+	testutil.Equal(t, run.Args[:7], []string{cmdTest, flagNoRestore, flagResults, w.ws.Report(resultsDir), flagLogger, "trx;LogFileName=" + w.ws.Report(TRXReport), cmdTestRun})
 	testutil.Equal(t, run.Args[len(run.Args)-2:], quietAnalyzers)
 	lines := LineCoverage(context.Background(), w.ws)
 	testutil.Equal(t, lines.Values, map[string]float64{ValueLineCoverage: float64(2) * 100 / 3, ValueLines: 3})

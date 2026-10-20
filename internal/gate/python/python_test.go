@@ -138,13 +138,17 @@ func (w *world) writeOutputs(c procexec.Command) {
 	defer w.mu.Unlock()
 	for i, a := range c.Args {
 		for flag, content := range w.writes {
-			if value, ok := strings.CutPrefix(a, flag+"="); ok {
-				testutil.Write(w.t, value, content)
-			}
-			if a == flag && i+1 < len(c.Args) {
-				testutil.Write(w.t, c.Args[i+1], content)
-			}
+			w.writeFlag(c.Args[i+1:], a, flag, content)
 		}
+	}
+}
+
+func (w *world) writeFlag(rest []string, arg, flag, content string) {
+	if value, ok := strings.CutPrefix(arg, flag+"="); ok {
+		testutil.Write(w.t, value, content)
+	}
+	if arg == flag && len(rest) > 0 {
+		testutil.Write(w.t, rest[0], content)
 	}
 }
 

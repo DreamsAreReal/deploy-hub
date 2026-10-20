@@ -216,12 +216,17 @@ func FuzzPoints(f *testing.F) {
 			if err != nil {
 				return
 			}
-			for _, m := range ms {
-				if m.Line < 1 || m.Original == m.Mutated {
-					t.Fatalf("bad mutant %+v", m)
-				}
-				_ = m.Apply([]byte(src))
-			}
+			checkMutants(t, ms, src)
 		}
 	})
+}
+
+func checkMutants(t *testing.T, ms []mutation.Mutant, src string) {
+	t.Helper()
+	for _, m := range ms {
+		if m.Line < 1 || m.Original == m.Mutated {
+			t.Fatalf("bad mutant %+v", m)
+		}
+		_ = m.Apply([]byte(src))
+	}
 }
