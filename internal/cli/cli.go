@@ -97,7 +97,7 @@ var handlers = map[string]handler{
 	CmdFacts:     {run: runFacts, logToFile: true},
 	CmdOnboard:   {run: runOnboard, binaries: []string{binGH, binGit, binSSH, onboard.SSHKeygen}},
 	CmdGate:      {run: runGate, binaries: gateBinaries, verbose: true},
-	CmdTools:     {run: runTools, binaries: []string{tools.GoBinary}, verbose: true},
+	CmdTools:     {run: runTools, binaries: []string{tools.GoBinary, tools.TarBinary}, verbose: true},
 }
 
 var gateBinaries = []string{

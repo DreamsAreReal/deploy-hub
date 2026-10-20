@@ -75,6 +75,7 @@ var known = map[string]builder{
 	"ssh-keygen":  func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "ssh-keygen", a...) },
 	"sudo":        func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "sudo", a...) },
 	"syft":        func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "syft", a...) },
+	"tar":         func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "tar", a...) },
 	"systemctl":   func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "systemctl", a...) },
 	"trivy":       func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "trivy", a...) },
 	"trufflehog":  func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "trufflehog", a...) },

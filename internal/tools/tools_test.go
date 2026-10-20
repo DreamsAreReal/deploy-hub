@@ -28,6 +28,12 @@ const (
 	member   = "dir/tool"
 	payload  = "#!binary"
 	toolFile = "tool"
+	treeURL  = "https://nodejs.org/dist/v1.2.3/node-v1.2.3-linux-x64.tar.xz"
+	treeTop  = "node-v1"
+	nodeLink = "bin/node"
+	npmLink  = "bin/npm"
+	nodeName = "node"
+	dotnet   = "dotnet"
 )
 
 type asset struct {
@@ -135,6 +141,66 @@ func TestInstallFailures(t *testing.T) {
 	testutil.Fails(t, blocked.Install(context.Background(), Manifest{}))
 }
 
+func unpacker(t *testing.T, build func(root string)) *procexectest.Fake {
+	t.Helper()
+	return &procexectest.Fake{Handler: func(c procexec.Command) (procexec.Result, error) {
+		testutil.Equal(t, c.Name, TarBinary)
+		testutil.Equal(t, testutil.Read(t, c.Args[1]), payload)
+		build(c.Args[3])
+		return procexec.Result{}, nil
+	}}
+}
+
+func nodeTree(t *testing.T) func(string) {
+	t.Helper()
+	return func(root string) {
+		top := filepath.Join(root, treeTop)
+		testutil.Write(t, filepath.Join(top, filepath.FromSlash(nodeLink)), payload)
+		testutil.Write(t, filepath.Join(top, "lib", "npm-cli.js"), "npm")
+		testutil.NoErr(t, os.Symlink(filepath.Join("..", "lib", "npm-cli.js"), filepath.Join(top, filepath.FromSlash(npmLink))))
+	}
+}
+
+func TestInstallUnpacksTrees(t *testing.T) {
+	data := []byte(payload)
+	fake := unpacker(t, nodeTree(t))
+	inst := installer(t, transport{treeURL: respond(http.StatusOK, data)}, fake)
+	m := Manifest{Binaries: []Binary{{Name: nodeName, URL: treeURL, SHA256: digest(data), Tree: treeTop, Links: []string{nodeLink, npmLink}}}}
+	testutil.NoErr(t, inst.Install(context.Background(), m))
+	testutil.NoErr(t, inst.Install(context.Background(), m))
+	testutil.Equal(t, testutil.Read(t, filepath.Join(inst.Dir, nodeName)), payload)
+	testutil.Equal(t, testutil.Read(t, filepath.Join(inst.Dir, "npm")), "npm")
+	target, err := os.Readlink(filepath.Join(inst.Dir, nodeName))
+	testutil.NoErr(t, err)
+	testutil.Equal(t, target, filepath.Join(treesDir, nodeName, "bin", nodeName))
+	entries, err := os.ReadDir(inst.Dir)
+	testutil.NoErr(t, err)
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	testutil.Equal(t, names, []string{nodeName, "npm", treesDir})
+	testutil.Equal(t, fake.Calls()[0].Args[0], "-xf")
+}
+
+func TestUnpackFailures(t *testing.T) {
+	data := []byte(payload)
+	tree := func(links ...string) Manifest {
+		return Manifest{Binaries: []Binary{{Name: nodeName, URL: treeURL, SHA256: digest(data), Tree: treeTop, Links: links}}}
+	}
+	run := func(fake *procexectest.Fake, m Manifest) error {
+		return installer(t, transport{treeURL: respond(http.StatusOK, data)}, fake).Install(context.Background(), m)
+	}
+	broken := &procexectest.Fake{Handler: func(procexec.Command) (procexec.Result, error) { return procexec.Result{}, errors.New("corrupt") }}
+	testutil.Contains(t, run(broken, tree(nodeLink)).Error(), "unpack: corrupt")
+	testutil.Fails(t, run(unpacker(t, func(string) {}), tree(nodeLink)))
+	testutil.Is(t, run(unpacker(t, nodeTree(t)), tree("bin/missing")), ErrMember)
+	testutil.Is(t, run(unpacker(t, nodeTree(t)), tree("lib")), ErrMember)
+	locked := installer(t, transport{treeURL: respond(http.StatusOK, data)}, unpacker(t, nodeTree(t)))
+	testutil.NoErr(t, os.MkdirAll(locked.Dir, 0o500))
+	testutil.Fails(t, locked.Install(context.Background(), tree(nodeLink)))
+}
+
 func gzipOf(t *testing.T, data []byte) []byte {
 	t.Helper()
 	var buf bytes.Buffer
@@ -148,12 +214,25 @@ func gzipOf(t *testing.T, data []byte) []byte {
 func TestManifestValidation(t *testing.T) {
 	good := Binary{Name: toolFile, URL: assetURL, SHA256: strings.Repeat("a", 64), Member: member}
 	testutil.NoErr(t, Manifest{Binaries: []Binary{good}, Go: []string{"golang.org/x/tools/cmd/deadcode@v0.52.0"}}.Validate())
+	trees := []Binary{
+		{Name: nodeName, URL: treeURL, SHA256: good.SHA256, Tree: treeTop, Links: []string{nodeLink, npmLink}},
+		{Name: dotnet, URL: "https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.302/dotnet-sdk-10.0.302-linux-x64.tar.gz", SHA256: good.SHA256, Tree: wholeArchive, Links: []string{dotnet}},
+		{Name: "bats", URL: "https://github.com/bats-core/bats-core/archive/refs/tags/v1.14.0.tar.gz", SHA256: good.SHA256, Tree: "bats-core-1.14.0", Links: []string{"bin/bats"}},
+	}
+	testutil.NoErr(t, Manifest{Binaries: trees}.Validate())
 	bad := []Binary{
 		{Name: "Tool!", URL: good.URL, SHA256: good.SHA256},
 		{Name: toolFile, URL: "https://evil.example/tool", SHA256: good.SHA256},
 		{Name: toolFile, URL: "http://github.com/o/r/releases/download/v1/t", SHA256: good.SHA256},
+		{Name: toolFile, URL: "https://nodejs.org/dist/latest/node.tar.xz", SHA256: good.SHA256},
 		{Name: toolFile, URL: good.URL, SHA256: "abc"},
 		{Name: toolFile, URL: good.URL, SHA256: good.SHA256, Member: "../escape"},
+		{Name: toolFile, URL: good.URL, SHA256: good.SHA256, Member: member, Tree: treeTop, Links: []string{nodeLink}},
+		{Name: toolFile, URL: good.URL, SHA256: good.SHA256, Tree: treeTop},
+		{Name: toolFile, URL: good.URL, SHA256: good.SHA256, Links: []string{nodeLink}},
+		{Name: toolFile, URL: good.URL, SHA256: good.SHA256, Tree: "../up", Links: []string{nodeLink}},
+		{Name: toolFile, URL: good.URL, SHA256: good.SHA256, Tree: treeTop, Links: []string{"../node"}},
+		{Name: toolFile, URL: good.URL, SHA256: good.SHA256, Tree: treeTop, Links: []string{"bin/Node.exe"}},
 	}
 	for _, b := range bad {
 		testutil.Is(t, Manifest{Binaries: []Binary{b}}.Validate(), ErrManifest)

@@ -98,6 +98,45 @@ project, fails the `stacks` check.
 | Stack | Project manifest | Tools |
 |---|---|---|
 | Go | `go.mod` | go (`mod verify`, `list -deps`, `test -race -cover`, `test -fuzz`), golangci-lint, gocognit, deadcode, gobco, govulncheck, the built-in mutation engine (isolated build cache in the report directory) |
+| Python | `pyproject.toml`, `requirements*.txt`; loose `.py` files form a root project | uv, ruff, mypy `--strict`, complexipy, vulture, pytest with coverage (branches, per-test contexts), hypothesis, trivy, the token mutation engine |
+| Node / TypeScript | `package.json` | npm, eslint (typescript-eslint strict, sonarjs), `tsc --strict`, knip, vitest / jest / mocha / `node --test`, fast-check, trivy, the token mutation engine |
+| .NET | `*.sln`, `*.slnx`, `*.csproj`, `*.fsproj`, `*.vbproj` (the outermost one) | dotnet (`restore --locked-mode`, build with the recommended analyzers and SonarAnalyzer as errors, `format whitespace`, `test` with coverlet), CsCheck / FsCheck, trivy, the token mutation engine |
+| Shell | none; `.sh` and `.bash` files form a root project | shellcheck (every optional check), shfmt, bats with bash xtrace coverage, the token mutation engine |
+| Static site | none; `.html`, `.htm` and `.css` files form a root project | html-validate (recommended rules, SRI on cross-origin resources), stylelint standard |
+
+What each stack expects from an app repo:
+
+- **Python.** Dependencies are locked: `pyproject.toml` with `uv.lock`, or
+  requirements files where every line is pinned with `--hash`. Tests run with
+  pytest from the hub's own lock (an app does not pin pytest, coverage or
+  hypothesis); a scenario names a test by its pytest node id
+  (`tests/test_auth.py::test_invalid_token`). Fuzz targets are hypothesis
+  property tests; the policy `fuzz_examples` sets their budget.
+- **Node / TypeScript.** `package-lock.json` next to every `package.json`; the
+  test runner is the one the project depends on (vitest, jest, mocha, or
+  `node --test` when none is installed). Fuzz targets are fast-check property
+  tests. A scenario names a test as `path/to/file.test.ts > test name`.
+  Linters, `tsc` and knip come from the hub's lock in `policy/node`.
+- **.NET.** `RestorePackagesWithLockFile` with a `packages.lock.json` next to
+  every project; test projects reference `coverlet.collector`. Analyzer
+  severities, `TreatWarningsAsErrors` and `.editorconfig` are injected
+  centrally; `#pragma warning disable`, `SuppressMessage` and
+  `ExcludeFromCodeCoverage` are findings. Fuzz targets use CsCheck or FsCheck.
+  A scenario names a test by its fully qualified name.
+- **Shell.** Scripts are bash; tests are `.bats` files. A scenario names a
+  test as `file.bats > test name`. Shell has no package dependencies and no
+  property-based fuzzer, so `dependencies`, `modules`, `vulnerabilities` and
+  `fuzz` are `n/a` with that reason.
+- **Static site.** Markup and styles carry no executable code: complexity,
+  dead code, tests, coverage, fuzzing and mutation are `n/a`. Every
+  cross-origin script or stylesheet needs an `integrity` hash. JavaScript
+  belongs to a Node project with its own `package.json`.
+
+Approved dependencies in the policy use the Go module path for Go and a stack
+prefix for the rest: `pypi:requests`, `npm:express`, `nuget:Serilog`. When a
+package publishes no machine-readable license, `declared_licenses` in the
+policy records it by package URL without a version
+(`pkg:npm/some-lib: MIT`); the license must be on the approved list.
 
 **Whose code.** Repositories of the policy `owners` that are not forks get every
 check. Forks and other code get only the security checks (secrets, SAST,
@@ -169,6 +208,13 @@ other requirements and are turned off centrally for every repo:
   ever involved and arguments are validated before use.
 - zizmor `undocumented-permissions` demands a comment next to every
   write permission, while comments are banned by policy.
+
+**Toolchains.** `policy/tools.yaml` pins every scanner and language toolchain
+(uv, ruff, node and npm, the .NET SDK, shellcheck, shfmt, bats) by URL and
+SHA-256; `make toolchain` downloads them, refuses any checksum mismatch and
+puts them into one directory for `PATH`. Archives that ship a whole tree (node,
+the .NET SDK, bats, shellcheck) are unpacked under `trees.d` with links to their
+executables. Bash itself comes from the CI runner (4.1 or newer).
 
 **Run it locally** (Go toolchain plus the tools from `policy/tools.yaml` on
 `PATH`; `make toolchain` installs them on linux/amd64):

@@ -33,6 +33,37 @@ binaries:
     url: https://github.com/zizmorcore/zizmor/releases/download/v1.31.1/zizmor-x86_64-unknown-linux-gnu.tar.gz
     sha256: d185f726bdaf92df78273217dfdd24ebcd6b0ef48cf3ce776ff5762b6e138c99
     member: zizmor
+  - name: uv
+    url: https://github.com/astral-sh/uv/releases/download/0.13.2/uv-x86_64-unknown-linux-gnu.tar.gz
+    sha256: e14d48c117ec33601d6f860dda47aa5ea490d77a5a9ef770529c448fa6747d9f
+    member: uv-x86_64-unknown-linux-gnu/uv
+  - name: ruff
+    url: https://github.com/astral-sh/ruff/releases/download/0.17.1/ruff-x86_64-unknown-linux-gnu.tar.gz
+    sha256: a293ac937715ae6fb6b64da86761598379e6149f40fbc00fde9ba8a2a562ac65
+    member: ruff-x86_64-unknown-linux-gnu/ruff
+  - name: shfmt
+    url: https://github.com/mvdan/sh/releases/download/v3.14.1/shfmt_v3.14.1_linux_amd64
+    sha256: 76e77641faa025814b77f153b29796b8e6fa2fca03e0c76a691608b86c7ea7bf
+  - name: shellcheck
+    url: https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+    sha256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+    tree: shellcheck-v0.11.0
+    links: [shellcheck]
+  - name: bats
+    url: https://github.com/bats-core/bats-core/archive/refs/tags/v1.14.0.tar.gz
+    sha256: bb537b70b15b732f6d8827dd6578e3d8ce166636ce1f18ea9a074184fcce9177
+    tree: bats-core-1.14.0
+    links: [bin/bats]
+  - name: node
+    url: https://nodejs.org/dist/v26.9.0/node-v26.9.0-linux-x64.tar.xz
+    sha256: c6ecd8efc1c1d395265891675319da7a7b3785c6be174bd78933cf4f057624d1
+    tree: node-v26.9.0-linux-x64
+    links: [bin/node, bin/npm, bin/npx]
+  - name: dotnet
+    url: https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.302/dotnet-sdk-10.0.302-linux-x64.tar.gz
+    sha256: 264a838d6f5d1a252489c7bb2e2946a579d6a881391d50ffd175a01e4d948c1c
+    tree: .
+    links: [dotnet]
 go:
   - github.com/rillig/gobco@v1.3.4
   - github.com/uudashr/gocognit/cmd/gocognit@v1.3.0
