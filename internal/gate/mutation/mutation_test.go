@@ -209,9 +209,10 @@ func TestApplyRewritesOnlyTheMutatedRange(t *testing.T) {
 
 func TestScore(t *testing.T) {
 	testutil.Equal(t, Report{Counts: map[Status]int{}}.Score(), float64(percentScale))
-	r := Report{Counts: map[Status]int{StatusKilled: 6, StatusTimedOut: 3, StatusSurvived: 0, StatusNotCovered: 1, StatusNotViable: 50}}
+	r := Report{Counts: map[Status]int{StatusKilled: 5, StatusTimedOut: 3, StatusExhausted: 1, StatusSurvived: 0, StatusNotCovered: 1, StatusNotViable: 50}}
 	testutil.Equal(t, r.Score(), float64(90))
 	testutil.Equal(t, totalMutants(r.Counts), 60)
+	testutil.True(t, StatusExhausted.Detected() && StatusTimedOut.Detected() && !StatusSurvived.Detected(), "detected statuses")
 	testutil.Equal(t, snippet("a\n\t b"), "a b")
 	testutil.Equal(t, len(snippet(strings.Repeat("x", snippetLimit+5))), snippetLimit+len("..."))
 	testutil.Equal(t, snippet(strings.Repeat("y", snippetLimit)), strings.Repeat("y", snippetLimit))
@@ -224,6 +225,7 @@ type outcome struct {
 	notViable bool
 	timeout   bool
 	broken    bool
+	exhausted bool
 }
 
 type fakeGo struct {
@@ -234,6 +236,7 @@ type fakeGo struct {
 	decide   func(mutated string, pkgs []string) outcome
 	overlays []string
 	caches   []string
+	limit    int64
 }
 
 func (f *fakeGo) handle(c procexec.Command) (procexec.Result, error) {
@@ -256,6 +259,7 @@ func (f *fakeGo) handle(c procexec.Command) (procexec.Result, error) {
 	f.mu.Lock()
 	f.overlays = append(f.overlays, ov)
 	f.caches = append(f.caches, c.Env[1:]...)
+	f.limit = c.MemoryLimit
 	f.mu.Unlock()
 	res := f.decide(mutated, c.Args[4:])
 	switch {
@@ -267,6 +271,8 @@ func (f *fakeGo) handle(c procexec.Command) (procexec.Result, error) {
 		return procexec.Result{Stdout: "--- FAIL: TestX"}, errors.New("exit 1")
 	case res.broken:
 		return procexec.Result{Stderr: "go: creating work dir: no space left on device"}, errors.New("exit 1")
+	case res.exhausted:
+		return procexec.Result{}, fmt.Errorf("%w: signal: killed", procexec.ErrMemoryLimit)
 	}
 	return procexec.Result{Stdout: outOK}, nil
 }
@@ -427,6 +433,19 @@ func TestTimeoutScalesWithBaseline(t *testing.T) {
 	e := &engine{ws: ws, baselines: map[string]time.Duration{"a": 3 * time.Second, "b": time.Millisecond}}
 	testutil.Equal(t, e.timeout([]string{"a", "b"}), 6*time.Second)
 	testutil.Equal(t, e.timeout([]string{"b"}), time.Second)
+}
+
+func TestRunCountsMemoryExhaustionAsDetected(t *testing.T) {
+	ws, fg := setup(t, func(mutated string, _ []string) outcome {
+		hungry := strings.Contains(mutated, "a >= 0")
+		return outcome{exhausted: hungry, killed: !hungry}
+	})
+	rep, err := Run(context.Background(), ws)
+	testutil.NoErr(t, err)
+	testutil.Equal(t, rep.Counts[StatusExhausted], 1)
+	testutil.Equal(t, rep.Counts[StatusKilled], 2)
+	testutil.Equal(t, fg.limit, MemoryBudget())
+	testutil.Equal(t, MemoryBudget(), procexec.TotalMemory()/int64(Workers()+1))
 }
 
 func TestProgressLogs(t *testing.T) {

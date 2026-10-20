@@ -3,6 +3,7 @@ package tokmut
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -117,6 +118,13 @@ func TestRunTimeoutsAndErrors(t *testing.T) {
 	broken.Test = func(context.Context, int, string, []string) error { return errSim }
 	_, err = Run(context.Background(), ws, broken)
 	testutil.Is(t, err, mutation.ErrIncomplete)
+	hungry := outcomes(t)
+	hungry.Test = func(context.Context, int, string, []string) error {
+		return fmt.Errorf("%w: signal: killed", procexec.ErrMemoryLimit)
+	}
+	rep, err = Run(context.Background(), ws, hungry)
+	testutil.NoErr(t, err)
+	testutil.Equal(t, rep.Counts[mutation.StatusExhausted], 2)
 	custom := outcomes(t)
 	custom.Test = func(context.Context, int, string, []string) error { return errSim }
 	custom.Killed = func(err error) bool { return errors.Is(err, errSim) }
@@ -163,7 +171,10 @@ func TestRunRejectsUnreadableSources(t *testing.T) {
 
 func TestCheckJudgesTheSuite(t *testing.T) {
 	ws := project(t, map[string]string{fileJS: sourceJS})
-	failing := Check(func(context.Context, gate.Workspace) (Suite, error) { return Suite{}, errSim })
+	failing := Check(func(_ context.Context, budgeted gate.Workspace) (Suite, error) {
+		testutil.Equal(t, budgeted.MemoryLimit, mutation.MemoryBudget())
+		return Suite{}, errSim
+	})
 	out := failing(context.Background(), ws)
 	testutil.Equal(t, out.Status, gate.StatusFail)
 	testutil.Contains(t, out.Reason, errSim.Error())

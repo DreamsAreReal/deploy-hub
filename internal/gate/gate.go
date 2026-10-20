@@ -86,17 +86,18 @@ type Check struct {
 }
 
 type Workspace struct {
-	Src       string
-	Out       string
-	PolicyDir string
-	Image     string
-	AppName   string
-	Repo      string
-	Module    string
-	App       policy.App
-	Policy    policy.Policy
-	Exec      procexec.Runner
-	Log       *slog.Logger
+	Src         string
+	Out         string
+	PolicyDir   string
+	Image       string
+	AppName     string
+	Repo        string
+	Module      string
+	App         policy.App
+	Policy      policy.Policy
+	Exec        procexec.Runner
+	Log         *slog.Logger
+	MemoryLimit int64
 }
 
 type Subject struct {
@@ -230,7 +231,7 @@ func (ws Workspace) Run(ctx context.Context, name string, args ...string) (proce
 
 func (ws Workspace) RunEnv(ctx context.Context, env []string, name string, args ...string) (procexec.Result, error) {
 	started := time.Now()
-	res, err := ws.Exec.Run(ctx, procexec.Command{Name: name, Args: args, Dir: ws.Src, Env: env})
+	res, err := ws.Exec.Run(ctx, procexec.Command{Name: name, Args: args, Dir: ws.Src, Env: env, MemoryLimit: ws.MemoryLimit})
 	ws.Log.Debug("gate tool finished", "tool", name, "args", args, "seconds", time.Since(started).Seconds(), "failed", err != nil)
 	return res, err
 }

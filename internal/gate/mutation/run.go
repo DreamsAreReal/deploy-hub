@@ -27,6 +27,7 @@ const (
 	StatusSurvived   Status = "survived"
 	StatusNotCovered Status = "not-covered"
 	StatusTimedOut   Status = "timed-out"
+	StatusExhausted  Status = "out-of-memory"
 	StatusNotViable  Status = "not-viable"
 	StatusErrored    Status = "errored"
 
@@ -85,7 +86,7 @@ type Report struct {
 }
 
 func (r Report) Score() float64 {
-	killed := r.Counts[StatusKilled] + r.Counts[StatusTimedOut]
+	killed := r.Counts[StatusKilled] + r.Counts[StatusTimedOut] + r.Counts[StatusExhausted]
 	total := killed + r.Counts[StatusSurvived] + r.Counts[StatusNotCovered]
 	if total == 0 {
 		return percentScale
@@ -134,6 +135,7 @@ func Run(ctx context.Context, ws gate.Workspace) (Report, error) {
 		return Report{}, fmt.Errorf("cannot stage a sandbox: %w", cerr)
 	}
 	ws.Src = sandbox
+	ws.MemoryLimit = MemoryBudget()
 	pkgs, err := golang.List(ctx, ws)
 	if err != nil {
 		return Report{}, err
@@ -223,6 +225,14 @@ func Workers() int {
 	return max(minWorkers, runtime.NumCPU()/cpuShare)
 }
 
+func MemoryBudget() int64 {
+	return procexec.TotalMemory() / int64(Workers()+1)
+}
+
+func (s Status) Detected() bool {
+	return s == StatusKilled || s == StatusTimedOut || s == StatusExhausted
+}
+
 func Execute(ctx context.Context, ws gate.Workspace, jobs []Job, workers int) (Report, error) {
 	statuses := make([]Status, len(jobs))
 	queue := make(chan int)
@@ -268,7 +278,7 @@ func (p *progress) done(s Status) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.finished++
-	if s == StatusKilled || s == StatusTimedOut {
+	if s.Detected() {
 		p.killed++
 	}
 	if p.finished%p.step == 0 || p.finished == p.total {
@@ -374,6 +384,8 @@ func (e *engine) test(ctx context.Context, ov string, pkgs []string) Status {
 		return StatusSurvived
 	case strings.Contains(out, buildFailed) || strings.Contains(out, setupFailed):
 		return StatusNotViable
+	case errors.Is(err, procexec.ErrMemoryLimit):
+		return StatusExhausted
 	case tctx.Err() != nil || strings.Contains(out, testTimedOut):
 		return StatusTimedOut
 	case strings.Contains(out, testFailed):

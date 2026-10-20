@@ -8,15 +8,18 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
 type Command struct {
-	Name  string
-	Args  []string
-	Env   []string
-	Stdin string
-	Dir   string
+	Name        string
+	Args        []string
+	Env         []string
+	Stdin       string
+	Dir         string
+	MemoryLimit int64
 }
 
 type Result struct {
@@ -124,10 +127,31 @@ func (o OS) Run(ctx context.Context, c Command) (Result, error) {
 	cmd.Stdin = strings.NewReader(c.Stdin)
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	cmd.WaitDelay = waitDelay
-	err := cmd.Run()
+	over, err := execute(cmd, c.MemoryLimit)
+	if over {
+		err = errors.Join(ErrMemoryLimit, err)
+	}
 	res := Result{Stdout: stdout.String(), Stderr: stderr.String()}
 	if err != nil {
 		return res, &Error{Err: errors.Join(ctx.Err(), err), Output: res.Combined()}
 	}
 	return res, nil
+}
+
+func execute(cmd *exec.Cmd, limit int64) (bool, error) {
+	if limit <= 0 {
+		return false, cmd.Run()
+	}
+	isolate(cmd)
+	if err := cmd.Start(); err != nil {
+		return false, err
+	}
+	var over atomic.Bool
+	var watching sync.WaitGroup
+	stop := make(chan struct{})
+	watching.Go(func() { guard(cmd.Process.Pid, limit, &over, stop) })
+	err := cmd.Wait()
+	close(stop)
+	watching.Wait()
+	return over.Load(), err
 }

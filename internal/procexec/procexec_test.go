@@ -22,7 +22,7 @@ func testOS() OS {
 	return OS{allowed: map[string]builder{
 		shell:   func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "sh", a...) },
 		"sleep": func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "sleep", a...) },
-		"nope": func(ctx context.Context, a []string) *exec.Cmd {
+		missing: func(ctx context.Context, a []string) *exec.Cmd {
 			return exec.CommandContext(ctx, "deploy-hub-missing-binary", a...)
 		},
 	}}

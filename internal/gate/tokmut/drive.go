@@ -2,6 +2,7 @@ package tokmut
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -56,6 +57,7 @@ func Check(build Build) func(context.Context, gate.Workspace) gate.Outcome {
 }
 
 func Mutate(ctx context.Context, ws gate.Workspace, build Build) (mutation.Report, error) {
+	ws.MemoryLimit = mutation.MemoryBudget()
 	s, err := build(ctx, ws)
 	if err != nil {
 		return mutation.Report{}, err
@@ -144,6 +146,8 @@ func (d *driver) classify(ctx context.Context, err error) mutation.Status {
 	switch {
 	case err == nil:
 		return mutation.StatusSurvived
+	case errors.Is(err, procexec.ErrMemoryLimit):
+		return mutation.StatusExhausted
 	case ctx.Err() != nil:
 		return mutation.StatusTimedOut
 	case d.killed(err):

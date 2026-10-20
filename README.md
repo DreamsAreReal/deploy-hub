@@ -152,7 +152,12 @@ statements and disabled error handling. Each mutant is compiled with
 `go test -overlay` and tested by its own package first, then by every package
 that depends on it. Mutants on lines no test executes count as survivors;
 mutants that do not compile are not mutants and are not counted. There is no
-way to exclude a mutant.
+way to exclude a mutant. Every mutant's test run is its own process group with
+a memory budget (the machine's memory divided by the workers plus one); a run
+that exceeds it is killed and the mutant counts as detected (`out-of-memory`),
+like a timeout, so a mutant that turns a loop into an endless allocation cannot
+take the CI runner down. The language packs mutate with the same engine and the
+same budget.
 
 **Load test, done for a 1-CPU VPS.** The image runs in an isolated docker
 network on the CI runner with the production limits from the policy (`cpus`,
