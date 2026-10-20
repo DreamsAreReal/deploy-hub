@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+count=0
+if [ "$1" -ge 3 ] && ! grep -q x file; then
+  count=1
+fi
+while [ "$count" -lt 5 ]; do
+  count=$((count + 1))
+done
+[ "$mode" = prod ] || echo "not prod # really"
+cat <<EOT
+if heredoc -ge 3
+EOT
+return 0
