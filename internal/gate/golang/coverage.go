@@ -37,6 +37,7 @@ var (
 	profileBlock  = regexp.MustCompile(`^(.+):(\d+)\.\d+,(\d+)\.\d+$`)
 	gobcoTotal    = regexp.MustCompile(`(?m)^Branch coverage: (\d+)/(\d+)$`)
 	gobcoMissLine = regexp.MustCompile(`(?m)^.+:\d+:\d+: condition .+$`)
+	gobcoPanic    = regexp.MustCompile(`(?m)^panic: .+$`)
 )
 
 type block struct {
@@ -186,17 +187,35 @@ func Branches(ctx context.Context, ws gate.Workspace) gate.Outcome {
 		if rerr != nil {
 			return gate.Fail(rerr.Error())
 		}
-		res, err := ws.Run(ctx, GobcoBinary, "-branch", "./"+filepath.ToSlash(rel))
-		bc, perr := parseGobco(res.Stdout)
-		if err != nil || perr != nil {
-			return gate.Fail(fmt.Sprintf(gobcoFailed, rel, errors.Join(err, perr), gate.Tail(res.Combined())))
+		bc, misses, err := runGobco(ctx, ws, rel)
+		if err != nil {
+			return gate.Fail(err.Error())
 		}
 		covered, total = covered+bc.covered, total+bc.total
-		findings = append(findings, gobcoMissLine.FindAllString(res.Stdout, -1)...)
+		findings = append(findings, misses...)
 	}
 	pct := ratio(covered, total)
 	values := map[string]float64{ValueBranchCover: pct, ValueBranches: float64(total)}
 	return gate.Judge(pct >= ws.Policy.Thresholds.BranchCoverage, reasonBranchCover, values, findings)
+}
+
+func runGobco(ctx context.Context, ws gate.Workspace, rel string) (branchCount, []string, error) {
+	res, err := ws.Run(ctx, GobcoBinary, "-branch", "./"+filepath.ToSlash(rel))
+	if err != nil {
+		return branchCount{}, nil, fmt.Errorf(gobcoFailed, rel, err, gobcoCause(res.Combined()))
+	}
+	bc, err := parseGobco(res.Stdout)
+	if err != nil {
+		return branchCount{}, nil, fmt.Errorf(gobcoFailed, rel, err, gate.Tail(res.Combined()))
+	}
+	return bc, gobcoMissLine.FindAllString(res.Stdout, -1), nil
+}
+
+func gobcoCause(out string) string {
+	if p := gobcoPanic.FindString(out); p != "" {
+		return p
+	}
+	return gate.Tail(out)
 }
 
 type branchCount struct {

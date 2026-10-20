@@ -306,6 +306,14 @@ func TestBranches(t *testing.T) {
 	broken := ws(t, nil)
 	broken.Exec = &procexectest.Fake{Handler: script{cmdListJSON: ok(pkgJSON(t, Package{ImportPath: module, Dir: broken.Src, GoFiles: []string{fileMain}})), "gobco": ok("FAIL")}.Handle}
 	testutil.Contains(t, Branches(context.Background(), broken).Reason, "no branch coverage summary")
+	crashed := ws(t, nil)
+	crashed.Exec = &procexectest.Fake{Handler: script{cmdListJSON: ok(pkgJSON(t, Package{ImportPath: module, Dir: crashed.Src, GoFiles: []string{fileMain}})), "gobco": {Res: procexec.Result{Stderr: "panic: a_test.go:3:4: undefined: lib.X\n\ngoroutine 1 [running]:\nmain.ok(...)\n"}, Err: errExit}}.Handle}
+	reason := Branches(context.Background(), crashed).Reason
+	testutil.Contains(t, reason, "panic: a_test.go:3:4: undefined: lib.X")
+	testutil.True(t, !strings.Contains(reason, "goroutine"), reason)
+	failed := ws(t, nil)
+	failed.Exec = &procexectest.Fake{Handler: script{cmdListJSON: ok(pkgJSON(t, Package{ImportPath: module, Dir: failed.Src, GoFiles: []string{fileMain}})), "gobco": {Res: procexec.Result{Stderr: "build failed"}, Err: errExit}}.Handle}
+	testutil.Contains(t, Branches(context.Background(), failed).Reason, "build failed")
 	testutil.Contains(t, Branches(context.Background(), ws(t, script{cmdList: {Err: errExit}})).Reason, cmdList)
 	outside := ws(t, script{cmdListJSON: ok(pkgJSON(t, Package{ImportPath: module, Dir: "relative", GoFiles: []string{fileMain}}))})
 	testutil.Contains(t, Branches(context.Background(), outside).Reason, "Rel: can't make relative")
