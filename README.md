@@ -250,7 +250,28 @@ root SSH to. `<vps>` is the server address.
    ssh vpn 'systemctl daemon-reload && systemctl enable --now deploy-hub-prune.timer deploy-hub-status.timer'
    ```
 
-8. **Observability** (recommended): the shared logs/metrics stack lives in its
+8. **history-guard timer** — the `history-guard` workflow deletes every branch
+   and tag whose root is not the public snapshot. Its `push` trigger runs the
+   workflow file from the pushed commit, so it fires at once only for refs that
+   already carry the file; refs built purely on the old history are caught by
+   the other triggers. GitHub's `schedule` trigger is best-effort and may
+   never fire, so the VPS dispatches the `history-guard` workflow of
+   `deploy-hub` and `tasks` every 5 minutes. It needs a fine-grained PAT limited
+   to those two repos with only **Actions: Read and write**:
+
+   ```
+   printf 'Authorization: Bearer %s\n' '<github_pat_…>' \
+     | ssh vpn 'install -d -m 700 /etc/deploy-hub && install -m 600 /dev/stdin /etc/deploy-hub/history-guard.header'
+   scp server/systemd/deploy-hub-history-guard.* vpn:/etc/systemd/system/
+   ssh vpn 'systemctl daemon-reload && systemctl enable --now deploy-hub-history-guard.timer'
+   ```
+
+   Check: `ssh vpn 'systemctl start deploy-hub-history-guard.service'` exits 0
+   and `gh run list -R DreamsAreReal/deploy-hub -w history-guard.yml -L 1`
+   shows a fresh `workflow_dispatch` run. When the PAT expires, rewrite the
+   header file the same way.
+
+9. **Observability** (recommended): the shared logs/metrics stack lives in its
    own repo, [DreamsAreReal/observability](https://github.com/DreamsAreReal/observability).
 
 Verify the hub answers: `VPS_ADDR=<vps> go run ./cmd/deploy-hub onboard status`
