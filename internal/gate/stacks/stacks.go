@@ -11,6 +11,7 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/pack"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/python"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/scan"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/shell"
 )
 
 const (
@@ -22,7 +23,29 @@ const (
 )
 
 func All() []pack.Pack {
-	return []pack.Pack{goPack(), pythonPack(), nodePack(), dotnetPack()}
+	return []pack.Pack{goPack(), pythonPack(), nodePack(), dotnetPack(), shellPack()}
+}
+
+func shellPack() pack.Pack {
+	return pack.Pack{
+		Stack:   shell.Stack,
+		Sources: shell.Sources,
+		Loose:   true,
+		Checks: map[string]pack.Run{
+			pack.CheckModules:      shell.Integrity,
+			pack.CheckDependencies: shell.Dependencies,
+			pack.CheckLint:         shell.Lint,
+			pack.CheckComplexity:   shell.Complexity,
+			pack.CheckDeadCode:     shell.DeadCode,
+			pack.CheckTests:        shell.Tests,
+			pack.CheckLineCoverage: shell.LineCoverage,
+			pack.CheckBranches:     shell.Branches,
+			pack.CheckFuzz:         shell.Fuzz,
+			pack.CheckMutation:     shell.Mutation,
+			pack.CheckVulns:        shell.Dependencies,
+		},
+		Passed: shell.Passed,
+	}
 }
 
 func dotnetPack() pack.Pack {

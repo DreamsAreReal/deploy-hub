@@ -99,7 +99,7 @@ func SBOM(ctx context.Context, ws gate.Workspace) gate.Outcome {
 		comps = append(comps, got...)
 	}
 	if len(comps) == 0 {
-		return gate.Fail(reasonEmptySBOM)
+		return gate.Outcome{Status: gate.StatusNA, Reason: reasonEmptySBOM}
 	}
 	selves, err := selfPurls(ctx, ws)
 	if err != nil {

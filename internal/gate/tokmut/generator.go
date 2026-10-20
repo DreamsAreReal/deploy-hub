@@ -287,6 +287,11 @@ func (g *generator) catchRethrow(i int) {
 	g.add(mutation.OpErrorHandling, i, body, mutation.Edit{Offset: g.end(body), Text: space + strings.Replace(g.fam.Rethrow, "%s", binding, 1)})
 }
 
+func (g *generator) declaresFunction(at int) bool {
+	open, closing := at+1, at+1+1
+	return g.fam.Name == Shell.Name && g.at(open).text == "(" && g.at(closing).text == ")"
+}
+
 func (g *generator) statements() {
 	start, depth := 0, 0
 	for j, t := range g.toks {
@@ -328,7 +333,7 @@ func (g *generator) statement(from, to int) {
 
 func (g *generator) removable(from, to int) bool {
 	first, last := g.toks[from], g.toks[to]
-	if first.kind != kindWord || g.fam.Keywords[first.text] || last.text == opColon || last.text == openBody {
+	if first.kind != kindWord || g.fam.Keywords[first.text] || last.text == opColon || last.text == openBody || g.declaresFunction(from) {
 		return false
 	}
 	return g.fam.Noop != "" || first.line == last.line

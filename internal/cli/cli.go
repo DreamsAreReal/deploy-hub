@@ -19,6 +19,7 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/node"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/python"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/scan"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/shell"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/source"
 	"github.com/DreamsAreReal/deploy-hub/internal/obs"
 	"github.com/DreamsAreReal/deploy-hub/internal/onboard"
@@ -103,7 +104,7 @@ var gateBinaries = []string{
 	golang.GoBinary, source.GitBinary, golang.LintBinary, golang.CognitBinary, golang.DeadcodeBinary, golang.GobcoBinary,
 	golang.VulncheckBinary, scan.GitleaksBinary, scan.TrufflehogBinary, scan.DockerBinary, scan.OSVBinary, scan.ZizmorBinary,
 	scan.ActionlintBinary, scan.HadolintBinary, scan.TrivyBinary, scan.SyftBinary, python.UVBinary, python.RuffBinary,
-	node.NodeBinary, node.NPMBinary, dotnet.Binary,
+	node.NodeBinary, node.NPMBinary, dotnet.Binary, shell.ShellcheckBinary, shell.ShfmtBinary, shell.BatsBinary, shell.BashBinary,
 }
 
 type Deps struct {
