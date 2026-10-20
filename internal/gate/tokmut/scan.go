@@ -65,7 +65,7 @@ type scanner struct {
 
 func scan(src []byte, mask []bool) []token {
 	s := &scanner{src: src, mask: mask, line: 1}
-	for range len(src) {
+	for range src {
 		if s.pos >= len(s.src) {
 			break
 		}
