@@ -205,24 +205,46 @@ func TestLicenseNamesAndDeclaredLicenses(t *testing.T) {
 	testutil.Equal(t, purlName("pkg:npm/%40scope/web@2.0.0"), "pkg:npm/%40scope/web")
 }
 
-func licenses(names ...string) []struct {
-	License struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
-	} `json:"license"`
-	Expression string `json:"expression"`
-} {
-	out := make([]struct {
-		License struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
-		} `json:"license"`
-		Expression string `json:"expression"`
-	}, len(names))
+func licenses(names ...string) []licenseEntry {
+	out := make([]licenseEntry, len(names))
 	for i, n := range names {
 		out[i].License.Name = n
 	}
 	return out
+}
+
+func licensesAt(pairs ...string) []licenseEntry {
+	out := make([]licenseEntry, 0, len(pairs)/2)
+	for i := 0; i+1 < len(pairs); i += 2 {
+		var e licenseEntry
+		e.License.Name, e.License.URL = pairs[i], pairs[i+1]
+		out = append(out, e)
+	}
+	return out
+}
+
+func TestGoTestdataAndReviewedLicenseTexts(t *testing.T) {
+	notice, logo, single, unknown := "sha256:"+strings.Repeat("a", 64), "sha256:"+strings.Repeat("b", 64), "sha256:"+strings.Repeat("c", 64), "sha256:"+strings.Repeat("d", 64)
+	pol := policy.Policy{
+		Licenses:      []string{mit, bsd3, "blessing"},
+		ReviewedTexts: map[string]string{notice: "MIT AND blessing", logo: policy.NotALicense, single: mit},
+	}
+	mod := "file://$GOPATH/pkg/mod/example.org/libc@v1/"
+	comps := []component{
+		{Purl: "pkg:golang/example.org/libc@v1", Licenses: licensesAt(bsd3, mod+"LICENSE", "GPL-2.0-only", mod+"testdata/crlibm/COPYING", notice, mod+"LICENSE-3RD-PARTY.md")},
+		{Purl: "pkg:golang/example.org/memory@v1", Licenses: licensesAt(bsd3, mod+"LICENSE", logo, mod+"LICENSE-LOGO")},
+		{Purl: "pkg:golang/example.org/sqlite@v1", Licenses: licensesAt(single, mod+"LICENSE-SQLITE")},
+		{Purl: "pkg:golang/example.org/logo-only@v1", Licenses: licensesAt(logo, mod+"LICENSE-LOGO")},
+		{Purl: "pkg:golang/example.org/unreviewed@v1", Licenses: licensesAt(unknown, mod+"NOTICE")},
+		{Purl: "pkg:golang/example.org/gpl@v1", Licenses: licensesAt("GPL-2.0-only", mod+"src/COPYING")},
+		{Purl: "pkg:npm/fixture@1", Licenses: licensesAt("GPL-2.0-only", "file:///node_modules/fixture/testdata/COPYING")},
+	}
+	testutil.Equal(t, licenseFindings(comps, pol, nil), []string{
+		"pkg:golang/example.org/logo-only@v1: license unknown",
+		"pkg:golang/example.org/unreviewed@v1: license " + unknown + " is not approved",
+		"pkg:golang/example.org/gpl@v1: license GPL-2.0-only is not approved",
+		"pkg:npm/fixture@1: license GPL-2.0-only is not approved",
+	})
 }
 
 func TestDependencyVulnerabilities(t *testing.T) {

@@ -27,6 +27,12 @@ licenses:
   - OFL-1.1
   - Unlicense
   - Zlib
+  - blessing
+reviewed_license_texts:
+  "sha256:f597097efe3d97021f89170746bd3a0fb9a8b6fb26b82043ed68a4e0283bee6c": MIT
+  "sha256:5ae5bee3072a841376451b48d8cfcec7188e10543926d5870828d36c8a750dc5": NONE
+  "sha256:8438c9c89b849131ead81d5435cb97fcf052df5b0b286dda8a2d4c29e6cb3fd0": blessing
+  "sha256:b4366b9c27a9364633e015011a231913ed19bf1228f335bf617e50a6f7b168a6": BSD-3-Clause AND MIT AND MPL-2.0 AND Apache-2.0 AND blessing
 dependencies:
   - github.com/alecthomas/chroma/v2
   - github.com/dlclark/regexp2/v2

@@ -46,6 +46,7 @@ const (
 	nugetPurl         = "pkg:nuget/"
 	nuspecExt         = ".nuspec"
 	nugetPackagesEnv  = "NUGET_PACKAGES"
+	goTestdata        = "/testdata/"
 )
 
 var (
@@ -64,16 +65,19 @@ type cycloneDX struct {
 	Components []component `json:"components"`
 }
 
+type licenseEntry struct {
+	License struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+		URL  string `json:"url"`
+	} `json:"license"`
+	Expression string `json:"expression"`
+}
+
 type component struct {
-	Name     string `json:"name"`
-	Purl     string `json:"purl"`
-	Licenses []struct {
-		License struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
-		} `json:"license"`
-		Expression string `json:"expression"`
-	} `json:"licenses"`
+	Name     string         `json:"name"`
+	Purl     string         `json:"purl"`
+	Licenses []licenseEntry `json:"licenses"`
 }
 
 func SBOM(ctx context.Context, ws gate.Workspace) gate.Outcome {
@@ -147,7 +151,7 @@ func licenseFindings(comps []component, pol policy.Policy, selves []string) []st
 			continue
 		}
 		seen[c.Purl] = true
-		out = append(out, judgeLicenses(c, ok, pol.Declared)...)
+		out = append(out, judgeLicenses(c, ok, pol)...)
 	}
 	return out
 }
@@ -209,12 +213,9 @@ func licensed(purl string) bool {
 	return false
 }
 
-func judgeLicenses(c component, ok map[string]bool, declared map[string]string) []string {
-	exprs := make([]string, 0, len(c.Licenses))
-	for _, l := range c.Licenses {
-		exprs = append(exprs, canonical(firstNonEmpty(l.License.ID, l.License.Name, l.Expression)))
-	}
-	if d, found := declared[purlName(c.Purl)]; found && len(exprs) == 0 {
+func judgeLicenses(c component, ok map[string]bool, pol policy.Policy) []string {
+	exprs := componentExpressions(c, pol.ReviewedTexts)
+	if d, found := pol.Declared[purlName(c.Purl)]; found && len(exprs) == 0 {
 		exprs = append(exprs, d)
 	}
 	if nuspec := nugetLicense(c.Purl); nuspec != "" && len(exprs) == 0 {
@@ -230,6 +231,28 @@ func judgeLicenses(c component, ok map[string]bool, declared map[string]string) 
 		}
 	}
 	return out
+}
+
+func componentExpressions(c component, reviewed map[string]string) []string {
+	goModule := strings.HasPrefix(c.Purl, golangPurl)
+	exprs := make([]string, 0, len(c.Licenses))
+	for _, l := range c.Licenses {
+		if expr, keep := licenseExpression(l, goModule, reviewed); keep {
+			exprs = append(exprs, expr)
+		}
+	}
+	return exprs
+}
+
+func licenseExpression(l licenseEntry, goModule bool, reviewed map[string]string) (string, bool) {
+	if goModule && strings.Contains(l.License.URL, goTestdata) {
+		return "", false
+	}
+	expr := canonical(firstNonEmpty(l.License.ID, l.License.Name, l.Expression))
+	if mapped, found := reviewed[expr]; found {
+		expr = mapped
+	}
+	return expr, expr != policy.NotALicense
 }
 
 func nugetLicense(purl string) string {
