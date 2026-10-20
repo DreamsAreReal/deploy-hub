@@ -26,8 +26,8 @@ const (
 	cacheDir     = "uv-cache"
 	readyStamp   = "venv.ready"
 	policySub    = "python"
-	toolsReqs    = "requirements-tools.txt"
-	testReqs     = "requirements-test.txt"
+	toolsReqs    = "tools-lock.txt"
+	testReqs     = "test-lock.txt"
 	interpreter  = "python"
 	stampPerm    = 0o600
 	flagQuiet    = "--quiet"

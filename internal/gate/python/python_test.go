@@ -186,7 +186,7 @@ func TestPrepareUVProjectOnce(t *testing.T) {
 	testutil.Contains(t, lines[0], "uv sync --quiet --locked --all-groups --all-extras")
 	testutil.Contains(t, lines[1], "uv run --quiet --no-project --python "+venvPython(w.ws.Report(venvDir))+" -- python "+cmdImport)
 	testutil.Equal(t, lines[2], "uv venv --quiet "+w.ws.Report(toolsDir))
-	testutil.Equal(t, lines[3], "uv pip install --quiet --python "+venvPython(w.ws.Report(toolsDir))+" --require-hashes -r /policy/python/requirements-tools.txt")
+	testutil.Equal(t, lines[3], "uv pip install --quiet --python "+venvPython(w.ws.Report(toolsDir))+" --require-hashes -r /policy/python/tools-lock.txt")
 	sync := w.fake.Calls()[0]
 	testutil.Equal(t, sync.Env, []string{envCache + w.ws.Report(cacheDir), envNoProg, envProject + w.ws.Report(venvDir)})
 	testutil.Equal(t, sync.Dir, w.ws.Src)
@@ -203,7 +203,7 @@ func TestPrepareRequirementsProject(t *testing.T) {
 	testutil.Equal(t, lines[0], "uv venv --quiet "+w.ws.Report(venvDir))
 	testutil.Contains(t, lines[1], "--require-hashes -r "+filepath.Join(w.ws.Src, "requirements-dev.txt"))
 	testutil.Contains(t, lines[2], "--require-hashes -r "+filepath.Join(w.ws.Src, reqsFile))
-	testutil.Contains(t, lines[4], "-r /policy/python/requirements-test.txt")
+	testutil.Contains(t, lines[4], "-r /policy/python/test-lock.txt")
 }
 
 func TestPrepareFailures(t *testing.T) {
