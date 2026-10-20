@@ -249,7 +249,11 @@ root SSH to. `<vps>` is the server address.
    ssh vpn 'systemctl daemon-reload && systemctl enable --now deploy-hub-prune.timer'
    ```
 
-8. **history-guard timer** — GitHub's `schedule` trigger is best-effort and may
+8. **history-guard timer** — the `history-guard` workflow deletes every branch
+   and tag whose root is not the public snapshot. Its `push` trigger runs the
+   workflow file from the pushed commit, so it fires at once only for refs that
+   already carry the file; refs built purely on the old history are caught by
+   the other triggers. GitHub's `schedule` trigger is best-effort and may
    never fire, so the VPS dispatches the `history-guard` workflow of
    `deploy-hub` and `tasks` every 5 minutes. It needs a fine-grained PAT limited
    to those two repos with only **Actions: Read and write**:
