@@ -17,6 +17,8 @@ const (
 
 const digest = "@sha256:" + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
+const declaredLine = `"pkg:pypi/legacy": MIT`
+
 const valid = `owners: [Owner]
 thresholds:
   line_coverage: 90
@@ -28,12 +30,14 @@ thresholds:
 limits:
   check_timeout: 30m
   fuzz_time: 10s
+  fuzz_examples: 200
   mutant_timeout_floor: 20s
   mutant_timeout_factor: 3
   findings_listed: 20
   stage_ready_timeout: 30s
 licenses: [MIT]
 dependencies: [example.com/dep]
+declared_licenses: {"pkg:pypi/legacy": MIT}
 forbidden_files: ["*.bak"]
 markers: [todo]
 sast_rulesets: [p/default]
@@ -108,11 +112,15 @@ func TestParseRejects(t *testing.T) {
 		"tokens":             {"duplicate_min_tokens: 50", "duplicate_min_tokens: 0"},
 		"check timeout":      {"check_timeout: 30m", "check_timeout: 0s"},
 		"fuzz time":          {"fuzz_time: 10s", "fuzz_time: 0s"},
+		"fuzz examples":      {"fuzz_examples: 200", "fuzz_examples: 0"},
 		"mutant floor":       {"mutant_timeout_floor: 20s", "mutant_timeout_floor: 0s"},
 		"mutant factor":      {"mutant_timeout_factor: 3", "mutant_timeout_factor: 0"},
 		"findings listed":    {"findings_listed: 20", "findings_listed: 0"},
 		"stage ready":        {"stage_ready_timeout: 30s", "stage_ready_timeout: 0s"},
 		"licenses":           {"licenses: [MIT]", "licenses: []"},
+		"declared license":   {declaredLine, `"pkg:pypi/legacy": GPL-3.0-only`},
+		"declared purl":      {declaredLine, `"pypi/legacy": MIT`},
+		"declared version":   {declaredLine, `"pkg:pypi/legacy@1": MIT`},
 		"markers":            {"markers: [todo]", "markers: []"},
 		"rulesets":           {"sast_rulesets: [p/default]", "sast_rulesets: []"},
 		"unpinned semgrep":   {"semgrep: semgrep/semgrep" + digest, "semgrep: semgrep/semgrep:latest"},

@@ -7,16 +7,43 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/golang"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/mutation"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/pack"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/python"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/scan"
 )
 
 const (
 	StackGo    = "go"
 	goManifest = "go.mod"
 	goSource   = ".go"
+
+	requirementsPattern = "requirements*.txt"
 )
 
 func All() []pack.Pack {
-	return []pack.Pack{goPack()}
+	return []pack.Pack{goPack(), pythonPack()}
+}
+
+func pythonPack() pack.Pack {
+	return pack.Pack{
+		Stack:     python.Stack,
+		Manifests: []string{python.ProjectFile, requirementsPattern},
+		Sources:   []string{python.Source, python.Stubs},
+		Loose:     true,
+		Checks: map[string]pack.Run{
+			pack.CheckModules:      python.Integrity,
+			pack.CheckDependencies: python.Dependencies,
+			pack.CheckLint:         python.Lint,
+			pack.CheckComplexity:   python.Complexity,
+			pack.CheckDeadCode:     python.DeadCode,
+			pack.CheckTests:        python.Tests,
+			pack.CheckLineCoverage: python.LineCoverage,
+			pack.CheckBranches:     python.Branches,
+			pack.CheckFuzz:         python.Fuzz,
+			pack.CheckMutation:     python.Mutation,
+			pack.CheckVulns:        scan.DependencyVulnerabilities,
+		},
+		Passed: python.Passed,
+	}
 }
 
 func goPack() pack.Pack {

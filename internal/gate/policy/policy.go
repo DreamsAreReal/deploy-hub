@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"strings"
 	"time"
 
 	"go.yaml.in/yaml/v3"
@@ -23,6 +25,7 @@ const (
 	CategoryBusiness = "business"
 
 	percentCeiling = 100
+	purlScheme     = "pkg:"
 	policyChecks   = 7
 	appChecks      = 3
 )
@@ -38,16 +41,17 @@ var (
 )
 
 type Policy struct {
-	Owners         []string       `yaml:"owners"`
-	Thresholds     Thresholds     `yaml:"thresholds"`
-	Limits         Limits         `yaml:"limits"`
-	Licenses       []string       `yaml:"licenses"`
-	Dependencies   []string       `yaml:"dependencies"`
-	ForbiddenFiles []string       `yaml:"forbidden_files"`
-	Markers        []string       `yaml:"markers"`
-	SASTRules      []string       `yaml:"sast_rulesets"`
-	Images         Images         `yaml:"images"`
-	Apps           map[string]App `yaml:"apps"`
+	Owners         []string          `yaml:"owners"`
+	Thresholds     Thresholds        `yaml:"thresholds"`
+	Limits         Limits            `yaml:"limits"`
+	Licenses       []string          `yaml:"licenses"`
+	Dependencies   []string          `yaml:"dependencies"`
+	Declared       map[string]string `yaml:"declared_licenses"`
+	ForbiddenFiles []string          `yaml:"forbidden_files"`
+	Markers        []string          `yaml:"markers"`
+	SASTRules      []string          `yaml:"sast_rulesets"`
+	Images         Images            `yaml:"images"`
+	Apps           map[string]App    `yaml:"apps"`
 }
 
 type Images struct {
@@ -67,6 +71,7 @@ type Thresholds struct {
 type Limits struct {
 	Check          time.Duration `yaml:"check_timeout"`
 	FuzzTime       time.Duration `yaml:"fuzz_time"`
+	FuzzExamples   int           `yaml:"fuzz_examples"`
 	MutantFloor    time.Duration `yaml:"mutant_timeout_floor"`
 	MutantFactor   int           `yaml:"mutant_timeout_factor"`
 	FindingsListed int           `yaml:"findings_listed"`
@@ -148,9 +153,23 @@ func (p Policy) Validate() error {
 	errs = append(errs,
 		p.Thresholds.validate(), p.Limits.validate(), p.Images.validate(),
 		nonEmpty("owners", p.Owners), nonEmpty("licenses", p.Licenses), nonEmpty("markers", p.Markers), nonEmpty("sast_rulesets", p.SASTRules),
+		p.validateDeclared(),
 	)
 	for name, app := range p.Apps {
 		errs = append(errs, app.validate(name))
+	}
+	return errors.Join(errs...)
+}
+
+func (p Policy) validateDeclared() error {
+	var errs []error
+	for purl, license := range p.Declared {
+		if !strings.HasPrefix(purl, purlScheme) || strings.Contains(purl, "@") {
+			errs = append(errs, fmt.Errorf("%w: declared_licenses key %q must be a package URL without a version", ErrPolicy, purl))
+		}
+		if !slices.Contains(p.Licenses, license) {
+			errs = append(errs, fmt.Errorf("%w: declared license %s of %s is not an approved license", ErrPolicy, license, purl))
+		}
 	}
 	return errors.Join(errs...)
 }
@@ -191,6 +210,7 @@ func (l Limits) validate() error {
 	return errors.Join(
 		positive("check_timeout", int64(l.Check)),
 		positive("fuzz_time", int64(l.FuzzTime)),
+		positive("fuzz_examples", int64(l.FuzzExamples)),
 		positive("mutant_timeout_floor", int64(l.MutantFloor)),
 		positive("mutant_timeout_factor", int64(l.MutantFactor)),
 		positive("findings_listed", int64(l.FindingsListed)),

@@ -78,6 +78,8 @@ var known = map[string]builder{
 	"systemctl":   func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "systemctl", a...) },
 	"trivy":       func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "trivy", a...) },
 	"trufflehog":  func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "trufflehog", a...) },
+	"ruff":        func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "ruff", a...) },
+	"uv":          func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "uv", a...) },
 	"zizmor":      func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "zizmor", a...) },
 }
 

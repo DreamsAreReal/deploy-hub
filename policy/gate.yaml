@@ -10,6 +10,7 @@ thresholds:
 limits:
   check_timeout: 75m
   fuzz_time: 15s
+  fuzz_examples: 1000
   mutant_timeout_floor: 20s
   mutant_timeout_factor: 3
   findings_listed: 40

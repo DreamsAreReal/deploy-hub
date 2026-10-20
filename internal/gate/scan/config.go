@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path"
 	"path/filepath"
 
@@ -23,6 +24,7 @@ const (
 	reasonDockerfile      = "Dockerfiles violate the lint rules"
 	reasonIaC             = "infrastructure configuration has misconfigurations"
 	reasonDependencyVulns = "dependencies have known vulnerabilities"
+	reasonNoWorkflows     = "the repository has no CI/CD configuration"
 	reasonNoDocker        = "the app ships an image but the repository has no Dockerfile"
 	zizmorFormat          = "%s %s %s:%d"
 	actionlintFormat      = "%s:%d: %s (%s)"
@@ -59,6 +61,9 @@ type zizmorFinding struct {
 
 func Workflows(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	dir := filepath.Join(ws.Src, filepath.FromSlash(githubDir))
+	if _, err := os.Stat(dir); err != nil {
+		return gate.Outcome{Status: gate.StatusNA, Reason: reasonNoWorkflows}
+	}
 	zres, zerr := ws.Run(ctx, ZizmorBinary, "--persona=auditor", "--format=json", "--no-progress", "--config", filepath.Join(ws.PolicyDir, zizmorConfig), dir)
 	var zf []zizmorFinding
 	if err := json.Unmarshal([]byte(zres.Stdout), &zf); err != nil {

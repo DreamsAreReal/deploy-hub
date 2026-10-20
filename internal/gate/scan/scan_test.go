@@ -20,6 +20,7 @@ import (
 var errExit = errors.New("exit status 1")
 
 const (
+	gitBinary  = "git"
 	dockerSave = "docker save"
 	gitList    = "git -C"
 	dockerRun  = "docker run"
@@ -55,11 +56,13 @@ func ok(stdout string) reply { return reply{res: procexec.Result{Stdout: stdout}
 
 func workspace(t *testing.T, s script) gate.Workspace {
 	t.Helper()
+	src := t.TempDir()
+	testutil.Mkdir(t, filepath.Join(src, ".github"))
 	return gate.Workspace{
-		Src: t.TempDir(), Out: t.TempDir(), PolicyDir: "/policy", Module: "example.com/app",
+		Src: src, Out: t.TempDir(), PolicyDir: "/policy", Module: "example.com/app",
 		Exec: &procexectest.Fake{Handler: s.handle}, Log: slog.New(slog.DiscardHandler),
 		Policy: policy.Policy{
-			Licenses: []string{"MIT", "Apache-2.0", "BSD-3-Clause"}, SASTRules: []string{"p/default", "p/golang"},
+			Licenses: []string{mit, apache2, bsd3}, SASTRules: []string{"p/default", "p/golang"},
 			Images: policy.Images{Semgrep: "semgrep/semgrep@sha256:abc", ZAP: "zap@sha256:def"},
 		},
 	}
@@ -175,6 +178,11 @@ func TestWorkflows(t *testing.T) {
 	testutil.Contains(t, Workflows(context.Background(), lintCrash).Reason, "unreadable")
 	lintErr := workspace(t, script{ZizmorBinary: ok("[]"), ActionlintBinary: {res: procexec.Result{Stdout: "[]"}, err: errExit}})
 	testutil.Contains(t, Workflows(context.Background(), lintErr).Reason, "tool failed")
+	bare := workspace(t, nil)
+	testutil.NoErr(t, os.Remove(filepath.Join(bare.Src, ".github")))
+	none := Workflows(context.Background(), bare)
+	testutil.Equal(t, none.Status, gate.StatusNA)
+	testutil.Equal(t, none.Reason, reasonNoWorkflows)
 	lintGarbage := workspace(t, script{ZizmorBinary: ok(`[{"ident":"a","locations":[]}]`), ActionlintBinary: ok("x")})
 	garbled := Workflows(context.Background(), lintGarbage)
 	testutil.Equal(t, garbled.Status, gate.StatusFail)
@@ -197,6 +205,45 @@ func TestDockerfiles(t *testing.T) {
 
 const trivyFixture = `{"Results":[{"Target":"Dockerfile","Misconfigurations":[{"ID":"DS002","Title":"root user","Severity":"HIGH","CauseMetadata":{"StartLine":1}}]},
 {"Target":"app (alpine)","Vulnerabilities":[{"VulnerabilityID":"CVE-1","PkgName":"libc","InstalledVersion":"1.0","Severity":"LOW"}],"Secrets":[{"RuleID":"aws","Severity":"CRITICAL","StartLine":2}]}]}`
+
+func TestLicenseNamesAndDeclaredLicenses(t *testing.T) {
+	pol := policy.Policy{Licenses: []string{mit, apache2, bsd3}, Declared: map[string]string{"pkg:pypi/colorama": "BSD-3-Clause", "pkg:pypi/rogue": "GPL-3.0-only"}}
+	comps := []component{
+		{Purl: "pkg:pypi/sortedcontainers@2.4.0", Licenses: licenses("Apache 2.0")},
+		{Purl: "pkg:pypi/colorama@0.4.6"},
+		{Purl: "pkg:pypi/rogue@1"},
+		{Purl: "pkg:pypi/declared-but-known@1", Licenses: licenses("GPL-2.0-only")},
+		{Purl: "pkg:pypi/mystery@1"},
+	}
+	testutil.Equal(t, licenseFindings(comps, pol, nil), []string{
+		"pkg:pypi/rogue@1: license GPL-3.0-only is not approved",
+		"pkg:pypi/declared-but-known@1: license GPL-2.0-only is not approved",
+		"pkg:pypi/mystery@1: license unknown",
+	})
+	testutil.Equal(t, canonical(" The MIT License "), "MIT")
+	testutil.Equal(t, canonical("Custom"), "Custom")
+	testutil.Equal(t, purlName("pkg:npm/%40scope/web@2.0.0"), "pkg:npm/%40scope/web")
+}
+
+func licenses(names ...string) []struct {
+	License struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	} `json:"license"`
+	Expression string `json:"expression"`
+} {
+	out := make([]struct {
+		License struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"license"`
+		Expression string `json:"expression"`
+	}, len(names))
+	for i, n := range names {
+		out[i].License.Name = n
+	}
+	return out
+}
 
 func TestDependencyVulnerabilities(t *testing.T) {
 	w := workspace(t, script{TrivyBinary + " fs": ok(trivyFixture)})
@@ -251,9 +298,17 @@ func TestSBOMAndLicenses(t *testing.T) {
 {"name":"both","purl":"pkg:golang/both.example/lib@v1","licenses":[{"expression":"MIT AND GPL-2.0-only"}]},
 {"name":"named","purl":"pkg:npm/named@1","licenses":[{"license":{"name":"BSD-3-Clause"}}]},
 {"name":"none","purl":"pkg:pypi/none@1"},
+{"name":"own-python","purl":"pkg:pypi/my-app@0.1.0"},
+{"name":"own-web","purl":"pkg:npm/%40scope/web@2.0.0"},
 {"name":"action","purl":"pkg:github/actions/checkout@v4"},
 {"name":"os","purl":"pkg:deb/debian/libc@1"}]}`
-	w := workspace(t, script{SyftBinary + " scan dir:": {run: writeSBOM(source)}, SyftBinary + " scan docker-archive:": {run: writeSBOM(`{"components":[{"name":"busybox","purl":"pkg:apk/busybox@1"}]}`)}, dockerSave: {run: saveImage}})
+	w := workspace(t, script{
+		SyftBinary + " scan dir:": {run: writeSBOM(source)}, SyftBinary + " scan docker-archive:": {run: writeSBOM(`{"components":[{"name":"busybox","purl":"pkg:apk/busybox@1"}]}`)},
+		dockerSave: {run: saveImage}, gitBinary: ok("pyproject.toml\x00web/package.json\x00README.md\x00"),
+	})
+	testutil.Write(t, filepath.Join(w.Src, "pyproject.toml"), "[tool.x]\nname = \"no\"\n\n[project]\nversion = \"0.1.0\"\nname = \"My_App\"\n")
+	testutil.Write(t, filepath.Join(w.Src, "web", "package.json"), `{"name":"@scope/web"}`)
+	testutil.Write(t, filepath.Join(w.Src, "README.md"), "x")
 	w.Image = gateImage
 	out := SBOM(context.Background(), w)
 	testutil.Equal(t, out.Findings, []string{
@@ -261,11 +316,17 @@ func TestSBOMAndLicenses(t *testing.T) {
 		"pkg:golang/both.example/lib@v1: license MIT AND GPL-2.0-only is not approved",
 		"pkg:pypi/none@1: license unknown",
 	})
-	testutil.Equal(t, out.Values[ValueComponents], float64(13))
+	testutil.Equal(t, out.Values[ValueComponents], float64(15))
 	testutil.Contains(t, testutil.Read(t, w.Report(SBOMImage)), "busybox")
 	calls := procexectest.CallsOf(w.Exec)
 	testutil.Equal(t, calls[0].Name, DockerBinary)
 	testutil.Equal(t, calls[1].Env, syftLicenseEnv)
+	testutil.Equal(t, manifestPurls("package.json", []byte("{")), []string(nil))
+	testutil.Equal(t, manifestPurls("pyproject.toml", []byte("[tool]\n")), []string(nil))
+	unlisted := workspace(t, script{SyftBinary: {run: writeSBOM(source)}, gitBinary: {err: errExit}})
+	testutil.Equal(t, SBOM(context.Background(), unlisted).Status, gate.StatusFail)
+	missing := workspace(t, script{SyftBinary: {run: writeSBOM(source)}, gitBinary: ok("gone.toml\x00")})
+	testutil.Contains(t, SBOM(context.Background(), missing).Reason, "gone.toml")
 	unsaved := workspace(t, script{SyftBinary: {run: writeSBOM(source)}, dockerSave: {err: errExit}})
 	unsaved.Image = gateImage
 	testutil.Contains(t, SBOM(context.Background(), unsaved).Reason, "docker save")
@@ -274,7 +335,7 @@ func TestSBOMAndLicenses(t *testing.T) {
 	testutil.Contains(t, SBOM(context.Background(), workspace(t, script{SyftBinary: {err: errExit}})).Reason, "syft dir:")
 	testutil.Equal(t, SBOM(context.Background(), workspace(t, script{SyftBinary: ok("")})).Status, gate.StatusFail)
 	testutil.Contains(t, SBOM(context.Background(), workspace(t, script{SyftBinary: {run: writeSBOM("{")}})).Reason, "SBOM unreadable")
-	clean := workspace(t, script{SyftBinary: {run: writeSBOM(`{"components":[{"purl":"pkg:golang/a@v1","licenses":[{"license":{"id":"MIT"}}]}]}`)}})
+	clean := workspace(t, script{SyftBinary: {run: writeSBOM(`{"components":[{"purl":"pkg:golang/a@v1","licenses":[{"license":{"id":"MIT"}}]}]}`)}, gitBinary: ok("")})
 	clean.Module = ""
 	testutil.Equal(t, SBOM(context.Background(), clean).Status, gate.StatusPass)
 }
