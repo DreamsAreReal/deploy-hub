@@ -46,7 +46,7 @@ func TestHTTPOK(t *testing.T) {
 	}
 }
 
-func TestListeningAndFreePort(t *testing.T) {
+func TestListening(t *testing.T) {
 	var lc net.ListenConfig
 	l, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
@@ -63,13 +63,6 @@ func TestListeningAndFreePort(t *testing.T) {
 	_ = l.Close()
 	if Listening(port) {
 		t.Fatal("closed port reported as listening")
-	}
-	busy := map[int]bool{100: true, 101: true}
-	if got := FreePort(100, func(p int) bool { return busy[p] }); got != 102 {
-		t.Fatalf("FreePort: %d", got)
-	}
-	if got := FreePort(MaxPort-1, func(int) bool { return true }); got != MaxPort {
-		t.Fatalf("FreePort upper bound: %d", got)
 	}
 }
 

@@ -64,14 +64,6 @@ func Listening(port int) bool {
 	return true
 }
 
-func FreePort(start int, listening func(int) bool) int {
-	p := start
-	for p < MaxPort && listening(p) {
-		p++
-	}
-	return p
-}
-
 func ListeningPorts(files []string) []int {
 	set := map[int]bool{}
 	for _, f := range files {

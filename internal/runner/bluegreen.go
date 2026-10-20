@@ -38,6 +38,7 @@ func (s *Service) swap(ctx context.Context, op *operation, conf registry.AppConf
 	name := op.app + standbySuffix
 	apps, err := s.Apps.All()
 	if err != nil {
+		s.Log.Warn("blue-green skipped", "app", op.app, "reason", "apps.list unreadable", "error", err.Error())
 		return s.recreate(ctx, op, conf, ref, t), false
 	}
 	standby := s.standbySpec(ctx, op.dir, name, old, ref, t.Port)
@@ -48,6 +49,9 @@ func (s *Service) swap(ctx context.Context, op *operation, conf registry.AppConf
 		s.Log.Warn("no free standby port", "app", op.app, "port", standby.HostPort)
 		return s.recreate(ctx, op, conf, ref, t), false
 	}
+	// The Caddyfile must list the standby upstream before the standby
+	// starts; reloading now, with no standby yet, is harmless.
+	s.Router.Sync(ctx)
 	drain := false
 	defer func() { s.cleanupStandby(ctx, name, drain) }()
 	s.Out.Printf(msgStandbyStart, name, standby.HostPort, standby.Port)

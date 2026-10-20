@@ -114,7 +114,7 @@ func (a *App) failWith(prefix string, err error) int {
 func (a *App) syncer(ex procexec.Runner) caddy.Syncer {
 	cfg := a.Config.Caddy
 	cfg.Owner = a.Owner(a.Config.CaddyUser)
-	return caddy.Syncer{Config: cfg, Apps: a.apps(), Exec: ex, Out: a.Out, Log: a.Log, Metrics: a.metrics()}
+	return caddy.Syncer{Config: cfg, Apps: a.apps(), Exec: ex, Listening: netprobe.Listening, Out: a.Out, Log: a.Log, Metrics: a.metrics()}
 }
 
 func runCaddySync(ctx context.Context, a *App, ex procexec.Runner, _ []string) int {

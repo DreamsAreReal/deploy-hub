@@ -566,15 +566,18 @@ Every app with a port gets `https://<app>.<host-slug>.sslip.io` →
 Let's Encrypt certificate (sslip.io resolves the name back to the VPS).
 `deploy-hub caddy-sync` renders `/etc/caddy/Caddyfile` from `apps.list`,
 validates it with `caddy validate`, writes it only when it changed (mode 600,
-owner `caddy`) and then reloads Caddy. It runs after onboarding and after
-every successful deploy, once the standby is gone; an unchanged file means
-no reload. Settings: `hub.conf`, `CADDYFILE`, `HOST_SLUG`, `ACME_EMAIL`,
-`CADDY_USER`.
+owner `caddy`) and then reloads Caddy. It runs after onboarding, after a BYOC
+deploy and at the start of a blue-green deploy, before the standby exists; an
+unchanged file means no reload. Settings: `hub.conf`, `CADDYFILE`,
+`HOST_SLUG`, `ACME_EMAIL`, `CADDY_USER`.
 
 The second upstream is the blue-green standby port; nothing listens there
-outside a deploy. `lb_policy first` keeps every request on the permanent port
-while it answers. A request that fails there (`fail_duration 5s`, `max_fails
-1`) takes the port out of rotation for 5 s and goes to the standby. The proxy
+outside a deploy. It is left out when it is past 65535, is another app's port,
+or another process already listens on it, so Caddy never fails over to
+something that is not the app. `lb_policy first` keeps every request on the
+permanent port while it answers. A request that fails there (`fail_duration
+5s`, `max_fails 1`) takes the port out of rotation for 5 s and goes to the
+standby. The proxy
 retries (`lb_try_duration 30s`, `lb_try_interval 250ms`), so while a container
 is recreated, requests wait for one of the two instead of getting an
 instant 502. A failed connection is always retried; a request that already

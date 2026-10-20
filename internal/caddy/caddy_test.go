@@ -75,25 +75,27 @@ func newFixture(t *testing.T) *fixture {
 	owned := []string{}
 	f.owned = &owned
 	f.syncer = Syncer{
-		Config:  Config{Caddyfile: filepath.Join(root, "Caddyfile"), HostSlug: testSlug, Email: "admin@x.sslip.io", Owner: func(p string) error { owned = append(owned, p); return nil }},
-		Apps:    f.apps,
-		Exec:    f.exec,
-		Out:     console.New(f.out),
-		Log:     slog.New(slog.NewJSONHandler(f.logs, nil)),
-		Metrics: f.metrics,
+		Config:    Config{Caddyfile: filepath.Join(root, "Caddyfile"), HostSlug: testSlug, Email: "admin@x.sslip.io", Owner: func(p string) error { owned = append(owned, p); return nil }},
+		Apps:      f.apps,
+		Exec:      f.exec,
+		Listening: func(int) bool { return false },
+		Out:       console.New(f.out),
+		Log:       slog.New(slog.NewJSONHandler(f.logs, nil)),
+		Metrics:   f.metrics,
 	}
 	return f
 }
 
 func TestRoutesAndRender(t *testing.T) {
 	f := newFixture(t)
+	// A stale route override left by an older hub is ignored.
 	testutil.Write(t, filepath.Join(f.root, webApp, ".caddy-port"), "19001\n")
 	apps, _ := f.apps.All()
 	routes := Routes(apps)
 	if len(routes) != 2 || routes[0] != (Route{webApp, "9001", "19001"}) || routes[1] != (Route{"api", "9002", "19002"}) {
 		t.Fatalf("routes: %+v", routes)
 	}
-	block := "\t\tlb_policy first\n\t\tlb_try_duration 30s\n\t\tlb_try_interval 250ms\n\t\tfail_duration 5s\n\t\tmax_fails 1\n\t}\n}\n\n"
+	block := "\t\tlb_try_duration 30s\n\t\tlb_try_interval 250ms\n\t\tlb_policy first\n\t\tfail_duration 5s\n\t\tmax_fails 1\n\t}\n}\n\n"
 	want := header + "{\n\temail a@b\n\tgrace_period 10s\n}\n\n" +
 		"import /etc/caddy/extra/*.caddy\n\n" +
 		"web.s.sslip.io {\n\tlog\n\treverse_proxy 127.0.0.1:9001 127.0.0.1:19001 {\n" + block +
@@ -120,7 +122,17 @@ func TestStandbyPortNeverPointsAtAnotherApp(t *testing.T) {
 	testutil.Equal(t, StandbyPort(apps, "high"), "")
 	testutil.Equal(t, StandbyPort(apps, "edge"), "65535")
 	testutil.Equal(t, StandbyPort(apps, "missing"), "")
-	testutil.Contains(t, Render([]Route{{App: webApp, Port: "9001"}}, "s", "a@b"), "reverse_proxy 127.0.0.1:9001 {\n")
+	testutil.Contains(t, Render([]Route{{App: webApp, Port: "9001"}}, "s", "a@b"),
+		"reverse_proxy 127.0.0.1:9001 {\n\t\tlb_try_duration 30s\n\t\tlb_try_interval 250ms\n\t}\n}")
+}
+
+func TestSyncDropsStandbyUpstreamSomethingElseListensOn(t *testing.T) {
+	f := newFixture(t)
+	f.syncer.Listening = func(p int) bool { return p == 19002 }
+	testutil.NoErr(t, f.syncer.Run(context.Background()))
+	got := testutil.Read(t, f.syncer.Config.Caddyfile)
+	testutil.Contains(t, got, "reverse_proxy 127.0.0.1:9001 127.0.0.1:19001 {", "reverse_proxy 127.0.0.1:9002 {\n")
+	testutil.Contains(t, f.logs.String(), `"msg":"standby port taken, no failover upstream","app":"api","port":"19002"`)
 }
 
 func TestSyncWritesValidatesAndReloads(t *testing.T) {

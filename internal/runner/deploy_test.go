@@ -82,7 +82,7 @@ func TestBlueGreenSwapIsZeroDowntime(t *testing.T) {
 		t.Fatalf("standby args: %v", run.Args)
 	}
 	if len(standbyAtSync) != 1 || standbyAtSync[0] {
-		t.Fatalf("routes are synced once, after the standby is gone (no reload mid-swap): %v", standbyAtSync)
+		t.Fatalf("routes are synced once, before the standby starts (no reload mid-swap): %v", standbyAtSync)
 	}
 	if len(e.slept) != 1 || e.slept[0] != caddy.Settle {
 		t.Fatalf("standby must stay up while Caddy returns to the permanent port: %v", e.slept)

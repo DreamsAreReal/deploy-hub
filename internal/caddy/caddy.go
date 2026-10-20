@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/console"
+	"github.com/DreamsAreReal/deploy-hub/internal/netprobe"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/obs"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
@@ -33,13 +34,14 @@ const (
 	extraImport      = "import /etc/caddy/extra/*.caddy\n\n"
 	siteOpen         = "%s.%s.sslip.io {\n\tlog\n\treverse_proxy 127.0.0.1:%s"
 	standbyUpstream  = " 127.0.0.1:%s"
-	siteClose        = " {\n\t\tlb_policy first\n\t\tlb_try_duration 30s\n\t\tlb_try_interval 250ms\n\t\tfail_duration %s\n\t\tmax_fails 1\n\t}\n}\n\n"
+	siteRetry        = " {\n\t\tlb_try_duration 30s\n\t\tlb_try_interval 250ms\n"
+	siteFailover     = "\t\tlb_policy first\n\t\tfail_duration %s\n\t\tmax_fails 1\n"
+	siteClose        = "\t}\n}\n\n"
 	msgUpToDate      = "caddy-sync: Caddyfile already up to date (no reload)"
 	msgUpdated       = "caddy-sync: Caddyfile updated and Caddy reloaded"
 	candidateSuffix  = ".new"
 
 	standbyPortOffset = 10000
-	maxPort           = 65535
 
 	// FailDuration is how long Caddy keeps an upstream out of rotation after
 	// one failed request. Traffic moves between the permanent port and the
@@ -101,7 +103,7 @@ func Routes(apps []registry.Entry) []Route {
 	}
 	for i, r := range out {
 		port, _ := strconv.Atoi(r.Port)
-		if standby := strconv.Itoa(port + standbyPortOffset); port+standbyPortOffset <= maxPort && !taken[standby] {
+		if standby := strconv.Itoa(port + standbyPortOffset); port+standbyPortOffset <= netprobe.MaxPort && !taken[standby] {
 			out[i].Standby = standby
 		}
 	}
@@ -129,18 +131,23 @@ func Render(routes []Route, slug, email string) string {
 		if r.Standby != "" {
 			fmt.Fprintf(&b, standbyUpstream, r.Standby)
 		}
-		fmt.Fprintf(&b, siteClose, FailDuration)
+		b.WriteString(siteRetry)
+		if r.Standby != "" {
+			fmt.Fprintf(&b, siteFailover, FailDuration)
+		}
+		b.WriteString(siteClose)
 	}
 	return b.String()
 }
 
 type Syncer struct {
-	Config  Config
-	Apps    registry.Apps
-	Exec    procexec.Runner
-	Out     *console.Printer
-	Log     *slog.Logger
-	Metrics obs.Pusher
+	Config    Config
+	Apps      registry.Apps
+	Exec      procexec.Runner
+	Listening func(int) bool
+	Out       *console.Printer
+	Log       *slog.Logger
+	Metrics   obs.Pusher
 }
 
 type syncResult struct {
@@ -176,7 +183,7 @@ func (s Syncer) sync(ctx context.Context) (syncResult, error) {
 	if err != nil {
 		return syncResult{}, err
 	}
-	routes := Routes(apps)
+	routes := s.withoutForeignStandby(Routes(apps))
 	content := []byte(Render(routes, s.Config.HostSlug, s.Config.Email))
 	if current, rerr := os.ReadFile(s.Config.Caddyfile); rerr == nil && bytes.Equal(current, content) {
 		s.Out.Println(msgUpToDate)
@@ -193,6 +200,19 @@ func (s Syncer) sync(ctx context.Context) (syncResult, error) {
 	s.Out.Println(msgUpdated)
 	s.Log.Info("caddyfile updated", "routes", len(routes))
 	return syncResult{reloaded: true, routes: len(routes)}, nil
+}
+
+// withoutForeignStandby drops a standby upstream that something already
+// listens on. caddy-sync runs before a blue-green standby starts and after
+// it is gone, so a listener there is not this app.
+func (s Syncer) withoutForeignStandby(routes []Route) []Route {
+	for i, r := range routes {
+		if port, _ := strconv.Atoi(r.Standby); r.Standby != "" && s.Listening(port) {
+			s.Log.Warn("standby port taken, no failover upstream", "app", r.App, "port", r.Standby)
+			routes[i].Standby = ""
+		}
+	}
+	return routes
 }
 
 func (s Syncer) install(ctx context.Context, content []byte) error {
