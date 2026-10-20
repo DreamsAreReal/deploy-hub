@@ -326,27 +326,14 @@ func TestBranches(t *testing.T) {
 	testutil.Contains(t, Branches(context.Background(), outside).Reason, "Rel: can't make relative")
 }
 
-func TestScenarios(t *testing.T) {
+func TestPassedTestsUseRegistryNames(t *testing.T) {
 	w := ws(t, nil)
-	testutil.Contains(t, Scenarios(context.Background(), w).Reason, "test report missing")
-	testutil.Write(t, w.Report(TestsReport), events)
-	w.App.Scenarios = []policy.Scenario{
-		{ID: "a", Category: policy.CategorySecurity, Tests: []string{testA, "lib.TestA/sub"}},
-		{ID: "b", Category: policy.CategorySecurity, Tests: []string{"lib.TestB"}},
-		{ID: "c", Category: policy.CategoryBusiness, Tests: []string{testA}},
-	}
-	out := Scenarios(context.Background(), w)
-	testutil.Equal(t, out.Status, gate.StatusFail)
-	testutil.Equal(t, out.Findings, []string{"b (security): test lib.TestB did not pass"})
-	testutil.Equal(t, out.Values[ValueSecurityScenarios], float64(50))
-	testutil.Equal(t, out.Values[ValueBusinessScenarios], float64(100))
-	w.App.Scenarios = w.App.Scenarios[2:]
-	testutil.Equal(t, Scenarios(context.Background(), w).Status, gate.StatusPass)
-	w.App.Scenarios = nil
-	testutil.Equal(t, Scenarios(context.Background(), w).Status, gate.StatusFail)
-	testutil.Write(t, w.Report(TestsReport), `{"Action":"pass","Package":"example.com/app","Test":"TestRoot"}`+"\n")
-	w.App.Scenarios = []policy.Scenario{{ID: "root", Category: policy.CategoryBusiness, Tests: []string{".TestRoot"}}}
-	testutil.Equal(t, Scenarios(context.Background(), w).Status, gate.StatusPass)
+	_, err := PassedTests(w)
+	testutil.Contains(t, err.Error(), "test report missing")
+	testutil.Write(t, w.Report(TestsReport), events+`{"Action":"pass","Package":"example.com/app","Test":"TestRoot"}`+"\n")
+	passed, err := PassedTests(w)
+	testutil.NoErr(t, err)
+	testutil.Equal(t, passed, map[string]bool{testA: true, "lib.TestA/sub": true, ".TestRoot": true})
 }
 
 func TestFuzz(t *testing.T) {

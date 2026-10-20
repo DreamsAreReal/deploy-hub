@@ -54,15 +54,6 @@ type Report struct {
 
 var lex = lexis.Lex
 
-var codeExts = map[string]bool{
-	extGo: true, ".js": true, ".mjs": true, ".cjs": true, ".jsx": true, ".ts": true, ".mts": true, ".cts": true, ".tsx": true,
-	".vue": true, ".svelte": true, ".py": true, ".pyi": true, ".rb": true, ".php": true, ".java": true, ".kt": true, ".kts": true,
-	".scala": true, ".groovy": true, ".cs": true, ".fs": true, ".vb": true, ".c": true, ".h": true, ".cc": true, ".cpp": true,
-	".cxx": true, ".hpp": true, ".rs": true, ".swift": true, ".dart": true, ".lua": true, ".pl": true, ".pm": true, ".sh": true,
-	".bash": true, ".zsh": true, ".ps1": true, ".sql": true, ".r": true, ".ex": true, ".exs": true, ".erl": true, ".hs": true,
-	".clj": true, ".m": true, ".mm": true,
-}
-
 var headerWords = map[string]bool{"import": true, "from": true, "using": true, "use": true, "package": true, "require": true}
 
 func (r Report) Percent() float64 {
@@ -79,7 +70,7 @@ func Check(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	}
 	sources := map[string][]byte{}
 	for _, f := range files {
-		if !codeExts[path.Ext(f)] {
+		if !lexis.IsCode(f) {
 			continue
 		}
 		data, err := os.ReadFile(filepath.Join(ws.Src, filepath.FromSlash(f)))

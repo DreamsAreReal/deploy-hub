@@ -61,22 +61,23 @@ versions and checksums: [`policy/tools.yaml`](policy/tools.yaml).
 | `hygiene` | state/backup/debug/report files, keys, scanner-suppression files tracked in git | — |
 | `comments` | any comment or documentation string in source and configuration files of any language (Python docstrings included); prose (`.md`, `.txt`, …) and tool-generated lockfiles are not source, `// indirect` is the only note allowed in `go.mod` | go/scanner, YAML parser, chroma lexers |
 | `markers` | work markers (the four listed in the policy) anywhere in tracked files | — |
-| `modules` | `go mod verify` / `go mod tidy -diff` failures, checksum DB disabled | go |
-| `dependencies` | a module (direct, transitive or test-only) not in the approved list | go list |
-| `lint` | any linter finding under the central config (magic numbers/strings, gosec, unused code, shadowing, …) | golangci-lint |
-| `cognitive-complexity` | a function above 9 | gocognit |
+| `stacks` | source files no language pack can check: a language without a pack, or code outside any project | built in |
+| `modules` | dependency integrity: unverifiable checksums, lockfile drift | per stack |
+| `dependencies` | a dependency (direct, transitive or test-only) not in the approved list | per stack |
+| `lint` | any linter finding under the central config (magic numbers/strings, security rules, unused code, …) | per stack |
+| `cognitive-complexity` | a function above 9 | per stack |
 | `duplication` | 2% or more duplicated code lines across every programming-language file (token windows of 50; imports, includes and comments excluded) | built in, chroma lexers |
-| `dead-code` | unreachable functions, including ones reachable only from tests | deadcode |
-| `tests` | any failed, skipped or crashed test; unit, integration and e2e together, `-race` | go test |
-| `line-coverage` | below 90% of code lines | go test -cover |
-| `branch-coverage` | below 90% of branches | gobco |
-| `scenarios` | a registered security or business scenario whose tests did not pass | policy registry |
-| `fuzz` | a fuzz target failing within the time budget, or no fuzz targets at all | go test -fuzz |
-| `mutation` | mutation score below 90% (killed / all viable mutants, uncovered ones count as survivors), or any mutant that could not be run (the run is incomplete) | built in, isolated build cache in the report directory |
+| `dead-code` | unreachable functions, including ones reachable only from tests | per stack |
+| `tests` | any failed, skipped or crashed test; unit, integration and e2e together | per stack |
+| `line-coverage` | below 90% of code lines | per stack |
+| `branch-coverage` | below 90% of branches | per stack |
+| `scenarios` | a registered security or business scenario whose tests did not pass in any project | policy registry |
+| `fuzz` | a fuzz target failing within the time budget, or no fuzz targets at all | per stack |
+| `mutation` | mutation score below 90% (killed / all viable mutants, uncovered ones count as survivors), or any mutant that could not be run (the run is incomplete) | per stack |
 | `secrets-gitleaks` | any secret in the full git history or the working tree | gitleaks |
 | `secrets-trufflehog` | any verified, unverified or unknown secret in the history | trufflehog |
 | `sast` | any Semgrep finding of any severity, no ignore files honoured | semgrep |
-| `vulnerabilities` | any known vulnerability reachable or imported | govulncheck |
+| `vulnerabilities` | any known vulnerability reachable or imported | per stack |
 | `sca` | any known vulnerability in dependencies | osv-scanner |
 | `sbom-licenses` | a dependency with an unknown or unapproved license; SBOMs are kept per release | syft |
 | `workflows` | any finding in `.github` at the auditor level | zizmor, actionlint |
@@ -85,6 +86,18 @@ versions and checksums: [`policy/tools.yaml`](policy/tools.yaml).
 | `image` | any vulnerability, secret or misconfiguration in the built image | trivy |
 | `dast` | any ZAP alert of Low risk or above on the running app | OWASP ZAP full scan |
 | `load` | p95 above the profile, errors above the profile, crash, restart or OOM under load | built in |
+
+**Language packs.** The checks marked "per stack" run once per project in the
+repository; a project is the directory of a stack manifest. A repository with
+several projects (an API and a web front end, say) gets every project checked
+and the results merged: the worst status wins, values and findings carry the
+project label (`go`, `node:web`). Each project writes its reports to its own
+subdirectory of `--out`. Code of a language without a pack, or outside any
+project, fails the `stacks` check.
+
+| Stack | Project manifest | Tools |
+|---|---|---|
+| Go | `go.mod` | go (`mod verify`, `list -deps`, `test -race -cover`, `test -fuzz`), golangci-lint, gocognit, deadcode, gobco, govulncheck, the built-in mutation engine (isolated build cache in the report directory) |
 
 **Whose code.** Repositories of the policy `owners` that are not forks get every
 check. Forks and other code get only the security checks (secrets, SAST,

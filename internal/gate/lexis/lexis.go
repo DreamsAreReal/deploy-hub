@@ -14,6 +14,19 @@ const (
 	tripleSingle      = "'''"
 )
 
+var codeExts = map[string]bool{
+	".go": true, ".js": true, ".mjs": true, ".cjs": true, ".jsx": true, ".ts": true, ".mts": true, ".cts": true, ".tsx": true,
+	".vue": true, ".svelte": true, ".py": true, ".pyi": true, ".rb": true, ".php": true, ".java": true, ".kt": true, ".kts": true,
+	".scala": true, ".groovy": true, ".cs": true, ".fs": true, ".vb": true, ".c": true, ".h": true, ".cc": true, ".cpp": true,
+	".cxx": true, ".hpp": true, ".rs": true, ".swift": true, ".dart": true, ".lua": true, ".pl": true, ".pm": true, ".sh": true,
+	".bash": true, ".zsh": true, ".ps1": true, ".sql": true, ".r": true, ".ex": true, ".exs": true, ".erl": true, ".hs": true,
+	".clj": true, ".m": true, ".mm": true,
+}
+
+func IsCode(name string) bool {
+	return codeExts[path.Ext(name)]
+}
+
 var affixKind = chroma.LiteralStringAffix.String()
 
 type Token struct {

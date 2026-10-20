@@ -52,7 +52,7 @@ jobs:
           name: gate-reports
           path: |
             ${{ runner.temp }}/gate/verdict.json
-            ${{ runner.temp }}/gate/mutation.json
+            ${{ runner.temp }}/gate/**/mutation.json
             ${{ runner.temp }}/gate/sbom-*.cdx.json
           if-no-files-found: ignore
 
