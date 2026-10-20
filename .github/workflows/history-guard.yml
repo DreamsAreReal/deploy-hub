@@ -1,0 +1,38 @@
+name: history-guard
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: history-guard
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    name: sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    env:
+      ROOT: 6a9fc8af3fb3c88150e2706bb6a3fef8a53f935b
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Delete refs that carry history from before the public snapshot
+        run: |
+          set -euo pipefail
+          git clone -q --bare --filter=blob:none "https://github.com/${REPO}.git" repo.git
+          cd repo.git
+          git for-each-ref --format='%(refname)' refs/heads refs/tags | while read -r ref; do
+            roots="$(git rev-list --max-parents=0 "$ref" | sort -u | tr '\n' ' ')"
+            if [ "$roots" != "$ROOT " ]; then
+              echo "deleting $ref"
+              path="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$ref")"
+              gh api -X DELETE "repos/${REPO}/git/${path}"
+            fi
+          done
