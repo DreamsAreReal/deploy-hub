@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/linecov"
@@ -32,6 +33,25 @@ func TestNodeTestFilesFollowTheRunnerDefaults(t *testing.T) {
 	}
 }
 
+func indexReport(t *testing.T, c procexec.Command) bool {
+	t.Helper()
+	if len(c.Args) < 2 {
+		return false
+	}
+	report, ok := strings.CutPrefix(c.Args[len(c.Args)-2], "--test-reporter-destination=")
+	if !ok {
+		return false
+	}
+	lines := "DA:1,1\nDA:4,1\n"
+	if c.Args[len(c.Args)-1] == importsTest {
+		lines = "DA:1,1\nDA:4,0\n"
+	}
+	if info, err := os.Stat(report); err != nil || !info.IsDir() {
+		testutil.Write(t, report, "SF:"+plainFile+"\n"+lines+"end_of_record\n")
+	}
+	return true
+}
+
 func selectionWorld(t *testing.T) *world {
 	t.Helper()
 	w := newWorld(t, map[string]string{Manifest: plainManifest, Lockfile: lockGood, plainFile: plainSource, coversTest: "t", importsTest: "o", "README.md": ""})
@@ -40,14 +60,7 @@ func selectionWorld(t *testing.T) *world {
 	testutil.Write(t, w.WS.Report(JUnitReport), junitGreen)
 	hook := w.Hook
 	w.Hook = func(c procexec.Command, line string) (procexec.Result, error) {
-		if report, ok := strings.CutPrefix(c.Args[max(0, len(c.Args)-2)], "--test-reporter-destination="); ok && len(c.Args) > 1 {
-			lines := "DA:1,1\nDA:4,1\n"
-			if c.Args[len(c.Args)-1] == importsTest {
-				lines = "DA:1,1\nDA:4,0\n"
-			}
-			if info, serr := os.Stat(report); serr != nil || !info.IsDir() {
-				testutil.Write(t, report, "SF:"+plainFile+"\n"+lines+"end_of_record\n")
-			}
+		if indexReport(t, c) {
 			return procexec.Result{}, packtest.ErrSim
 		}
 		return hook(c, line)
@@ -70,18 +83,19 @@ func TestTheIndexMapsLinesToTheTestFilesThatRunThem(t *testing.T) {
 
 func TestNodeMutantsRunOnlyTheCoveringTestFiles(t *testing.T) {
 	w := selectionWorld(t)
-	var ran [][]string
+	var (
+		mu  sync.Mutex
+		ran [][]string
+	)
 	hook := w.Hook
 	w.Hook = func(c procexec.Command, line string) (procexec.Result, error) {
-		if c.Args[0] == flagTest && len(c.Args) > 1 && !strings.HasPrefix(c.Args[1], "--") {
-			ran = append(ran, slices.Clone(c.Args[1:]))
-			return procexec.Result{}, packtest.ExitError(t, 1)
+		if c.Args[0] != flagTest || (len(c.Args) > 1 && strings.HasPrefix(c.Args[1], "--")) {
+			return hook(c, line)
 		}
-		if len(c.Args) == 1 && c.Args[0] == flagTest {
-			ran = append(ran, nil)
-			return procexec.Result{}, packtest.ExitError(t, 1)
-		}
-		return hook(c, line)
+		mu.Lock()
+		defer mu.Unlock()
+		ran = append(ran, slices.Clone(c.Args[1:]))
+		return procexec.Result{}, packtest.ExitError(t, 1)
 	}
 	rep, err := tokmut.Mutate(context.Background(), w.WS, mutationSuite)
 	testutil.NoErr(t, err)
