@@ -88,7 +88,6 @@ func newFixture(t *testing.T) *fixture {
 
 func TestRoutesAndRender(t *testing.T) {
 	f := newFixture(t)
-	// A stale route override left by an older hub is ignored.
 	testutil.Write(t, filepath.Join(f.root, webApp, ".caddy-port"), "19001\n")
 	apps, _ := f.apps.All()
 	routes := Routes(apps)
