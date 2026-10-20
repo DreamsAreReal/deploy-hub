@@ -1,0 +1,82 @@
+groups:
+  - name: deploy-hub
+    interval: 1m
+    rules:
+      - alert: DeployHubSilent
+        expr: absent_over_time(deploy_hub_command_exit_code{command="runner"}[5m])
+        annotations:
+          summary: "deploy-hub pushed no metrics for 5 minutes"
+          description: "deploy-hub-status.timer runs the runner every minute and every run pushes its exit code. Check on the VPS: systemctl status deploy-hub-status.timer, /opt/deploy-hub/logs/runner.log, and that VictoriaMetrics accepts imports on DEPLOY_HUB_METRICS_URL."
+
+      - alert: DeployHubCommandPanicked
+        expr: max by (command) (max_over_time(deploy_hub_command_panicked[15m])) > 0
+        annotations:
+          summary: "deploy-hub {{ $labels.command }} panicked"
+          description: "A panic was recovered and the command failed. The stack is in VictoriaLogs: command:{{ $labels.command }} msg:\"command panicked\", or /opt/deploy-hub/logs/{{ $labels.command }}.log on the VPS."
+
+      - alert: DeployHubCommandErrors
+        expr: sum by (command) (sum_over_time(deploy_hub_command_log_records{level="error"}[15m])) > 0
+        annotations:
+          summary: "deploy-hub {{ $labels.command }} logged errors"
+          description: "{{ $value }} error records in 15 minutes. Read them in /opt/deploy-hub/logs/{{ $labels.command }}.log on the VPS or in VictoriaLogs: command:{{ $labels.command }} level:ERROR."
+
+      - alert: DeployHubCommandFailed
+        expr: max by (command) (max_over_time(deploy_hub_command_exit_code{command!="runner"}[30m])) > 0
+        annotations:
+          summary: "deploy-hub {{ $labels.command }} exited with code {{ $value }}"
+          description: "A server command (caddy-sync, prune, provision or facts) failed. Its log is /opt/deploy-hub/logs/{{ $labels.command }}.log on the VPS."
+
+      - alert: DeployHubOperationFailed
+        expr: sum by (app, action) (increase_prometheus(deploy_hub_operations_total{action=~"deploy|redeploy|rollback",result="fail"}[15m])) > 0
+        annotations:
+          summary: "{{ $labels.action }} of {{ $labels.app }} failed"
+          description: "The journal recorded a failed {{ $labels.action }}; the previous version keeps serving. Details: runner history {{ $labels.app }}, /opt/deploy-hub/deploys.log and last-error.log on the VPS."
+
+      - alert: DeployHubGateRejected
+        expr: min by (app, check) (min_over_time(deploy_hub_gate_check_passed[15m])) == 0
+        annotations:
+          summary: "Gate check {{ $labels.check }} rejected {{ $labels.app }}"
+          description: "The commit was not deployed. Checks named ci-<step> mean the CI step failed before the gate ran. Findings: the gate-reports artifact of the deploy run, or VictoriaMetrics deploy_hub_gate_check_value{app=\"{{ $labels.app }}\",check=\"{{ $labels.check }}\"}."
+
+      - alert: DeployHubGateCheckCrashed
+        expr: max by (app, check) (max_over_time(deploy_hub_gate_check_value{name="crashed"}[15m])) > 0
+        annotations:
+          summary: "Gate check {{ $labels.check }} crashed on {{ $labels.app }}"
+          description: "A defect in the deploy-hub gate, not in the app: the check panicked and blocked the deploy. The stack is in the gate log of the deploy run (msg \"gate check panicked\")."
+
+      - alert: DeployHubRequestRefused
+        expr: sum by (verb, reason) (count_over_time(deploy_hub_request_refused[15m])) > 0
+        annotations:
+          summary: "deploy-hub refused {{ $labels.verb }}: {{ $labels.reason }}"
+          description: "{{ $value }} refused requests in 15 minutes. Only the hub deploy workflow talks to the runner, so a refusal is a broken workflow, a missing registration or an intrusion attempt. Details: /opt/deploy-hub/logs/runner.log, msg \"request refused\"."
+
+      - alert: DeployHubAppUnhealthy
+        expr: deploy_hub_app_healthy == 0
+        for: 5m
+        annotations:
+          summary: "{{ $labels.app }} is not healthy"
+          description: "The health probe of runner status has failed for 5 minutes. Check: runner status, docker ps and the container logs of {{ $labels.app }} on the VPS."
+
+      - alert: DeployHubCaddySyncFailed
+        expr: min(min_over_time(deploy_hub_caddy_sync_success[15m])) == 0
+        annotations:
+          summary: "Caddy routes were not updated"
+          description: "deploy-hub caddy-sync could not validate, write or reload the Caddyfile, so new routes are not served. Log: /opt/deploy-hub/logs/caddy-sync.log on the VPS."
+
+      - alert: DeployHubLockContention
+        expr: max by (app) (max_over_time(deploy_hub_lock_wait_seconds[15m])) > 120
+        annotations:
+          summary: "Deploy of {{ $labels.app }} waited {{ $value | humanizeDuration }} for the lock"
+          description: "Deploys queue behind each other; after 300 s a deploy gives up. Check for a stuck deploy in /opt/deploy-hub/logs/runner.log."
+
+      - alert: DeployHubDeliveryFailed
+        expr: min(min_over_time(deploy_hub_delivery_success[15m])) == 0
+        annotations:
+          summary: "deploy-hub could not post delivery steps to the tracker"
+          description: "Deploys go on, but the tracker misses their path to prod. Check delivery_url in /opt/deploy-hub/hub.conf and the tracker; log message \"delivery steps not sent\"."
+
+      - alert: DeployHubJournalUnreadable
+        expr: min(min_over_time(deploy_hub_journal_readable[5m])) == 0
+        annotations:
+          summary: "deploy-hub cannot read its journal"
+          description: "/opt/deploy-hub/deploys.log is unreadable: rollbacks lose their targets and the journal counters are not pushed. Check its owner (deploy) and mode on the VPS."

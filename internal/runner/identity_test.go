@@ -188,7 +188,7 @@ func TestReportRecordsBlockedVerdict(t *testing.T) {
 	testutil.True(t, e.metrics.has(obs.MetricGateCheckDuration, obs.Labels{obs.LabelCheck: checkMutation}), "check duration")
 	testutil.True(t, !e.metrics.has(obs.MetricGateCheckVerdict, obs.Labels{obs.LabelCheck: checkDAST}), "n/a check emits no pass metric")
 	testutil.True(t, e.metrics.has(obs.MetricOperationsTotal, obs.Labels{obs.LabelAction: "gate", obs.LabelResult: "fail"}), "journal counter")
-	testutil.Contains(t, e.logs.String(), `"msg":"gate check failed"`, `"check":"mutation"`, "a.go:1 survived", `"msg":"gate check not applicable"`, `"msg":"gate check passed"`)
+	testutil.Contains(t, e.logs.String(), `"level":"WARN","msg":"gate check failed"`, `"check":"mutation"`, "a.go:1 survived", `"msg":"gate check not applicable"`, `"msg":"gate check passed"`)
 	testutil.Equal(t, e.exec.Count("docker"), 0)
 	testutil.Equal(t, registry.LoadState(e.appDir), registry.DeployState{})
 	e.expectLog("gate verdict recorded")

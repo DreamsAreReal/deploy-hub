@@ -80,7 +80,7 @@ func (s *Service) recordCheck(app, tag string, r gate.Result) {
 		s.samples = append(s.samples, obs.Sample{Name: obs.MetricGateCheckValue, Labels: obs.Labels{obs.LabelApp: app, obs.LabelCheck: r.Check, obs.LabelName: name}, Value: value})
 	}
 	if r.Status == gate.StatusFail {
-		s.Log.Error("gate check failed", "app", app, "tag", tag, "check", r.Check, "reason", r.Reason, "values", r.Values, "findings", r.Findings)
+		s.Log.Warn("gate check failed", "app", app, "tag", tag, "check", r.Check, "reason", r.Reason, "values", r.Values, "findings", r.Findings)
 		return
 	}
 	s.Log.Info("gate check passed", "app", app, "tag", tag, "check", r.Check, "values", r.Values)
