@@ -60,16 +60,6 @@ func decodePackages(data []byte) (Packages, error) {
 	}
 }
 
-func (ps Packages) importedBy() (prod, tests map[string]bool) {
-	prod, tests = map[string]bool{}, map[string]bool{}
-	for _, p := range ps {
-		mark(prod, p.Imports)
-		mark(tests, p.TestImports)
-		mark(tests, p.XTestImports)
-	}
-	return prod, tests
-}
-
 func mark(set map[string]bool, paths []string) {
 	for _, p := range paths {
 		set[p] = true
@@ -77,14 +67,34 @@ func mark(set map[string]bool, paths []string) {
 }
 
 func (ps Packages) TestSupport() map[string]bool {
-	prod, tests := ps.importedBy()
+	imported := map[string]bool{}
+	for _, p := range ps {
+		mark(imported, p.Imports)
+		mark(imported, p.TestImports)
+		mark(imported, p.XTestImports)
+	}
+	for ps.dropProductionImports(imported) {
+	}
 	out := map[string]bool{}
 	for _, p := range ps {
-		if p.Name != mainPkg && !prod[p.ImportPath] && tests[p.ImportPath] {
+		if p.Name != mainPkg && imported[p.ImportPath] {
 			out[p.ImportPath] = true
 		}
 	}
 	return out
+}
+
+func (ps Packages) dropProductionImports(support map[string]bool) bool {
+	dropped := false
+	for _, p := range ps {
+		for _, imp := range p.Imports {
+			if !support[p.ImportPath] && support[imp] {
+				delete(support, imp)
+				dropped = true
+			}
+		}
+	}
+	return dropped
 }
 
 func (ps Packages) Production() Packages {

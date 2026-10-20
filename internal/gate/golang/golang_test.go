@@ -72,7 +72,8 @@ func samplePackages() Packages {
 	return Packages{
 		{ImportPath: module, Name: "main", GoFiles: []string{"main.go"}, Imports: []string{module + "/lib"}, Deps: []string{module + "/lib"}},
 		{ImportPath: module + "/lib", Name: "lib", GoFiles: []string{"lib.go"}, TestGoFiles: []string{fileLibTest}, TestImports: []string{module + "/testkit"}},
-		{ImportPath: module + "/testkit", Name: "testkit", GoFiles: []string{"kit.go"}},
+		{ImportPath: module + "/testkit", Name: "testkit", GoFiles: []string{"kit.go"}, Imports: []string{module + "/fakes"}},
+		{ImportPath: module + "/fakes", Name: "fakes", GoFiles: []string{"fake.go"}},
 		{ImportPath: module + "/e2e", Name: "e2e", XTestGoFiles: []string{"e2e_test.go"}, Deps: []string{module + "/lib"}, XTestImports: []string{module + "/fixtures", module + "/lib"}},
 		{ImportPath: module + "/fixtures", Name: "fixtures", GoFiles: []string{"f.go"}},
 		{ImportPath: module + "/orphan", Name: "orphan", GoFiles: []string{"o.go"}},
@@ -81,12 +82,12 @@ func samplePackages() Packages {
 
 func TestPackageClassification(t *testing.T) {
 	pkgs := samplePackages()
-	testutil.Equal(t, pkgs.TestSupport(), map[string]bool{module + "/testkit": true, module + "/fixtures": true})
+	testutil.Equal(t, pkgs.TestSupport(), map[string]bool{module + "/testkit": true, module + "/fakes": true, module + "/fixtures": true})
 	testutil.Equal(t, pkgs.Production().Paths(), []string{module, module + "/lib", module + "/orphan"})
 	testutil.Equal(t, pkgs.Dependents(module+"/lib"), []string{module + "/e2e"})
 	testutil.Equal(t, pkgs.Dependents(module+"/testkit"), []string{module + "/lib"})
 	testutil.Equal(t, len(pkgs.Dependents(module+"/orphan")), 0)
-	testutil.True(t, pkgs[1].HasTests() && pkgs[3].HasTests() && !pkgs[0].HasTests(), "HasTests")
+	testutil.True(t, pkgs[1].HasTests() && pkgs[4].HasTests() && !pkgs[0].HasTests(), "HasTests")
 }
 
 func TestListAndModule(t *testing.T) {
