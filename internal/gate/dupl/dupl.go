@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/lexis"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/source"
 )
 
@@ -22,6 +23,8 @@ const (
 	extGo            = ".go"
 	percentScale     = 100
 	reasonDupl       = "duplicated code is not below the policy limit"
+	reasonUnreadable = "source files could not be tokenized"
+	preprocKind      = "CommentPreproc"
 	rangeFormat      = "%d-%d"
 	fileFormat       = "%s: lines %s"
 	hashBase         = 1099511628211
@@ -46,7 +49,12 @@ type Report struct {
 	CodeLines       int
 	DuplicatedLines int
 	Duplicated      map[string][]int
+	Unreadable      []string
 }
+
+var lex = lexis.Lex
+
+var headerWords = map[string]bool{"import": true, "from": true, "using": true, "use": true, "package": true, "require": true}
 
 func (r Report) Percent() float64 {
 	if r.CodeLines == 0 {
@@ -62,7 +70,7 @@ func Check(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	}
 	sources := map[string][]byte{}
 	for _, f := range files {
-		if path.Ext(f) != extGo {
+		if !lexis.IsCode(f) {
 			continue
 		}
 		data, err := os.ReadFile(filepath.Join(ws.Src, filepath.FromSlash(f)))
@@ -72,6 +80,9 @@ func Check(ctx context.Context, ws gate.Workspace) gate.Outcome {
 		sources[f] = data
 	}
 	rep := Analyze(sources, ws.Policy.Thresholds.DuplicateTokens)
+	if len(rep.Unreadable) > 0 {
+		return gate.Fail(reasonUnreadable, rep.Unreadable...)
+	}
 	pct := rep.Percent()
 	values := map[string]float64{ValueDuplication: pct, ValueCodeLines: float64(rep.CodeLines), ValueDupLines: float64(rep.DuplicatedLines)}
 	return gate.Judge(pct < ws.Policy.Thresholds.MaxDuplication, reasonDupl, values, rep.Findings())
@@ -81,18 +92,53 @@ func Analyze(sources map[string][]byte, window int) Report {
 	interner := map[string]uint64{}
 	units := make([]unit, 0, len(sources))
 	code := map[lineKey]bool{}
+	var unreadable []string
 	for n, data := range sources {
-		u := tokenize(n, data, interner)
+		u, err := tokenize(n, data, interner)
+		if err != nil {
+			unreadable = append(unreadable, n+": "+err.Error())
+		}
 		for _, t := range u.tokens {
 			code[lineKey{n, t.line}] = true
 		}
 		units = append(units, u)
 	}
 	dup := duplicatedLines(units, window)
-	return Report{CodeLines: len(code), DuplicatedLines: len(dup), Duplicated: byFile(dup)}
+	sort.Strings(unreadable)
+	return Report{CodeLines: len(code), DuplicatedLines: len(dup), Duplicated: byFile(dup), Unreadable: unreadable}
 }
 
-func tokenize(name string, data []byte, interner map[string]uint64) unit {
+func tokenize(name string, data []byte, interner map[string]uint64) (unit, error) {
+	if path.Ext(name) == extGo {
+		return goTokens(name, data, interner), nil
+	}
+	toks, _, err := lex(name, data)
+	u := unit{name: name}
+	line, header := 0, false
+	for _, t := range toks {
+		if t.Note {
+			continue
+		}
+		if t.Line != line {
+			line, header = t.Line, headerWords[t.Text] || strings.HasPrefix(t.Kind, preprocKind)
+		}
+		if !header {
+			u.tokens = append(u.tokens, tok{id: intern(interner, t.Kind+" "+t.Text), line: t.Line})
+		}
+	}
+	return u, err
+}
+
+func intern(interner map[string]uint64, key string) uint64 {
+	id, ok := interner[key]
+	if !ok {
+		id = uint64(len(interner))
+		interner[key] = id
+	}
+	return id
+}
+
+func goTokens(name string, data []byte, interner map[string]uint64) unit {
 	fset := token.NewFileSet()
 	file := fset.AddFile(name, fset.Base(), len(data))
 	var s scanner.Scanner
@@ -107,13 +153,7 @@ func tokenize(name string, data []byte, interner map[string]uint64) unit {
 		if skip.header(kind) {
 			continue
 		}
-		key := kind.String() + " " + lit
-		id, ok := interner[key]
-		if !ok {
-			id = uint64(len(interner))
-			interner[key] = id
-		}
-		u.tokens = append(u.tokens, tok{id: id, line: fset.Position(pos).Line})
+		u.tokens = append(u.tokens, tok{id: intern(interner, kind.String()+" "+lit), line: fset.Position(pos).Line})
 	}
 }
 

@@ -1,0 +1,17 @@
+LIMIT = 3
+
+
+def check(items, user):
+    if user is not None and user.id in items:
+        return True
+    if user is None or not items:
+        raise ValueError("no access")
+    try:
+        total = sum(i ** 2 for i in items) // LIMIT
+    except (KeyError, IndexError) as exc:
+        log(exc)
+    except:
+        pass
+    while total > 0 and "x" not in items:
+        total -= 1
+    return total % 2 == 0

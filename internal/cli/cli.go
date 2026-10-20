@@ -14,8 +14,12 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/console"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/catalog"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/dotnet"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/golang"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/node"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/python"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/scan"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/shell"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/source"
 	"github.com/DreamsAreReal/deploy-hub/internal/obs"
 	"github.com/DreamsAreReal/deploy-hub/internal/onboard"
@@ -93,13 +97,14 @@ var handlers = map[string]handler{
 	CmdFacts:     {run: runFacts, logToFile: true},
 	CmdOnboard:   {run: runOnboard, binaries: []string{binGH, binGit, binSSH, onboard.SSHKeygen}},
 	CmdGate:      {run: runGate, binaries: gateBinaries, verbose: true},
-	CmdTools:     {run: runTools, binaries: []string{tools.GoBinary}, verbose: true},
+	CmdTools:     {run: runTools, binaries: []string{tools.GoBinary, tools.TarBinary}, verbose: true},
 }
 
 var gateBinaries = []string{
 	golang.GoBinary, source.GitBinary, golang.LintBinary, golang.CognitBinary, golang.DeadcodeBinary, golang.GobcoBinary,
 	golang.VulncheckBinary, scan.GitleaksBinary, scan.TrufflehogBinary, scan.DockerBinary, scan.OSVBinary, scan.ZizmorBinary,
-	scan.ActionlintBinary, scan.HadolintBinary, scan.TrivyBinary, scan.SyftBinary,
+	scan.ActionlintBinary, scan.HadolintBinary, scan.TrivyBinary, scan.SyftBinary, python.UVBinary, python.RuffBinary,
+	node.NodeBinary, node.NPMBinary, dotnet.Binary, shell.ShellcheckBinary, shell.ShfmtBinary, shell.BatsBinary, shell.BashBinary,
 }
 
 type Deps struct {

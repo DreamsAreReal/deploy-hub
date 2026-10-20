@@ -1,0 +1,7 @@
+[tool.vulture]
+min_confidence = 60
+ignore_decorators = [
+    "@*.route", "@*.get", "@*.post", "@*.put", "@*.patch", "@*.delete", "@*.head", "@*.options", "@*.websocket",
+    "@*.fixture", "@pytest.fixture", "@*.command", "@*.group", "@*.task", "@*.on_event", "@*.middleware",
+    "@*.exception_handler", "@*.validator", "@*.field_validator", "@*.model_validator", "@*.receiver", "@*.handler",
+]

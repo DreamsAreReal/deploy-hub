@@ -4,15 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
 )
 
 const (
-	OSVBinary   = "osv-scanner"
-	reasonSCA   = "dependencies have known vulnerabilities"
-	osvFormat   = "%s %s@%s (%s)"
-	osvNoResult = 128
+	OSVBinary        = "osv-scanner"
+	reasonSCA        = "dependencies have known vulnerabilities"
+	osvFormat        = "%s %s@%s (%s)"
+	osvNoResult      = 128
+	osvNoSources     = "No package sources found"
+	reasonNoPackages = "the repository has no package manifests or lockfiles to scan"
 )
 
 type osvReport struct {
@@ -34,6 +37,9 @@ type osvReport struct {
 
 func SCA(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	res, err := ws.Run(ctx, OSVBinary, "scan", "source", "--recursive", flagFormat, formatJSON, ws.Src)
+	if strings.Contains(res.Stderr, osvNoSources) {
+		return gate.Outcome{Status: gate.StatusNA, Reason: reasonNoPackages}
+	}
 	var rep osvReport
 	perr := json.Unmarshal([]byte(res.Stdout), &rep)
 	var findings []string

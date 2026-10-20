@@ -40,9 +40,3 @@ func TestRegistration(t *testing.T) {
 	ws.AppName = "ghost"
 	testutil.Equal(t, Registration(context.Background(), ws).Reason, reasonUnregistered)
 }
-
-func TestGoOnly(t *testing.T) {
-	run := goOnly(func(context.Context, gate.Workspace) gate.Outcome { return gate.Pass(nil) })
-	testutil.Equal(t, run(context.Background(), gate.Workspace{}).Reason, reasonToolchain)
-	testutil.Equal(t, run(context.Background(), gate.Workspace{Module: "m"}).Status, gate.StatusPass)
-}

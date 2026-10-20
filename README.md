@@ -59,24 +59,25 @@ versions and checksums: [`policy/tools.yaml`](policy/tools.yaml).
 |---|---|---|
 | `registration` | app missing from the policy or deployed from another repository | — |
 | `hygiene` | state/backup/debug/report files, keys, scanner-suppression files tracked in git | — |
-| `comments` | any comment in Go, YAML, Dockerfile, shell, Makefile, systemd files | go/scanner, YAML parser |
+| `comments` | any comment or documentation string in source and configuration files of any language (Python docstrings included); prose (`.md`, `.txt`, …) and tool-generated lockfiles are not source, `// indirect` is the only note allowed in `go.mod` | go/scanner, YAML parser, chroma lexers |
 | `markers` | work markers (the four listed in the policy) anywhere in tracked files | — |
-| `modules` | `go mod verify` / `go mod tidy -diff` failures, checksum DB disabled | go |
-| `dependencies` | a module (direct, transitive or test-only) not in the approved list | go list |
-| `lint` | any linter finding under the central config (magic numbers/strings, gosec, unused code, shadowing, …) | golangci-lint |
-| `cognitive-complexity` | a function above 9 | gocognit |
-| `duplication` | 2% or more duplicated code lines (token windows of 50, imports excluded) | built in |
-| `dead-code` | unreachable functions, including ones reachable only from tests | deadcode |
-| `tests` | any failed, skipped or crashed test; unit, integration and e2e together, `-race` | go test |
-| `line-coverage` | below 90% of code lines | go test -cover |
-| `branch-coverage` | below 90% of branches | gobco |
-| `scenarios` | a registered security or business scenario whose tests did not pass | policy registry |
-| `fuzz` | a fuzz target failing within the time budget, or no fuzz targets at all | go test -fuzz |
-| `mutation` | mutation score below 90% (killed / all viable mutants, uncovered ones count as survivors), or any mutant that could not be run (the run is incomplete) | built in, isolated build cache in the report directory |
+| `stacks` | source files no language pack can check: a language without a pack, or code outside any project | built in |
+| `modules` | dependency integrity: unverifiable checksums, lockfile drift | per stack |
+| `dependencies` | a dependency (direct, transitive or test-only) not in the approved list | per stack |
+| `lint` | any linter finding under the central config (magic numbers/strings, security rules, unused code, …) | per stack |
+| `cognitive-complexity` | a function above 9 | per stack |
+| `duplication` | 2% or more duplicated code lines across every programming-language file (token windows of 50; imports, includes and comments excluded) | built in, chroma lexers |
+| `dead-code` | unreachable functions, including ones reachable only from tests | per stack |
+| `tests` | any failed, skipped or crashed test; unit, integration and e2e together | per stack |
+| `line-coverage` | below 90% of code lines | per stack |
+| `branch-coverage` | below 90% of branches | per stack |
+| `scenarios` | a registered security or business scenario whose tests did not pass in any project | policy registry |
+| `fuzz` | a fuzz target failing within the time budget, or no fuzz targets at all | per stack |
+| `mutation` | mutation score below 90% (killed / all viable mutants, uncovered ones count as survivors), or any mutant that could not be run (the run is incomplete) | per stack |
 | `secrets-gitleaks` | any secret in the full git history or the working tree | gitleaks |
 | `secrets-trufflehog` | any verified, unverified or unknown secret in the history | trufflehog |
 | `sast` | any Semgrep finding of any severity, no ignore files honoured | semgrep |
-| `vulnerabilities` | any known vulnerability reachable or imported | govulncheck |
+| `vulnerabilities` | any known vulnerability reachable or imported | per stack |
 | `sca` | any known vulnerability in dependencies | osv-scanner |
 | `sbom-licenses` | a dependency with an unknown or unapproved license; SBOMs are kept per release | syft |
 | `workflows` | any finding in `.github` at the auditor level | zizmor, actionlint |
@@ -85,6 +86,57 @@ versions and checksums: [`policy/tools.yaml`](policy/tools.yaml).
 | `image` | any vulnerability, secret or misconfiguration in the built image | trivy |
 | `dast` | any ZAP alert of Low risk or above on the running app | OWASP ZAP full scan |
 | `load` | p95 above the profile, errors above the profile, crash, restart or OOM under load | built in |
+
+**Language packs.** The checks marked "per stack" run once per project in the
+repository; a project is the directory of a stack manifest. A repository with
+several projects (an API and a web front end, say) gets every project checked
+and the results merged: the worst status wins, values and findings carry the
+project label (`go`, `node:web`). Each project writes its reports to its own
+subdirectory of `--out`. Code of a language without a pack, or outside any
+project, fails the `stacks` check.
+
+| Stack | Project manifest | Tools |
+|---|---|---|
+| Go | `go.mod` | go (`mod verify`, `list -deps`, `test -race -cover`, `test -fuzz`), golangci-lint, gocognit, deadcode, gobco, govulncheck, the built-in mutation engine (isolated build cache in the report directory) |
+| Python | `pyproject.toml`, `requirements*.txt`; loose `.py` files form a root project | uv, ruff, mypy `--strict`, complexipy, vulture, pytest with coverage (branches, per-test contexts), hypothesis, trivy, the token mutation engine |
+| Node / TypeScript | `package.json` | npm, eslint (typescript-eslint strict, sonarjs), `tsc --strict`, knip, vitest / jest / mocha / `node --test`, fast-check, trivy, the token mutation engine |
+| .NET | `*.sln`, `*.slnx`, `*.csproj`, `*.fsproj`, `*.vbproj` (the outermost one) | dotnet (`restore --locked-mode`, build with the recommended analyzers and SonarAnalyzer as errors, `format whitespace`, `test` with coverlet), CsCheck / FsCheck, trivy, the token mutation engine |
+| Shell | none; `.sh` and `.bash` files form a root project | shellcheck (every optional check), shfmt, bats with bash xtrace coverage, the token mutation engine |
+| Static site | none; `.html`, `.htm` and `.css` files form a root project | html-validate (recommended rules, SRI on cross-origin resources), stylelint standard |
+
+What each stack expects from an app repo:
+
+- **Python.** Dependencies are locked: `pyproject.toml` with `uv.lock`, or
+  requirements files where every line is pinned with `--hash`. Tests run with
+  pytest from the hub's own lock (an app does not pin pytest, coverage or
+  hypothesis); a scenario names a test by its pytest node id
+  (`tests/test_auth.py::test_invalid_token`). Fuzz targets are hypothesis
+  property tests; the policy `fuzz_examples` sets their budget.
+- **Node / TypeScript.** `package-lock.json` next to every `package.json`; the
+  test runner is the one the project depends on (vitest, jest, mocha, or
+  `node --test` when none is installed). Fuzz targets are fast-check property
+  tests. A scenario names a test as `path/to/file.test.ts > test name`.
+  Linters, `tsc` and knip come from the hub's lock in `policy/node`.
+- **.NET.** `RestorePackagesWithLockFile` with a `packages.lock.json` next to
+  every project; test projects reference `coverlet.collector`. Analyzer
+  severities, `TreatWarningsAsErrors` and `.editorconfig` are injected
+  centrally; `#pragma warning disable`, `SuppressMessage` and
+  `ExcludeFromCodeCoverage` are findings. Fuzz targets use CsCheck or FsCheck.
+  A scenario names a test by its fully qualified name.
+- **Shell.** Scripts are bash; tests are `.bats` files. A scenario names a
+  test as `file.bats > test name`. Shell has no package dependencies and no
+  property-based fuzzer, so `dependencies`, `modules`, `vulnerabilities` and
+  `fuzz` are `n/a` with that reason.
+- **Static site.** Markup and styles carry no executable code: complexity,
+  dead code, tests, coverage, fuzzing and mutation are `n/a`. Every
+  cross-origin script or stylesheet needs an `integrity` hash. JavaScript
+  belongs to a Node project with its own `package.json`.
+
+Approved dependencies in the policy use the Go module path for Go and a stack
+prefix for the rest: `pypi:requests`, `npm:express`, `nuget:Serilog`. When a
+package publishes no machine-readable license, `declared_licenses` in the
+policy records it by package URL without a version
+(`pkg:npm/some-lib: MIT`); the license must be on the approved list.
 
 **Whose code.** Repositories of the policy `owners` that are not forks get every
 check. Forks and other code get only the security checks (secrets, SAST,
@@ -100,7 +152,12 @@ statements and disabled error handling. Each mutant is compiled with
 `go test -overlay` and tested by its own package first, then by every package
 that depends on it. Mutants on lines no test executes count as survivors;
 mutants that do not compile are not mutants and are not counted. There is no
-way to exclude a mutant.
+way to exclude a mutant. Every mutant's test run is its own process group with
+a memory budget (the machine's memory divided by the workers plus one); a run
+that exceeds it is killed and the mutant counts as detected (`out-of-memory`),
+like a timeout, so a mutant that turns a loop into an endless allocation cannot
+take the CI runner down. The language packs mutate with the same engine and the
+same budget.
 
 **Load test, done for a 1-CPU VPS.** The image runs in an isolated docker
 network on the CI runner with the production limits from the policy (`cpus`,
@@ -156,6 +213,13 @@ other requirements and are turned off centrally for every repo:
   ever involved and arguments are validated before use.
 - zizmor `undocumented-permissions` demands a comment next to every
   write permission, while comments are banned by policy.
+
+**Toolchains.** `policy/tools.yaml` pins every scanner and language toolchain
+(uv, ruff, node and npm, the .NET SDK, shellcheck, shfmt, bats) by URL and
+SHA-256; `make toolchain` downloads them, refuses any checksum mismatch and
+puts them into one directory for `PATH`. Archives that ship a whole tree (node,
+the .NET SDK, bats, shellcheck) are unpacked under `trees.d` with links to their
+executables. Bash itself comes from the CI runner (4.1 or newer).
 
 **Run it locally** (Go toolchain plus the tools from `policy/tools.yaml` on
 `PATH`; `make toolchain` installs them on linux/amd64):

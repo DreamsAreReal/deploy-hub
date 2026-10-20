@@ -60,6 +60,12 @@ func Fail(reason string, findings ...string) Outcome {
 	return Outcome{Status: StatusFail, Reason: reason, Findings: findings}
 }
 
+func NotApplicable(reason string) func(context.Context, Workspace) Outcome {
+	return func(context.Context, Workspace) Outcome {
+		return Outcome{Status: StatusNA, Reason: reason}
+	}
+}
+
 func Judge(ok bool, reason string, values map[string]float64, findings []string) Outcome {
 	if ok {
 		return Outcome{Status: StatusPass, Values: values, Findings: findings}
@@ -80,17 +86,18 @@ type Check struct {
 }
 
 type Workspace struct {
-	Src       string
-	Out       string
-	PolicyDir string
-	Image     string
-	AppName   string
-	Repo      string
-	Module    string
-	App       policy.App
-	Policy    policy.Policy
-	Exec      procexec.Runner
-	Log       *slog.Logger
+	Src         string
+	Out         string
+	PolicyDir   string
+	Image       string
+	AppName     string
+	Repo        string
+	Module      string
+	App         policy.App
+	Policy      policy.Policy
+	Exec        procexec.Runner
+	Log         *slog.Logger
+	MemoryLimit int64
 }
 
 type Subject struct {
@@ -224,7 +231,7 @@ func (ws Workspace) Run(ctx context.Context, name string, args ...string) (proce
 
 func (ws Workspace) RunEnv(ctx context.Context, env []string, name string, args ...string) (procexec.Result, error) {
 	started := time.Now()
-	res, err := ws.Exec.Run(ctx, procexec.Command{Name: name, Args: args, Dir: ws.Src, Env: env})
+	res, err := ws.Exec.Run(ctx, procexec.Command{Name: name, Args: args, Dir: ws.Src, Env: env, MemoryLimit: ws.MemoryLimit})
 	ws.Log.Debug("gate tool finished", "tool", name, "args", args, "seconds", time.Since(started).Seconds(), "failed", err != nil)
 	return res, err
 }
@@ -251,5 +258,18 @@ func Tail(s string) string {
 }
 
 func (ws Workspace) Rel(path string) string {
-	return filepath.ToSlash(strings.TrimPrefix(path, ws.Src+string(filepath.Separator)))
+	return RelTo(ws.Src, path)
+}
+
+func RelTo(root, path string) string {
+	roots := []string{root}
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		roots = append(roots, resolved)
+	}
+	for _, r := range roots {
+		if rel, ok := strings.CutPrefix(path, r+string(filepath.Separator)); ok {
+			return filepath.ToSlash(rel)
+		}
+	}
+	return filepath.ToSlash(path)
 }

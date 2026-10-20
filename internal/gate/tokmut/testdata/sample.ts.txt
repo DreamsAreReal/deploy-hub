@@ -1,0 +1,18 @@
+export function price(items: number[], vip: boolean): number {
+  let total = 0;
+  for (const i of items) {
+    if (i > 0 && !vip) {
+      total += i * 2;
+    } else if (i === 0 || vip) {
+      total--;
+    }
+  }
+  try {
+    check(total);
+  } catch (err) {
+    log(`failed // ${err}`);
+  }
+  if (total >= 100) throw new Error("too much");
+  const re = /a\/b*/g;
+  return total;
+}

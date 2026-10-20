@@ -2,6 +2,7 @@ package source
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/lexis"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/policy"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
 	"github.com/DreamsAreReal/deploy-hub/internal/testutil"
@@ -86,6 +88,40 @@ func TestCommentsFoundInEveryLanguage(t *testing.T) {
 	testutil.Equal(t, out.Values[gate.ValueFindings], float64(len(want)))
 }
 
+func TestCommentsInEveryStack(t *testing.T) {
+	ws := repo(t, map[string]string{
+		"web/app.js":           "const re = /\\/*x/;\nconst u = `a ${b} // no`;\nlet n = 1; // yes\n",
+		"web/view.tsx":         "/* yes */\nexport const v = 1;\n",
+		"web/page.html":        "<p>don't // text</p>\n<!-- yes -->\n",
+		"web/site.css":         "a { background: url(http://x/y); }\n/* yes */\n",
+		"svc/main.py":          "def f():\n    \"\"\"yes\"\"\"\n    return \"# no\"  # yes\n",
+		"svc/Program.cs":       "var s = @\"C:\\x\\\"; // yes\n",
+		"db/init.sql":          "SELECT 1; -- yes\n",
+		"tsconfig.json":        "{\n  // yes\n  \"a\": \"//b\"\n}\n",
+		"go.mod":               "module m\n\nrequire a v1.0.0 // indirect\nrequire b v1.0.0 // pinned\n",
+		"go.sum":               "a v1.0.0 h1:x\n",
+		"poetry.lock":          "# generated\n",
+		"requirements-dev.txt": "# yes\npytest==9.0.0\n",
+		"notes.txt":            "# prose\n",
+		"docs/guide.md":        "```sh\necho # prose\n```\n",
+		"settings.unknownext":  "# unknown format\n",
+	})
+	out := Comments(context.Background(), ws)
+	testutil.Equal(t, out.Findings, []string{
+		"db/init.sql:1", "go.mod:4", "requirements-dev.txt:1", "svc/Program.cs:1", "svc/main.py:2", "svc/main.py:3",
+		"tsconfig.json:2", "web/app.js:3", "web/page.html:2", "web/site.css:2", "web/view.tsx:1",
+	})
+}
+
+func TestCommentsReportLexerFailures(t *testing.T) {
+	saved := lex
+	t.Cleanup(func() { lex = saved })
+	lex = func(string, []byte) ([]lexis.Token, bool, error) { return nil, true, errors.New("lexer broke") }
+	ws := repo(t, map[string]string{"app.js": "let a = 1;\n"})
+	testutil.Equal(t, Comments(context.Background(), ws).Findings, []string{"app.js: lexer broke"})
+	testutil.Equal(t, noteLines("x.js", []lexis.Token{{Line: 2, Note: true}, {Line: 2, Note: true}, {Line: 3}, {Line: 4, Note: true}}), []string{"x.js:2", "x.js:4"})
+}
+
 func TestCleanRepositoryPasses(t *testing.T) {
 	ws := repo(t, map[string]string{fileMain: "package main\n", fileCI: "on: push\n", fileReadme: "Notes\n"})
 	testutil.Equal(t, Comments(context.Background(), ws).Status, gate.StatusPass)
@@ -134,6 +170,17 @@ func TestCopyTracked(t *testing.T) {
 	testutil.Missing(t, filepath.Join(dest, "untracked.txt"))
 	testutil.Missing(t, filepath.Join(dest, "link"))
 	testutil.Perm(t, filepath.Join(dest, "c.txt"), copyFilePerm)
+}
+
+func TestSelectFiltersTrackedFiles(t *testing.T) {
+	ws := repo(t, map[string]string{fileNested: pkgA, "notes.md": "c"})
+	testutil.Write(t, filepath.Join(ws.Src, "untracked.go"), "package u\n")
+	files, err := Select(context.Background(), ws, func(f string) bool { return filepath.Ext(f) == ".go" })
+	testutil.NoErr(t, err)
+	testutil.Equal(t, files, []string{fileNested})
+	ws.Src = t.TempDir()
+	_, err = Select(context.Background(), ws, func(string) bool { return true })
+	testutil.Contains(t, err.Error(), "git ls-files")
 }
 
 func TestCopyTrackedFailures(t *testing.T) {

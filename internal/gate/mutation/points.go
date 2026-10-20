@@ -46,10 +46,10 @@ var (
 	}
 )
 
-type edit struct {
-	offset int
-	length int
-	text   string
+type Edit struct {
+	Offset int
+	Length int
+	Text   string
 }
 
 type Mutant struct {
@@ -58,16 +58,22 @@ type Mutant struct {
 	Operator string
 	Original string
 	Mutated  string
-	edits    []edit
+	edits    []Edit
+}
+
+func NewMutant(file string, line int, op, original string, at int, edits ...Edit) Mutant {
+	m := Mutant{File: file, Line: line, Operator: op, Original: original, edits: edits}
+	m.Mutated = string(Mutant{edits: shift(edits, at)}.Apply([]byte(original)))
+	return m
 }
 
 func (m Mutant) Apply(src []byte) []byte {
-	edits := append([]edit(nil), m.edits...)
-	sort.Slice(edits, func(i, j int) bool { return edits[i].offset > edits[j].offset })
+	edits := append([]Edit(nil), m.edits...)
+	sort.Slice(edits, func(i, j int) bool { return edits[i].Offset > edits[j].Offset })
 	out := append([]byte(nil), src...)
 	for _, e := range edits {
-		tail := append([]byte(e.text), out[e.offset+e.length:]...)
-		out = append(out[:e.offset], tail...)
+		tail := append([]byte(e.Text), out[e.Offset+e.Length:]...)
+		out = append(out[:e.Offset], tail...)
 	}
 	return out
 }
@@ -114,7 +120,7 @@ func (fd *finder) visit(n ast.Node) bool {
 	case *ast.ReturnStmt:
 		fd.returns(v)
 	case *ast.ExprStmt:
-		fd.add(OpRemoveStatement, v, edit{offset: fd.off(v.Pos()), length: fd.span(v), text: ""})
+		fd.add(OpRemoveStatement, v, Edit{Offset: fd.off(v.Pos()), Length: fd.span(v), Text: ""})
 	case *ast.IncDecStmt:
 		fd.swapToken(OpIncDec, v, v.TokPos, v.Tok, incDec)
 	case *ast.AssignStmt:
@@ -135,23 +141,22 @@ func (fd *finder) text(n ast.Node) string {
 	return string(fd.src[fd.off(n.Pos()):fd.off(n.End())])
 }
 
-func (fd *finder) add(op string, at ast.Node, edits ...edit) {
-	m := Mutant{File: fd.file, Line: fd.fset.Position(at.Pos()).Line, Operator: op, Original: fd.text(at), edits: edits}
-	m.Mutated = string(Mutant{edits: shift(edits, fd.off(at.Pos()))}.Apply([]byte(m.Original)))
+func (fd *finder) add(op string, at ast.Node, edits ...Edit) {
+	m := NewMutant(fd.file, fd.fset.Position(at.Pos()).Line, op, fd.text(at), fd.off(at.Pos()), edits...)
 	fd.out = append(fd.out, m)
 }
 
-func shift(edits []edit, by int) []edit {
-	out := make([]edit, 0, len(edits))
+func shift(edits []Edit, by int) []Edit {
+	out := make([]Edit, 0, len(edits))
 	for _, e := range edits {
-		out = append(out, edit{offset: e.offset - by, length: e.length, text: e.text})
+		out = append(out, Edit{Offset: e.Offset - by, Length: e.Length, Text: e.Text})
 	}
 	return out
 }
 
 func (fd *finder) swapToken(op string, at ast.Node, pos token.Pos, tok token.Token, table map[token.Token]token.Token) {
 	if to, ok := table[tok]; ok {
-		fd.add(op, at, edit{offset: fd.off(pos), length: len(tok.String()), text: to.String()})
+		fd.add(op, at, Edit{Offset: fd.off(pos), Length: len(tok.String()), Text: to.String()})
 	}
 }
 
@@ -172,7 +177,7 @@ func isStringLit(e ast.Expr) bool {
 
 func (fd *finder) unary(u *ast.UnaryExpr) {
 	if u.Op == token.NOT {
-		fd.add(OpRemoveNegation, u, edit{offset: fd.off(u.OpPos), length: 1, text: ""})
+		fd.add(OpRemoveNegation, u, Edit{Offset: fd.off(u.OpPos), Length: 1, Text: ""})
 	}
 }
 
@@ -181,14 +186,14 @@ func (fd *finder) condition(cond ast.Expr) {
 		return
 	}
 	fd.add(OpNegateCondition, cond,
-		edit{offset: fd.off(cond.Pos()), text: "!("},
-		edit{offset: fd.off(cond.End()), text: ")"},
+		Edit{Offset: fd.off(cond.Pos()), Text: "!("},
+		Edit{Offset: fd.off(cond.End()), Text: ")"},
 	)
 }
 
 func (fd *finder) errorHandling(cond ast.Expr) {
 	if mentionsErr(cond) {
-		fd.add(OpErrorHandling, cond, edit{offset: fd.off(cond.Pos()), length: fd.span(cond), text: identFalse})
+		fd.add(OpErrorHandling, cond, Edit{Offset: fd.off(cond.Pos()), Length: fd.span(cond), Text: identFalse})
 	}
 }
 
@@ -222,7 +227,7 @@ func (fd *finder) returns(r *ast.ReturnStmt) {
 	}
 	for i, e := range r.Results {
 		if repl, ok := replacement(types[i], fd.text(e)); ok {
-			fd.add(OpReturnValue, e, edit{offset: fd.off(e.Pos()), length: fd.span(e), text: repl})
+			fd.add(OpReturnValue, e, Edit{Offset: fd.off(e.Pos()), Length: fd.span(e), Text: repl})
 		}
 	}
 }

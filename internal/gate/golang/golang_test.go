@@ -36,32 +36,16 @@ const (
 
 var errExit = errors.New("exit status 1")
 
-type reply struct {
-	res procexec.Result
-	err error
-}
-
-type script map[string]reply
-
-func (s script) handle(c procexec.Command) (procexec.Result, error) {
-	line := procexectest.Line(c)
-	best := ""
-	for prefix := range s {
-		if strings.HasPrefix(line, prefix) && len(prefix) > len(best) {
-			best = prefix
-		}
-	}
-	if best == "" {
-		return procexec.Result{}, errors.New("unexpected command: " + line)
-	}
-	return s[best].res, s[best].err
-}
+type (
+	reply  = procexectest.Reply
+	script = procexectest.Script
+)
 
 func ws(t *testing.T, s script) gate.Workspace {
 	t.Helper()
 	return gate.Workspace{
 		Src: t.TempDir(), Out: t.TempDir(), PolicyDir: "/policy", Module: module,
-		Exec: &procexectest.Fake{Handler: s.handle}, Log: slog.New(slog.DiscardHandler),
+		Exec: &procexectest.Fake{Handler: s.Handle}, Log: slog.New(slog.DiscardHandler),
 		Policy: policy.Policy{
 			Thresholds:   policy.Thresholds{LineCoverage: 80, BranchCoverage: 80, MaxCognitive: 9},
 			Limits:       policy.Limits{FuzzTime: time.Second},
@@ -70,7 +54,7 @@ func ws(t *testing.T, s script) gate.Workspace {
 	}
 }
 
-func ok(stdout string) reply { return reply{res: procexec.Result{Stdout: stdout}} }
+func ok(stdout string) reply { return reply{Res: procexec.Result{Stdout: stdout}} }
 
 func pkgJSON(t *testing.T, pkgs ...Package) string {
 	t.Helper()
@@ -88,7 +72,8 @@ func samplePackages() Packages {
 	return Packages{
 		{ImportPath: module, Name: "main", GoFiles: []string{"main.go"}, Imports: []string{module + "/lib"}, Deps: []string{module + "/lib"}},
 		{ImportPath: module + "/lib", Name: "lib", GoFiles: []string{"lib.go"}, TestGoFiles: []string{fileLibTest}, TestImports: []string{module + "/testkit"}},
-		{ImportPath: module + "/testkit", Name: "testkit", GoFiles: []string{"kit.go"}},
+		{ImportPath: module + "/testkit", Name: "testkit", GoFiles: []string{"kit.go"}, Imports: []string{module + "/fakes"}},
+		{ImportPath: module + "/fakes", Name: "fakes", GoFiles: []string{"fake.go"}},
 		{ImportPath: module + "/e2e", Name: "e2e", XTestGoFiles: []string{"e2e_test.go"}, Deps: []string{module + "/lib"}, XTestImports: []string{module + "/fixtures", module + "/lib"}},
 		{ImportPath: module + "/fixtures", Name: "fixtures", GoFiles: []string{"f.go"}},
 		{ImportPath: module + "/orphan", Name: "orphan", GoFiles: []string{"o.go"}},
@@ -97,12 +82,12 @@ func samplePackages() Packages {
 
 func TestPackageClassification(t *testing.T) {
 	pkgs := samplePackages()
-	testutil.Equal(t, pkgs.TestSupport(), map[string]bool{module + "/testkit": true, module + "/fixtures": true})
+	testutil.Equal(t, pkgs.TestSupport(), map[string]bool{module + "/testkit": true, module + "/fakes": true, module + "/fixtures": true})
 	testutil.Equal(t, pkgs.Production().Paths(), []string{module, module + "/lib", module + "/orphan"})
 	testutil.Equal(t, pkgs.Dependents(module+"/lib"), []string{module + "/e2e"})
 	testutil.Equal(t, pkgs.Dependents(module+"/testkit"), []string{module + "/lib"})
 	testutil.Equal(t, len(pkgs.Dependents(module+"/orphan")), 0)
-	testutil.True(t, pkgs[1].HasTests() && pkgs[3].HasTests() && !pkgs[0].HasTests(), "HasTests")
+	testutil.True(t, pkgs[1].HasTests() && pkgs[4].HasTests() && !pkgs[0].HasTests(), "HasTests")
 }
 
 func TestListAndModule(t *testing.T) {
@@ -113,7 +98,7 @@ func TestListAndModule(t *testing.T) {
 	m, err := Module(context.Background(), w)
 	testutil.NoErr(t, err)
 	testutil.Equal(t, m, module)
-	bad := ws(t, script{cmdListJSON: {res: procexec.Result{Stderr: "no go.mod"}, err: errExit}, cmdListMod: {err: errExit}})
+	bad := ws(t, script{cmdListJSON: {Res: procexec.Result{Stderr: "no go.mod"}, Err: errExit}, cmdListMod: {Err: errExit}})
 	_, err = List(context.Background(), bad)
 	testutil.Fails(t, err)
 	_, err = Module(context.Background(), bad)
@@ -124,18 +109,18 @@ func TestListAndModule(t *testing.T) {
 
 func TestLint(t *testing.T) {
 	report := `{"Issues":[{"FromLinter":"mnd","Text":"magic number","Pos":{"Filename":"a.go","Line":3}}]}`
-	out := Lint(context.Background(), ws(t, script{cmdLint + " --config /policy/golangci.yml": {res: procexec.Result{Stdout: report}, err: errExit}}))
+	out := Lint(context.Background(), ws(t, script{cmdLint + " --config /policy/golangci.yml": {Res: procexec.Result{Stdout: report}, Err: errExit}}))
 	testutil.Equal(t, out.Findings, []string{"a.go:3: magic number (mnd)"})
 	clean := Lint(context.Background(), ws(t, script{cmdLint: ok(`{"Issues":[]}`)}))
 	testutil.Equal(t, clean.Status, gate.StatusPass)
-	broken := Lint(context.Background(), ws(t, script{cmdLint: {res: procexec.Result{Stdout: "panic"}, err: errExit}}))
+	broken := Lint(context.Background(), ws(t, script{cmdLint: {Res: procexec.Result{Stdout: "panic"}, Err: errExit}}))
 	testutil.Contains(t, broken.Reason, "tool report unreadable")
 }
 
 func TestCognitive(t *testing.T) {
 	entries := `[{"PkgName":"a","FuncName":"Hard","Complexity":12,"Pos":{"Filename":"SRC/a.go","Line":4}},{"PkgName":"a","FuncName":"Easy","Complexity":9,"Pos":{"Filename":"a.go","Line":9}}]`
 	w := ws(t, nil)
-	w.Exec = &procexectest.Fake{Handler: script{CognitBinary + " -json": ok(strings.ReplaceAll(entries, "SRC", w.Src))}.handle}
+	w.Exec = &procexectest.Fake{Handler: script{CognitBinary + " -json": ok(strings.ReplaceAll(entries, "SRC", w.Src))}.Handle}
 	out := Cognitive(context.Background(), w)
 	testutil.Equal(t, out.Status, gate.StatusFail)
 	testutil.Equal(t, out.Findings, []string{"a.go:4: Hard has cognitive complexity 12"})
@@ -143,7 +128,7 @@ func TestCognitive(t *testing.T) {
 	testutil.Equal(t, out.Values[ValueFunctions], float64(2))
 	limit := ws(t, script{CognitBinary: ok(`[{"FuncName":"Edge","Complexity":9}]`)})
 	testutil.Equal(t, Cognitive(context.Background(), limit).Status, gate.StatusPass)
-	testutil.Contains(t, Cognitive(context.Background(), ws(t, script{CognitBinary: {err: errExit}})).Reason, "gocognit failed")
+	testutil.Contains(t, Cognitive(context.Background(), ws(t, script{CognitBinary: {Err: errExit}})).Reason, "gocognit failed")
 	testutil.Contains(t, Cognitive(context.Background(), ws(t, script{CognitBinary: ok("[")})).Reason, "unreadable")
 }
 
@@ -152,14 +137,14 @@ func TestModulesAndIntegrity(t *testing.T) {
 	good := Integrity(context.Background(), ws(t, script{cmdEnvJSON: ok(cleanEnv), cmdMod + " verify": ok("all modules verified"), cmdMod + " tidy -diff": ok("")}))
 	testutil.Equal(t, good.Status, gate.StatusPass)
 	weak := `{"GOSUMDB":"off","GONOSUMDB":"x","GONOSUMCHECK":"","GOINSECURE":"y","GOPRIVATE":"","GOFLAGS":"-mod=mod"}`
-	bad := Integrity(context.Background(), ws(t, script{cmdEnvJSON: ok(weak), cmdMod + " verify": {res: procexec.Result{Stderr: "dir has been modified"}, err: errExit}, cmdMod + " tidy -diff": {res: procexec.Result{Stdout: "+require x"}, err: errExit}}))
+	bad := Integrity(context.Background(), ws(t, script{cmdEnvJSON: ok(weak), cmdMod + " verify": {Res: procexec.Result{Stderr: "dir has been modified"}, Err: errExit}, cmdMod + " tidy -diff": {Res: procexec.Result{Stdout: "+require x"}, Err: errExit}}))
 	testutil.Equal(t, bad.Findings, []string{
 		`GOSUMDB="off" must not be set`, `GONOSUMDB="x" must not be set`, `GOINSECURE="y" must not be set`, `GOFLAGS="-mod=mod" must not be set`,
 		"go mod verify: dir has been modified", "go mod tidy -diff: +require x",
 	})
 	empty := Integrity(context.Background(), ws(t, script{cmdEnvJSON: ok(`{}`), cmdMod: ok("")}))
 	testutil.Equal(t, empty.Findings, []string{`GOSUMDB="" must not be set`})
-	testutil.Contains(t, Integrity(context.Background(), ws(t, script{cmdEnv: {err: errExit}})).Reason, cmdEnv)
+	testutil.Contains(t, Integrity(context.Background(), ws(t, script{cmdEnv: {Err: errExit}})).Reason, cmdEnv)
 	testutil.Contains(t, Integrity(context.Background(), ws(t, script{cmdEnv: ok("{")})).Reason, "unreadable")
 }
 
@@ -174,11 +159,11 @@ func TestDeadcode(t *testing.T) {
 		DeadcodeBinary + " -test=false":   ok("lib/lib.go:3:6: unreachable func: Old\ntestkit/kit.go:2:6: unreachable func: Helper\n"),
 		DeadcodeBinary + " -test=true":    ok("lib/lib.go:3:6: unreachable func: Old\nnoise line\n"),
 		DeadcodeBinary + " -test=unknown": ok(""),
-	}.handle}
+	}.Handle}
 	out := Deadcode(context.Background(), w)
 	testutil.Equal(t, out.Findings, []string{"lib/lib.go:3:6: unreachable func: Old"})
-	testutil.Contains(t, Deadcode(context.Background(), ws(t, script{cmdList: {err: errExit}})).Reason, cmdList)
-	failing := ws(t, script{cmdListJSON: ok(""), DeadcodeBinary: {err: errExit}})
+	testutil.Contains(t, Deadcode(context.Background(), ws(t, script{cmdList: {Err: errExit}})).Reason, cmdList)
+	failing := ws(t, script{cmdListJSON: ok(""), DeadcodeBinary: {Err: errExit}})
 	testutil.Contains(t, Deadcode(context.Background(), failing).Reason, DeadcodeBinary)
 	clean := ws(t, script{cmdListJSON: ok(""), DeadcodeBinary: ok("")})
 	testutil.Equal(t, Deadcode(context.Background(), clean).Status, gate.StatusPass)
@@ -218,7 +203,7 @@ func TestParseTestEvents(t *testing.T) {
 }
 
 func TestTestsCheck(t *testing.T) {
-	w := ws(t, script{cmdListJSON: ok(pkgJSON(t, samplePackages()...)), cmdTest + " -json": {res: procexec.Result{Stdout: events}, err: errExit}})
+	w := ws(t, script{cmdListJSON: ok(pkgJSON(t, samplePackages()...)), cmdTest + " -json": {Res: procexec.Result{Stdout: events}, Err: errExit}})
 	out := Tests(context.Background(), w)
 	testutil.Equal(t, out.Status, gate.StatusFail)
 	testutil.Equal(t, len(out.Findings), 4)
@@ -232,11 +217,11 @@ func TestTestsCheck(t *testing.T) {
 	testutil.Equal(t, pass.Status, gate.StatusPass)
 	none := Tests(context.Background(), ws(t, script{cmdListJSON: ok(""), cmdTest: ok("")}))
 	testutil.Equal(t, none.Status, gate.StatusFail)
-	crash := Tests(context.Background(), ws(t, script{cmdListJSON: ok(""), cmdTest: {res: procexec.Result{Stderr: "signal: killed"}, err: errExit}}))
+	crash := Tests(context.Background(), ws(t, script{cmdListJSON: ok(""), cmdTest: {Res: procexec.Result{Stderr: "signal: killed"}, Err: errExit}}))
 	testutil.Contains(t, crash.Reason, "go test failed: signal: killed")
 	garbled := Tests(context.Background(), ws(t, script{cmdListJSON: ok(""), cmdTest: ok("{x\n")}))
 	testutil.Contains(t, garbled.Reason, "test report unreadable")
-	testutil.Contains(t, Tests(context.Background(), ws(t, script{cmdList: {err: errExit}})).Reason, cmdList)
+	testutil.Contains(t, Tests(context.Background(), ws(t, script{cmdList: {Err: errExit}})).Reason, cmdList)
 	unwritable := ws(t, script{cmdListJSON: ok(""), cmdTest: ok(green)})
 	unwritable.Out = filepath.Join(unwritable.Out, "missing", "dir")
 	testutil.Contains(t, Tests(context.Background(), unwritable).Reason, "cannot keep the test report")
@@ -310,7 +295,7 @@ func TestBranches(t *testing.T) {
 		"gobco -branch ./lib":    ok("lib.go:4:5: condition \"x\" was once true but never false\nBranch coverage: 3/4\n"),
 		"gobco -branch ./":       ok("Branch coverage: 0/0\n"),
 		"gobco -branch ./orphan": ok("Branch coverage: 1/2\n"),
-	}.handle}
+	}.Handle}
 	out := Branches(context.Background(), w)
 	testutil.Equal(t, out.Values[ValueBranchCover], float64(4)*100/6)
 	testutil.Equal(t, out.Values[ValueBranches], float64(6))
@@ -319,34 +304,21 @@ func TestBranches(t *testing.T) {
 	w.Policy.Thresholds.BranchCoverage = float64(4) * 100 / 6
 	testutil.Equal(t, Branches(context.Background(), w).Status, gate.StatusPass)
 	broken := ws(t, nil)
-	broken.Exec = &procexectest.Fake{Handler: script{cmdListJSON: ok(pkgJSON(t, Package{ImportPath: module, Dir: broken.Src, GoFiles: []string{fileMain}})), "gobco": ok("FAIL")}.handle}
+	broken.Exec = &procexectest.Fake{Handler: script{cmdListJSON: ok(pkgJSON(t, Package{ImportPath: module, Dir: broken.Src, GoFiles: []string{fileMain}})), "gobco": ok("FAIL")}.Handle}
 	testutil.Contains(t, Branches(context.Background(), broken).Reason, "no branch coverage summary")
-	testutil.Contains(t, Branches(context.Background(), ws(t, script{cmdList: {err: errExit}})).Reason, cmdList)
+	testutil.Contains(t, Branches(context.Background(), ws(t, script{cmdList: {Err: errExit}})).Reason, cmdList)
 	outside := ws(t, script{cmdListJSON: ok(pkgJSON(t, Package{ImportPath: module, Dir: "relative", GoFiles: []string{fileMain}}))})
 	testutil.Contains(t, Branches(context.Background(), outside).Reason, "Rel: can't make relative")
 }
 
-func TestScenarios(t *testing.T) {
+func TestPassedTestsUseRegistryNames(t *testing.T) {
 	w := ws(t, nil)
-	testutil.Contains(t, Scenarios(context.Background(), w).Reason, "test report missing")
-	testutil.Write(t, w.Report(TestsReport), events)
-	w.App.Scenarios = []policy.Scenario{
-		{ID: "a", Category: policy.CategorySecurity, Tests: []string{testA, "lib.TestA/sub"}},
-		{ID: "b", Category: policy.CategorySecurity, Tests: []string{"lib.TestB"}},
-		{ID: "c", Category: policy.CategoryBusiness, Tests: []string{testA}},
-	}
-	out := Scenarios(context.Background(), w)
-	testutil.Equal(t, out.Status, gate.StatusFail)
-	testutil.Equal(t, out.Findings, []string{"b (security): test lib.TestB did not pass"})
-	testutil.Equal(t, out.Values[ValueSecurityScenarios], float64(50))
-	testutil.Equal(t, out.Values[ValueBusinessScenarios], float64(100))
-	w.App.Scenarios = w.App.Scenarios[2:]
-	testutil.Equal(t, Scenarios(context.Background(), w).Status, gate.StatusPass)
-	w.App.Scenarios = nil
-	testutil.Equal(t, Scenarios(context.Background(), w).Status, gate.StatusFail)
-	testutil.Write(t, w.Report(TestsReport), `{"Action":"pass","Package":"example.com/app","Test":"TestRoot"}`+"\n")
-	w.App.Scenarios = []policy.Scenario{{ID: "root", Category: policy.CategoryBusiness, Tests: []string{".TestRoot"}}}
-	testutil.Equal(t, Scenarios(context.Background(), w).Status, gate.StatusPass)
+	_, err := PassedTests(w)
+	testutil.Contains(t, err.Error(), "test report missing")
+	testutil.Write(t, w.Report(TestsReport), events+`{"Action":"pass","Package":"example.com/app","Test":"TestRoot"}`+"\n")
+	passed, err := PassedTests(w)
+	testutil.NoErr(t, err)
+	testutil.Equal(t, passed, map[string]bool{testA: true, "lib.TestA/sub": true, ".TestRoot": true})
 }
 
 func TestFuzz(t *testing.T) {
@@ -356,9 +328,9 @@ func TestFuzz(t *testing.T) {
 	pkg := Package{ImportPath: module + "/lib", Dir: dir, TestGoFiles: []string{fileLibTest}}
 	w.Exec = &procexectest.Fake{Handler: script{
 		cmdListJSON:                                 ok(pkgJSON(t, pkg)),
-		cmdTest + " -run=^$ -fuzz=^FuzzParse$":      {res: procexec.Result{Stdout: "Failing input written to testdata/fuzz/FuzzParse/abc"}, err: errExit},
+		cmdTest + " -run=^$ -fuzz=^FuzzParse$":      {Res: procexec.Result{Stdout: "Failing input written to testdata/fuzz/FuzzParse/abc"}, Err: errExit},
 		cmdTest + " -run=^$ -fuzz=^FuzzZero$ -fuzz": ok("ok"),
-	}.handle}
+	}.Handle}
 	out := Fuzz(context.Background(), w)
 	testutil.Equal(t, out.Status, gate.StatusFail)
 	testutil.Equal(t, out.Values[ValueFuzzTargets], float64(2))
@@ -368,14 +340,14 @@ func TestFuzz(t *testing.T) {
 	testutil.Contains(t, calls[2], "-fuzz=^FuzzZero$")
 	none := ws(t, script{cmdListJSON: ok("")})
 	testutil.Equal(t, Fuzz(context.Background(), none).Reason, reasonNoFuzz)
-	testutil.Contains(t, Fuzz(context.Background(), ws(t, script{cmdList: {err: errExit}})).Reason, cmdList)
+	testutil.Contains(t, Fuzz(context.Background(), ws(t, script{cmdList: {Err: errExit}})).Reason, cmdList)
 	broken := ws(t, nil)
 	testutil.Write(t, filepath.Join(broken.Src, "x_test.go"), "package x\nfunc {")
-	broken.Exec = &procexectest.Fake{Handler: script{cmdListJSON: ok(pkgJSON(t, Package{ImportPath: module, Dir: broken.Src, XTestGoFiles: []string{"x_test.go"}}))}.handle}
+	broken.Exec = &procexectest.Fake{Handler: script{cmdListJSON: ok(pkgJSON(t, Package{ImportPath: module, Dir: broken.Src, XTestGoFiles: []string{"x_test.go"}}))}.Handle}
 	testutil.Contains(t, Fuzz(context.Background(), broken).Reason, "x_test.go:2:6: expected 'IDENT'")
 	green := ws(t, nil)
 	testutil.Write(t, filepath.Join(green.Src, "g_test.go"), "package g\n\nimport \"testing\"\n\nfunc FuzzOK(f *testing.F) {}\n")
-	green.Exec = &procexectest.Fake{Handler: script{cmdListJSON: ok(pkgJSON(t, Package{ImportPath: module, Dir: green.Src, TestGoFiles: []string{"g_test.go"}})), cmdTest: ok("ok")}.handle}
+	green.Exec = &procexectest.Fake{Handler: script{cmdListJSON: ok(pkgJSON(t, Package{ImportPath: module, Dir: green.Src, TestGoFiles: []string{"g_test.go"}})), cmdTest: ok("ok")}.Handle}
 	testutil.Equal(t, Fuzz(context.Background(), green).Status, gate.StatusPass)
 }
 
@@ -385,7 +357,7 @@ func TestDependencies(t *testing.T) {
 	testutil.Equal(t, out.Values[ValueModules], float64(2))
 	clean := Dependencies(context.Background(), ws(t, script{cmdList + " -deps": ok(module + "\n")}))
 	testutil.Equal(t, clean.Status, gate.StatusPass)
-	testutil.Contains(t, Dependencies(context.Background(), ws(t, script{cmdList: {err: errExit}})).Reason, cmdList+" -deps")
+	testutil.Contains(t, Dependencies(context.Background(), ws(t, script{cmdList: {Err: errExit}})).Reason, cmdList+" -deps")
 }
 
 func TestVulnerabilities(t *testing.T) {
@@ -399,7 +371,7 @@ func TestVulnerabilities(t *testing.T) {
 	testutil.Equal(t, out.Findings, []string{"GO-2024-1 in golang.org/x/net (fixed in v1.2.3)", "GO-2024-2 in  (fixed in )"})
 	testutil.Equal(t, out.Values[ValueVulns], float64(2))
 	testutil.Equal(t, Vulnerabilities(context.Background(), ws(t, script{VulncheckBinary: ok(`{"config":{}}`)})).Status, gate.StatusPass)
-	testutil.Contains(t, Vulnerabilities(context.Background(), ws(t, script{VulncheckBinary: {err: errExit}})).Reason, VulncheckBinary)
+	testutil.Contains(t, Vulnerabilities(context.Background(), ws(t, script{VulncheckBinary: {Err: errExit}})).Reason, VulncheckBinary)
 	testutil.Equal(t, Vulnerabilities(context.Background(), ws(t, script{VulncheckBinary: ok("{")})).Status, gate.StatusFail)
 }
 

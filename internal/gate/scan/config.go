@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path"
 	"path/filepath"
 
@@ -12,25 +13,27 @@ import (
 )
 
 const (
-	ZizmorBinary     = "zizmor"
-	ActionlintBinary = "actionlint"
-	HadolintBinary   = "hadolint"
-	TrivyBinary      = "trivy"
-	githubDir        = ".github"
-	zizmorConfig     = "workflow-audit.yml"
-	dockerfileGlob   = "Dockerfile*"
-	reasonWorkflows  = "CI/CD workflows have security or correctness findings"
-	reasonDockerfile = "Dockerfiles violate the lint rules"
-	reasonIaC        = "infrastructure configuration has misconfigurations"
-	reasonNoDocker   = "the app ships an image but the repository has no Dockerfile"
-	zizmorFormat     = "%s %s %s:%d"
-	actionlintFormat = "%s:%d: %s (%s)"
-	hadolintFormat   = "%s:%d: %s %s (%s)"
-	misconfFormat    = "%s %s %s:%d: %s"
-	trivySeverities  = "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
-	flagFormat       = "--format"
-	flagQuiet        = "--quiet"
-	formatJSON       = "json"
+	ZizmorBinary          = "zizmor"
+	ActionlintBinary      = "actionlint"
+	HadolintBinary        = "hadolint"
+	TrivyBinary           = "trivy"
+	githubDir             = ".github"
+	zizmorConfig          = "workflow-audit.yml"
+	dockerfileGlob        = "Dockerfile*"
+	reasonWorkflows       = "CI/CD workflows have security or correctness findings"
+	reasonDockerfile      = "Dockerfiles violate the lint rules"
+	reasonIaC             = "infrastructure configuration has misconfigurations"
+	reasonDependencyVulns = "dependencies have known vulnerabilities"
+	reasonNoWorkflows     = "the repository has no CI/CD configuration"
+	reasonNoDocker        = "the app ships an image but the repository has no Dockerfile"
+	zizmorFormat          = "%s %s %s:%d"
+	actionlintFormat      = "%s:%d: %s (%s)"
+	hadolintFormat        = "%s:%d: %s %s (%s)"
+	misconfFormat         = "%s %s %s:%d: %s"
+	trivySeverities       = "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
+	flagFormat            = "--format"
+	flagQuiet             = "--quiet"
+	formatJSON            = "json"
 )
 
 type zizmorFinding struct {
@@ -58,6 +61,9 @@ type zizmorFinding struct {
 
 func Workflows(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	dir := filepath.Join(ws.Src, filepath.FromSlash(githubDir))
+	if _, err := os.Stat(dir); err != nil {
+		return gate.Outcome{Status: gate.StatusNA, Reason: reasonNoWorkflows}
+	}
 	zres, zerr := ws.Run(ctx, ZizmorBinary, "--persona=auditor", "--format=json", "--no-progress", "--config", filepath.Join(ws.PolicyDir, zizmorConfig), dir)
 	var zf []zizmorFinding
 	if err := json.Unmarshal([]byte(zres.Stdout), &zf); err != nil {
@@ -178,4 +184,8 @@ func trivy(ctx context.Context, ws gate.Workspace, reason, sub string, args ...s
 
 func IaC(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	return trivy(ctx, ws, reasonIaC, "config", ws.Src)
+}
+
+func DependencyVulnerabilities(ctx context.Context, ws gate.Workspace) gate.Outcome {
+	return trivy(ctx, ws, reasonDependencyVulns, "fs", "--scanners", "vuln", "--include-dev-deps", ws.Src)
 }

@@ -10,6 +10,7 @@ thresholds:
 limits:
   check_timeout: 75m
   fuzz_time: 15s
+  fuzz_examples: 1000
   mutant_timeout_floor: 20s
   mutant_timeout_factor: 3
   findings_listed: 40
@@ -23,10 +24,14 @@ licenses:
   - ISC
   - MIT
   - MPL-2.0
+  - OFL-1.1
   - Unlicense
   - Zlib
 dependencies:
+  - github.com/alecthomas/chroma/v2
+  - github.com/dlclark/regexp2/v2
   - go.yaml.in/yaml/v3
+  - mvdan.cc/sh/v3
 forbidden_files:
   - "*state*.md"
   - "*.bak"

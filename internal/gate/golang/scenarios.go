@@ -11,74 +11,27 @@ import (
 	"strings"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
-	"github.com/DreamsAreReal/deploy-hub/internal/gate/policy"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
 )
 
 const (
-	ValueSecurityScenarios = "security_scenarios_percent"
-	ValueBusinessScenarios = "business_scenarios_percent"
-	ValueScenarios         = "scenarios"
-	ValueFuzzTargets       = "fuzz_targets"
-	fuzzPrefix             = "Fuzz"
-	reasonScenarios        = "mandatory scenarios are not covered by passing tests"
-	reasonFuzz             = "fuzzing found failures"
-	reasonNoFuzz           = "no fuzz targets: input handlers and parsers must be fuzzed"
-	scenarioFormat         = "%s (%s): test %s did not pass"
-	fuzzFormat             = "%s.%s: %s"
+	ValueFuzzTargets = "fuzz_targets"
+	fuzzPrefix       = "Fuzz"
+	reasonFuzz       = "fuzzing found failures"
+	reasonNoFuzz     = "no fuzz targets: input handlers and parsers must be fuzzed"
+	fuzzFormat       = "%s.%s: %s"
 )
 
-func Scenarios(_ context.Context, ws gate.Workspace) gate.Outcome {
+func PassedTests(ws gate.Workspace) (map[string]bool, error) {
 	run, err := LoadTestRun(ws)
 	if err != nil {
-		return gate.Fail(err.Error())
+		return nil, err
 	}
-	module := ws.Module
-	tally := map[string]*scenarioTally{policy.CategorySecurity: {}, policy.CategoryBusiness: {}}
-	var findings []string
-	for _, s := range ws.App.Scenarios {
-		missing := missingTests(run, module, s.Tests)
-		for _, m := range missing {
-			findings = append(findings, fmt.Sprintf(scenarioFormat, s.ID, s.Category, m))
-		}
-		tally[s.Category].add(len(missing) == 0)
+	out := make(map[string]bool, len(run.Passed))
+	for full := range run.Passed {
+		out[strings.TrimPrefix(strings.TrimPrefix(full, ws.Module), "/")] = true
 	}
-	values := map[string]float64{
-		ValueSecurityScenarios: tally[policy.CategorySecurity].percent(),
-		ValueBusinessScenarios: tally[policy.CategoryBusiness].percent(),
-		ValueScenarios:         float64(len(ws.App.Scenarios)),
-	}
-	return gate.Judge(len(findings) == 0 && len(ws.App.Scenarios) > 0, reasonScenarios, values, findings)
-}
-
-type scenarioTally struct {
-	covered, total int
-}
-
-func (t *scenarioTally) add(covered bool) {
-	t.total++
-	if covered {
-		t.covered++
-	}
-}
-
-func (t *scenarioTally) percent() float64 {
-	return ratio(t.covered, t.total)
-}
-
-func missingTests(run TestRun, module string, tests []string) []string {
-	var out []string
-	for _, t := range tests {
-		pkg, name, _ := strings.Cut(t, testSeparator)
-		full := module
-		if pkg != "" {
-			full = module + "/" + pkg
-		}
-		if !run.Passed[full+testSeparator+name] {
-			out = append(out, t)
-		}
-	}
-	return out
+	return out, nil
 }
 
 type fuzzTarget struct {

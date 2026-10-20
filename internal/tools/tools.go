@@ -16,6 +16,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 
 const (
 	GoBinary        = "go"
+	TarBinary       = "tar"
 	downloadTimeout = 5 * time.Minute
 	maxDownload     = 512 << 20
 	binPerm         = 0o700
@@ -33,6 +35,11 @@ const (
 	firstBadStatus  = 300
 	gobinEnv        = "GOBIN="
 	parentDir       = ".."
+	treesDir        = "trees.d"
+	stagePattern    = ".unpack-*"
+	archiveFile     = "archive"
+	rootDir         = "root"
+	wholeArchive    = "."
 )
 
 var (
@@ -40,17 +47,24 @@ var (
 	ErrChecksum = errors.New("checksum mismatch")
 	ErrMember   = errors.New("archive member not found")
 	toolName    = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,40}$`)
-	releaseURL  = regexp.MustCompile(`^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/releases/download/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
-	sha256Hex   = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	memberPath  = regexp.MustCompile(`^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$`)
-	goTool      = regexp.MustCompile(`^[a-z0-9.-]+(/[A-Za-z0-9_.-]+)+@v[0-9]+\.[0-9]+\.[0-9]+$`)
+	trustedURLs = []*regexp.Regexp{
+		regexp.MustCompile(`^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/releases/download/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`),
+		regexp.MustCompile(`^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/archive/refs/tags/[A-Za-z0-9_.-]+\.tar\.gz$`),
+		regexp.MustCompile(`^https://nodejs\.org/dist/v[0-9]+\.[0-9]+\.[0-9]+/[A-Za-z0-9_.-]+$`),
+		regexp.MustCompile(`^https://builds\.dotnet\.microsoft\.com/dotnet/Sdk/[0-9]+\.[0-9]+\.[0-9]+/[A-Za-z0-9_.-]+$`),
+	}
+	sha256Hex  = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	memberPath = regexp.MustCompile(`^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$`)
+	goTool     = regexp.MustCompile(`^[a-z0-9.-]+(/[A-Za-z0-9_.-]+)+@v[0-9]+\.[0-9]+\.[0-9]+$`)
 )
 
 type Binary struct {
-	Name   string `yaml:"name"`
-	URL    string `yaml:"url"`
-	SHA256 string `yaml:"sha256"`
-	Member string `yaml:"member"`
+	Name   string   `yaml:"name"`
+	URL    string   `yaml:"url"`
+	SHA256 string   `yaml:"sha256"`
+	Member string   `yaml:"member"`
+	Tree   string   `yaml:"tree"`
+	Links  []string `yaml:"links"`
 }
 
 type Manifest struct {
@@ -89,15 +103,34 @@ func (b Binary) validate() error {
 	switch {
 	case !toolName.MatchString(b.Name):
 		return fmt.Errorf("%w: name %q", ErrManifest, b.Name)
-	case !releaseURL.MatchString(b.URL):
-		return fmt.Errorf("%w: %s: url must be a GitHub release asset", ErrManifest, b.Name)
+	case !slices.ContainsFunc(trustedURLs, func(re *regexp.Regexp) bool { return re.MatchString(b.URL) }):
+		return fmt.Errorf("%w: %s: url must be a release asset of a trusted host", ErrManifest, b.Name)
 	case !sha256Hex.MatchString(b.SHA256):
 		return fmt.Errorf("%w: %s: sha256 must be 64 hex characters", ErrManifest, b.Name)
-	case b.Member != "" && (!memberPath.MatchString(b.Member) || path.Clean(b.Member) != b.Member || strings.HasPrefix(b.Member, parentDir)):
+	case b.Member != "" && !inside(b.Member):
 		return fmt.Errorf("%w: %s: bad archive member", ErrManifest, b.Name)
+	default:
+		return b.validateTree()
+	}
+}
+
+func (b Binary) validateTree() error {
+	switch {
+	case b.Tree == "" && len(b.Links) == 0:
+		return nil
+	case b.Member != "" || b.Tree == "" || len(b.Links) == 0:
+		return fmt.Errorf("%w: %s: a tree needs links and excludes a member", ErrManifest, b.Name)
+	case b.Tree != wholeArchive && !inside(b.Tree):
+		return fmt.Errorf("%w: %s: bad tree", ErrManifest, b.Name)
+	case slices.ContainsFunc(b.Links, func(l string) bool { return !inside(l) || !toolName.MatchString(path.Base(l)) }):
+		return fmt.Errorf("%w: %s: bad link", ErrManifest, b.Name)
 	default:
 		return nil
 	}
+}
+
+func inside(member string) bool {
+	return memberPath.MatchString(member) && path.Clean(member) == member && !strings.HasPrefix(member, parentDir)
 }
 
 type Installer struct {
@@ -134,6 +167,9 @@ func (i Installer) fetch(ctx context.Context, b Binary) error {
 	sum := sha256.Sum256(data)
 	if got := hex.EncodeToString(sum[:]); got != b.SHA256 {
 		return fmt.Errorf("%w: got %s", ErrChecksum, got)
+	}
+	if b.Tree != "" {
+		return i.unpack(ctx, b, data)
 	}
 	if b.Member != "" {
 		if data, err = extract(data, b.Member); err != nil {
@@ -179,4 +215,64 @@ func extract(archive []byte, member string) ([]byte, error) {
 			return io.ReadAll(io.LimitReader(tr, maxDownload))
 		}
 	}
+}
+
+func (i Installer) unpack(ctx context.Context, b Binary, data []byte) error {
+	stage, err := os.MkdirTemp(i.Dir, stagePattern)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(stage) }()
+	root, err := i.untar(ctx, stage, data)
+	if err != nil {
+		return err
+	}
+	return i.place(b, filepath.Join(root, filepath.FromSlash(b.Tree)))
+}
+
+func (i Installer) untar(ctx context.Context, stage string, data []byte) (string, error) {
+	archive := filepath.Join(stage, archiveFile)
+	root := filepath.Join(stage, rootDir)
+	if err := os.WriteFile(archive, data, binPerm); err != nil {
+		return "", err
+	}
+	if err := os.Mkdir(root, dirPerm); err != nil {
+		return "", err
+	}
+	if _, err := i.Exec.Run(ctx, procexec.Command{Name: TarBinary, Args: []string{"-xf", archive, "-C", root}, Dir: stage}); err != nil {
+		return "", fmt.Errorf("unpack: %w: %s", err, procexec.Output(err))
+	}
+	return root, nil
+}
+
+func (i Installer) place(b Binary, tree string) error {
+	dest := filepath.Join(i.Dir, treesDir, b.Name)
+	if err := os.RemoveAll(dest); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), dirPerm); err != nil {
+		return err
+	}
+	if err := os.Rename(tree, dest); err != nil {
+		return err
+	}
+	for _, l := range b.Links {
+		if err := i.link(b.Name, l); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (i Installer) link(tree, target string) error {
+	rel := filepath.Join(treesDir, tree, filepath.FromSlash(target))
+	info, err := os.Stat(filepath.Join(i.Dir, rel))
+	if err != nil || !info.Mode().IsRegular() {
+		return fmt.Errorf("%w: %s", ErrMember, target)
+	}
+	at := filepath.Join(i.Dir, path.Base(target))
+	if err := os.RemoveAll(at); err != nil {
+		return err
+	}
+	return os.Symlink(rel, at)
 }

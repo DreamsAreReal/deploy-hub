@@ -1,0 +1,14 @@
+public static class Pricing
+{
+    public static int Total(int[] items, bool vip)
+    {
+        var total = 0;
+        foreach (var i in items)
+        {
+            if (i > 0 && !vip) { total += i * 2; }
+        }
+        try { Check(total); } catch (InvalidOperationException e) { Log(e.Message); }
+        try { Check(total); } catch { Log("x"); }
+        return total;
+    }
+}

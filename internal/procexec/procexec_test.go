@@ -22,7 +22,7 @@ func testOS() OS {
 	return OS{allowed: map[string]builder{
 		shell:   func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "sh", a...) },
 		"sleep": func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "sleep", a...) },
-		"nope": func(ctx context.Context, a []string) *exec.Cmd {
+		missing: func(ctx context.Context, a []string) *exec.Cmd {
 			return exec.CommandContext(ctx, "deploy-hub-missing-binary", a...)
 		},
 	}}
@@ -62,10 +62,10 @@ func TestRunReportsExitErrorWithOutput(t *testing.T) {
 	testutil.Fails(t, err)
 	testutil.Equal(t, Output(err), "out\nbad")
 	testutil.Equal(t, res.Stdout, "out\n")
-	var exit *exec.ExitError
-	testutil.True(t, errors.As(err, &exit) && exit.ExitCode() == 3, "exit code preserved")
+	testutil.Equal(t, ExitCode(err), 3)
 	testutil.Contains(t, err.Error(), "exit status 3")
 	testutil.Equal(t, Output(errors.New("plain")), "")
+	testutil.Equal(t, ExitCode(errors.New("plain")), 0)
 }
 
 func TestRunStartFailure(t *testing.T) {

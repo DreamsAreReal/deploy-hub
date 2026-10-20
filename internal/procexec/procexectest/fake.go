@@ -2,6 +2,7 @@ package procexectest
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 
@@ -81,4 +82,29 @@ func CallsOf(r procexec.Runner) []procexec.Command {
 		return f.Calls()
 	}
 	return nil
+}
+
+type Reply struct {
+	Res procexec.Result
+	Err error
+	Run func(c procexec.Command)
+}
+
+type Script map[string]Reply
+
+func (s Script) Handle(c procexec.Command) (procexec.Result, error) {
+	line := Line(c)
+	best := ""
+	for prefix := range s {
+		if strings.HasPrefix(line, prefix) && len(prefix) > len(best) {
+			best = prefix
+		}
+	}
+	if best == "" {
+		return procexec.Result{}, errors.New("unexpected command: " + line)
+	}
+	if s[best].Run != nil {
+		s[best].Run(c)
+	}
+	return s[best].Res, s[best].Err
 }

@@ -1,0 +1,11 @@
+root = true
+
+[*.{cs,vb}]
+dotnet_diagnostic.CS1591.severity = none
+dotnet_diagnostic.S3776.severity = error
+dotnet_diagnostic.S109.severity = error
+dotnet_diagnostic.S1144.severity = error
+dotnet_diagnostic.IDE0005.severity = error
+dotnet_diagnostic.IDE0051.severity = error
+dotnet_diagnostic.IDE0052.severity = error
+dotnet_diagnostic.IDE0060.severity = error

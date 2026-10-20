@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"math"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -134,6 +135,14 @@ func TestTailAndRel(t *testing.T) {
 	testutil.Equal(t, ws.Rel("a/b.go"), "a/b.go")
 	testutil.Equal(t, ws.Rel("/repository/x.go"), "/repository/x.go")
 	testutil.Equal(t, ws.Report("x.json"), filepath.Join("", "x.json"))
+	target := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	testutil.NoErr(t, os.Symlink(target, link))
+	resolved, err := filepath.EvalSymlinks(target)
+	testutil.NoErr(t, err)
+	linked := Workspace{Src: link}
+	testutil.Equal(t, linked.Rel(filepath.Join(resolved, "c", "d.go")), "c/d.go")
+	testutil.Equal(t, linked.Rel(filepath.Join(link, "e.go")), "e.go")
 }
 
 func TestWorkspaceRunsToolsInTheCheckout(t *testing.T) {
