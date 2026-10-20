@@ -254,7 +254,9 @@ func Language(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	return withTracked(ctx, ws, "tracked files must be written in English", func(files []textFile) []string {
 		findings := make([]string, 0, len(files))
 		for _, f := range files {
-			findings = append(findings, foreignLetter(f)...)
+			if !ws.App.IsLocalized(f.rel) {
+				findings = append(findings, foreignLetter(f)...)
+			}
 		}
 		return findings
 	})

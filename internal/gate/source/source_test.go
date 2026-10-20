@@ -223,3 +223,14 @@ func TestLanguage(t *testing.T) {
 	clean := repo(t, map[string]string{fileA: "package a\n\nvar s = \"naïve façade 42 ✓\"\n"})
 	testutil.Equal(t, Language(context.Background(), clean).Status, gate.StatusPass)
 }
+
+func TestLanguageSkipsLocalizedPaths(t *testing.T) {
+	ws := repo(t, map[string]string{
+		"internal/texts/ru.go": "package texts\n\nvar s = \"\u0441\u0442\u0440\u043e\u043a\u0430\"\n",
+		"a_test.go":            "package a\n\nvar s = \"\u0441\"\n",
+		fileReadme:             "\u0441\n",
+	})
+	ws.App = policy.App{Localized: []string{"internal/texts/", "*_test.go"}}
+	out := Language(context.Background(), ws)
+	testutil.Equal(t, out.Findings, []string{fileReadme + ":1: '\u0441'"})
+}

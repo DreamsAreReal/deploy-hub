@@ -15,6 +15,8 @@ const (
 	pathsLine  = "paths: [/health]"
 )
 
+const localizedLine = "localized: [internal/texts/]"
+
 const digest = "@sha256:" + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 const reviewedExpr = `"MIT OR (MIT AND MIT)"`
@@ -54,6 +56,7 @@ apps:
   hub:
     repo: Owner/hub
     kind: binary
+    localized: [internal/texts/]
     scenarios:
       - id: refuse
         category: security
@@ -157,6 +160,10 @@ func TestParseRejects(t *testing.T) {
 		"scenario id":        {"id: refuse", `id: ""`},
 		"scenario category":  {"category: security", "category: style"},
 		"scenario tests":     {"tests: [internal/x.TestRefuse]", "tests: []"},
+		"empty localized":    {localizedLine, `localized: [""]`},
+		"absolute localized": {localizedLine, "localized: [/etc/]"},
+		"escaping localized": {localizedLine, "localized: [a/../b]"},
+		"bad localized":      {localizedLine, "localized: [\"[\"]"},
 		"duplicate scenario": {"        tests: [internal/x.TestRefuse]\n", "        tests: [internal/x.TestRefuse]\n      - id: refuse\n        category: business\n        tests: [a.TestB]\n"},
 	}
 	for name, c := range cases {
@@ -177,4 +184,26 @@ func FuzzParse(f *testing.F) {
 			t.Fatalf("invalid policy accepted: %+v", p)
 		}
 	})
+}
+
+func TestIsLocalized(t *testing.T) {
+	app := App{Localized: []string{"internal/texts/", "*_test.go", "web/static/*.json"}}
+	cases := map[string]bool{
+		"internal/texts/a.go":   true,
+		"x/internal/texts/a.go": true,
+		"internal/textsx/a.go":  false,
+		"a/internal/texts.go":   false,
+		"a_test.go":             true,
+		"dir/a_test.go":         true,
+		"a_test.go.txt":         false,
+		"web/static/m.json":     true,
+		"web/static/sub/m.json": false,
+		"x/web/static/m.json":   false,
+		"README.md":             false,
+	}
+	for rel, want := range cases {
+		testutil.Equal(t, app.IsLocalized(rel), want)
+	}
+	testutil.Equal(t, App{Localized: []string{"texts/"}}.IsLocalized("atexts/a.go"), false)
+	testutil.Equal(t, App{}.IsLocalized("internal/texts/a.go"), false)
 }
