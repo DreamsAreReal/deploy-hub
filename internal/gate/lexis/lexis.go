@@ -1,8 +1,11 @@
 package lexis
 
 import (
+	"errors"
 	"path"
+	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/lexers"
@@ -27,13 +30,17 @@ func IsCode(name string) bool {
 	return codeExts[path.Ext(name)]
 }
 
-var affixKind = chroma.LiteralStringAffix.String()
+var (
+	affixKind   = chroma.LiteralStringAffix.String()
+	ErrEncoding = errors.New("source is not valid UTF-8")
+)
 
 type Token struct {
-	Line int
-	Kind string
-	Text string
-	Note bool
+	Line   int
+	Offset int
+	Kind   string
+	Text   string
+	Note   bool
 }
 
 func Lex(name string, data []byte) ([]Token, bool, error) {
@@ -41,27 +48,46 @@ func Lex(name string, data []byte) ([]Token, bool, error) {
 	if l == nil {
 		return nil, false, nil
 	}
+	if !utf8.Valid(data) {
+		return nil, true, ErrEncoding
+	}
 	it, err := chroma.Coalesce(l).Tokenise(nil, string(data))
 	if err != nil {
 		return nil, true, err
 	}
-	toks := significant(it.Tokens())
+	toks := significant(it.Tokens(), offsetMap(data))
 	if l.Config().Name == docstringLanguage {
 		markDocstrings(toks)
 	}
 	return toks, true, nil
 }
 
-func significant(raw []chroma.Token) []Token {
+func significant(raw []chroma.Token, original func(int) int) []Token {
 	out := make([]Token, 0, len(raw))
-	line := 1
+	line, offset := 1, 0
 	for _, t := range raw {
 		if !t.Type.InCategory(chroma.Text) {
-			out = append(out, Token{Line: line, Kind: t.Type.String(), Text: t.Value, Note: isComment(t.Type)})
+			out = append(out, Token{Line: line, Offset: original(offset), Kind: t.Type.String(), Text: t.Value, Note: isComment(t.Type)})
 		}
 		line += strings.Count(t.Value, "\n")
+		offset += len(t.Value)
 	}
 	return out
+}
+
+func offsetMap(data []byte) func(int) int {
+	var dropped []int
+	normalized := 0
+	for i, b := range data {
+		if b == '\r' && i+1 < len(data) && data[i+1] == '\n' {
+			dropped = append(dropped, normalized)
+			continue
+		}
+		normalized++
+	}
+	return func(at int) int {
+		return at + sort.SearchInts(dropped, at+1)
+	}
 }
 
 func isComment(t chroma.TokenType) bool {

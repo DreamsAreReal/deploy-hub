@@ -55,13 +55,32 @@ func TestTokensCarryKindsAndLines(t *testing.T) {
 	testutil.NoErr(t, err)
 	testutil.True(t, ok, "python is known")
 	testutil.Equal(t, toks, []Token{
-		{Line: 1, Kind: kindName, Text: "a"},
-		{Line: 1, Kind: kindOperator, Text: "="},
-		{Line: 1, Kind: "LiteralNumberInteger", Text: "1"},
-		{Line: 3, Kind: kindName, Text: "b"},
-		{Line: 3, Kind: kindOperator, Text: "="},
-		{Line: 3, Kind: kindSingle, Text: "'two'"},
+		{Line: 1, Offset: 0, Kind: kindName, Text: "a"},
+		{Line: 1, Offset: 2, Kind: kindOperator, Text: "="},
+		{Line: 1, Offset: 4, Kind: "LiteralNumberInteger", Text: "1"},
+		{Line: 3, Offset: 7, Kind: kindName, Text: "b"},
+		{Line: 3, Offset: 9, Kind: kindOperator, Text: "="},
+		{Line: 3, Offset: 11, Kind: kindSingle, Text: "'two'"},
 	})
+}
+
+func TestOffsetsPointIntoTheOriginalBytes(t *testing.T) {
+	src := []byte("a = 1\r\nb = 22\r\n\r\nc = 3\n")
+	toks, _, err := Lex("x.py", src)
+	testutil.NoErr(t, err)
+	for _, tk := range toks {
+		testutil.Equal(t, string(src[tk.Offset:tk.Offset+len(tk.Text)]), tk.Text)
+	}
+	testutil.Equal(t, toks[len(toks)-1].Line, 4)
+	original := offsetMap([]byte("a\r\nb\r\n"))
+	testutil.Equal(t, []int{original(0), original(1), original(2), original(3)}, []int{0, 2, 3, 5})
+	testutil.Equal(t, offsetMap([]byte("a\rb\r"))(3), 3)
+}
+
+func TestInvalidEncodingIsRejected(t *testing.T) {
+	_, known, err := Lex("x.py", []byte("a = \"\xff\"\n"))
+	testutil.True(t, known, "python is known")
+	testutil.Is(t, err, ErrEncoding)
 }
 
 func TestUnknownFilesHaveNoLexer(t *testing.T) {
