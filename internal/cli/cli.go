@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/console"
+	"github.com/DreamsAreReal/deploy-hub/internal/delivery"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/catalog"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/dotnet"
@@ -177,6 +178,13 @@ func (a *App) metrics() obs.Pusher {
 		return obs.Discard{}
 	}
 	return obs.HTTPPusher{URL: a.Config.MetricsURL, Client: &http.Client{}, Now: a.Now, Log: a.Log}
+}
+
+func (a *App) delivery() delivery.Notifier {
+	if a.Config.Delivery == "" {
+		return delivery.Discard{}
+	}
+	return delivery.HTTPNotifier{URL: a.Config.Delivery, Client: &http.Client{}, Log: a.Log}
 }
 
 func ChownTo(username string) func(path string) error {

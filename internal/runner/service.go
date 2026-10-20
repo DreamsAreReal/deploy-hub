@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/console"
+	"github.com/DreamsAreReal/deploy-hub/internal/delivery"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/docker"
 	"github.com/DreamsAreReal/deploy-hub/internal/health"
@@ -58,7 +59,9 @@ type Service struct {
 	Identity    Verifier
 	Audience    string
 	WorkflowRef string
+	Delivery    delivery.Notifier
 	samples     []obs.Sample
+	steps       []delivery.Step
 }
 
 type operation struct {
@@ -72,6 +75,7 @@ type operation struct {
 
 func (s *Service) Dispatch(ctx context.Context, raw string, stdin io.Reader) int {
 	defer s.pushMetrics(ctx)
+	defer s.pushDeliveries(ctx)
 	req, err := ParseRequest(raw)
 	if err != nil {
 		return s.refuse(raw, refusalMessage(err))
@@ -111,6 +115,7 @@ func (s *Service) record(e journal.Entry) {
 		s.Log.Error("journal append failed", "error", err.Error())
 	}
 	s.Log.Info("journal entry", "app", e.App, "sha", e.Sha7, "action", e.Action, "result", e.Result, "seconds", e.Seconds, "extra", e.Extra)
+	s.steps = append(s.steps, delivery.FromEntry(e, s.repoOf(e.App))...)
 	if e.Action != journal.ActionRefuse {
 		s.samples = append(s.samples, obs.Sample{
 			Name:   obs.MetricOperationDuration,
@@ -118,6 +123,25 @@ func (s *Service) record(e journal.Entry) {
 			Value:  float64(e.Seconds),
 		})
 	}
+}
+
+func (s *Service) repoOf(app string) string {
+	entry, err := s.Apps.Lookup(app)
+	if err != nil {
+		return ""
+	}
+	conf, err := registry.LoadAppConf(entry.Dir)
+	if err != nil {
+		return ""
+	}
+	return conf.Repo
+}
+
+func (s *Service) pushDeliveries(ctx context.Context) {
+	if s.Delivery == nil {
+		return
+	}
+	s.Delivery.Notify(context.WithoutCancel(ctx), s.steps)
 }
 
 func (s *Service) pushMetrics(ctx context.Context) {

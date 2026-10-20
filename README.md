@@ -298,6 +298,9 @@ root SSH to. `<vps>` is the server address.
 
    `hub.conf` also accepts `acme_email=` (default `admin@<host-slug>.sslip.io`);
    the environment variables `HOST_SLUG`/`ACME_EMAIL` override it.
+   Optional `delivery_url=<tracker>/api/deliveries/<secret>` reports every
+   gate verdict, deploy and rollback to the task tracker as delivery steps
+   (see [Delivery steps](#delivery-steps)); `DEPLOY_HUB_DELIVERY_URL` overrides it.
 
 6. **sudoers rule** — the runner (user `deploy`) may refresh routes, nothing else:
 
@@ -423,7 +426,7 @@ If the repo ships `docker-compose.yml` (or `.yaml`, or `compose.yml`), CI runs
 | Path | What |
 |---|---|
 | `/opt/deploy-hub/bin/deploy-hub` | the binary (root-owned, 755) |
-| `/opt/deploy-hub/hub.conf` | `host_slug=`, optional `acme_email=` |
+| `/opt/deploy-hub/hub.conf` | `host_slug=`, optional `acme_email=`, `delivery_url=` |
 | `/opt/deploy-hub/apps.list` | allowlist: `<app> [dir]` per line; unknown apps are refused |
 | `/opt/deploy-hub/deploys.log` | append-only journal: `[ISO] app@sha7 action result Ns [smoke=ok\|skip\|fail]` |
 | `/opt/deploy-hub/logs/<command>.log` | structured JSON logs (rotated at 10 MiB) |
@@ -502,6 +505,22 @@ CI (each check, its values and findings; mutation progress). To ship the server
 logs to VictoriaLogs, the observability stack's Vector needs a `file` source
 over `/opt/deploy-hub/logs/*.log`. Secrets (registry token, OIDC token, deploy
 key, `.env` content) are never logged.
+
+### Delivery steps
+
+With `delivery_url=` set, every command also posts what it proved to the task
+tracker as a JSON array of steps `{repo, target, sha, step, state}`
+(`repo` = `github.com/<app repo>`, `target` = `prod`, `sha` = the journal sha7):
+
+| Journal entry | Steps |
+|---|---|
+| `gate ok` / `gate fail` | `checks ok` / `checks fail` |
+| `deploy ok`, `redeploy ok` | `deploy ok`, `live ok` |
+| `deploy fail` | `deploy fail` |
+| `rollback ok` | `live ok` for the restored sha |
+
+A failed post is logged and never fails the deploy. The tracker matches the sha
+to the tasks whose commits it contains and draws their path to prod.
 
 Metrics — pushed to VictoriaMetrics after every command
 (`DEPLOY_HUB_METRICS_URL`, default

@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DreamsAreReal/deploy-hub/internal/delivery"
 	"github.com/DreamsAreReal/deploy-hub/internal/obs"
 	"github.com/DreamsAreReal/deploy-hub/internal/registry"
 	"github.com/DreamsAreReal/deploy-hub/internal/testutil"
@@ -452,4 +454,23 @@ func TestSmokeSuffixRecordsConfiguredPorts(t *testing.T) {
 	e.svc.Listening = func(p int) bool { return p == 22 }
 	e.dispatch("deploy web "+goodTag, "")
 	e.expectJournal("deploy ok", "smoke=ok")
+}
+
+type captureNotifier struct {
+	steps []delivery.Step
+}
+
+func (c *captureNotifier) Notify(_ context.Context, steps []delivery.Step) {
+	c.steps = append(c.steps, steps...)
+}
+
+func TestDeployReportsDeliverySteps(t *testing.T) {
+	e := newEnv(t)
+	notes := &captureNotifier{}
+	e.svc.Delivery = notes
+	testutil.Equal(t, e.dispatch("deploy web "+goodTag, meta()), ExitOK)
+	shipped := delivery.Step{Repo: "github.com/" + appRepo, Target: delivery.DefaultTarget, SHA: registry.Sha7(goodTag), State: delivery.StateOK}
+	deployed, live := shipped, shipped
+	deployed.Step, live.Step = delivery.StepDeploy, delivery.StepLive
+	testutil.Equal(t, notes.steps, []delivery.Step{deployed, live})
 }
