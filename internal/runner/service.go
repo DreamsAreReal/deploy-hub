@@ -52,6 +52,7 @@ type Service struct {
 	LockWait    time.Duration
 	Listening   func(int) bool
 	Now         func() time.Time
+	Sleep       func(context.Context, time.Duration) error
 	Out         *console.Printer
 	Err         *console.Printer
 	Log         *slog.Logger

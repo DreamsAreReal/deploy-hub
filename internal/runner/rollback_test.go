@@ -128,9 +128,6 @@ func TestCancelledContextStillCleansUpStandby(t *testing.T) {
 	if e.sim.running["web-bg"] {
 		t.Fatal("standby leaked after cancellation")
 	}
-	if _, err := os.Stat(filepath.Join(e.appDir, registry.CaddyPortFile)); err == nil {
-		t.Fatal("route override leaked after cancellation")
-	}
 }
 
 func TestStatus(t *testing.T) {
@@ -240,19 +237,6 @@ func TestStateSaveFailuresAreLogged(t *testing.T) {
 	}
 }
 
-func TestRouteOverrideWriteFailureIsLogged(t *testing.T) {
-	e := newEnv(t)
-	e.sim.startOld(goodTag)
-	if err := os.Mkdir(filepath.Join(e.appDir, registry.CaddyPortFile), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(e.appDir, registry.CaddyPortFile, "x"), nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	e.dispatch("deploy web "+good2Tag, "")
-	e.expectOut(e.logs, "route override not written")
-}
-
 func TestReadMeta(t *testing.T) {
 	big := strings.Repeat("A", 1<<20)
 	m, err := ReadMeta(strings.NewReader("token=t\nunknown=x\nnoequals\nsubject=" + strings.Repeat("s", 200) + "\nstart=12a\ncompose=" + big + "\n"))
@@ -271,15 +255,6 @@ func TestOversizedMetaIsRejected(t *testing.T) {
 	e := newEnv(t)
 	if code := e.dispatch("deploy web "+goodTag, "compose="+strings.Repeat("A", maxMetaLine+1)); code != ExitFail {
 		t.Fatal("oversized stdin must be rejected")
-	}
-}
-
-func TestStandbyBase(t *testing.T) {
-	cases := map[int]int{9001: 19001, 55535: 65535, 55536: standbyFallbackBase, 60000: standbyFallbackBase}
-	for in, want := range cases {
-		if got := standbyBase(in); got != want {
-			t.Errorf("%d: got %d want %d", in, got, want)
-		}
 	}
 }
 

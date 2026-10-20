@@ -6,21 +6,18 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/DreamsAreReal/deploy-hub/internal/caddy"
 	"github.com/DreamsAreReal/deploy-hub/internal/docker"
 	"github.com/DreamsAreReal/deploy-hub/internal/health"
-	"github.com/DreamsAreReal/deploy-hub/internal/netprobe"
 	"github.com/DreamsAreReal/deploy-hub/internal/obs"
 	"github.com/DreamsAreReal/deploy-hub/internal/registry"
 )
 
 const (
-	standbySuffix       = "-bg"
-	standbyPortOffset   = 10000
-	standbyFallbackBase = 20000
-	portFileMode        = 0o600
-	dockerMain          = docker.MainService
-	targetMain          = "main"
-	targetStandby       = "standby"
+	standbySuffix = "-bg"
+	dockerMain    = docker.MainService
+	targetMain    = "main"
+	targetStandby = "standby"
 )
 
 func (s *Service) blueGreen(ctx context.Context, op *operation, conf registry.AppConf, ref string, t health.Target) (bool, bool) {
@@ -39,14 +36,20 @@ func (s *Service) recreate(ctx context.Context, op *operation, conf registry.App
 
 func (s *Service) swap(ctx context.Context, op *operation, conf registry.AppConf, ref string, t health.Target, old string) (bool, bool) {
 	name := op.app + standbySuffix
-	port, err := strconv.Atoi(t.Port)
+	apps, err := s.Apps.All()
 	if err != nil {
 		return s.recreate(ctx, op, conf, ref, t), false
 	}
 	standby := s.standbySpec(ctx, op.dir, name, old, ref, t.Port)
-	standby.HostPort = strconv.Itoa(netprobe.FreePort(standbyBase(port), s.Listening))
+	standby.HostPort = caddy.StandbyPort(apps, op.app)
 	s.Docker.Remove(ctx, name)
-	defer s.cleanupStandby(ctx, op.dir, name)
+	if hostPort, err := strconv.Atoi(standby.HostPort); err != nil || s.Listening(hostPort) {
+		s.Err.Println(msgNoStandbyPort)
+		s.Log.Warn("no free standby port", "app", op.app, "port", standby.HostPort)
+		return s.recreate(ctx, op, conf, ref, t), false
+	}
+	drain := false
+	defer func() { s.cleanupStandby(ctx, name, drain) }()
 	s.Out.Printf(msgStandbyStart, name, standby.HostPort, standby.Port)
 	if err := s.Docker.RunStandby(ctx, standby); err != nil {
 		s.Err.Println(msgStandbyFallback)
@@ -58,7 +61,7 @@ func (s *Service) swap(ctx context.Context, op *operation, conf registry.AppConf
 		return false, true
 	}
 	s.Out.Println(msgCutover)
-	s.routeTo(ctx, op.dir, standby.HostPort)
+	drain = true
 	if s.recreate(ctx, op, conf, ref, t) {
 		return true, false
 	}
@@ -67,13 +70,6 @@ func (s *Service) swap(ctx context.Context, op *operation, conf registry.AppConf
 		s.composeUp(ctx, op.dir, conf, conf.Image+":"+prev)
 	}
 	return false, true
-}
-
-func standbyBase(port int) int {
-	if port+standbyPortOffset > netprobe.MaxPort {
-		return standbyFallbackBase
-	}
-	return port + standbyPortOffset
 }
 
 func (s *Service) standbySpec(ctx context.Context, dir, name, old, ref, port string) docker.Standby {
@@ -101,18 +97,18 @@ func (s *Service) gateStandby(ctx context.Context, app string, t health.Target, 
 	return ok
 }
 
-func (s *Service) routeTo(ctx context.Context, dir, port string) {
-	if err := os.WriteFile(filepath.Join(dir, registry.CaddyPortFile), []byte(port+"\n"), portFileMode); err != nil {
-		s.Log.Warn("route override not written", "dir", dir, "error", err.Error())
-	}
-	s.Router.Sync(ctx)
-}
-
-func (s *Service) cleanupStandby(ctx context.Context, dir, name string) {
+// cleanupStandby removes the standby. Caddy lists the standby port next to
+// the permanent one and fails over between them by itself (no reload); once
+// the permanent service was recreated, the standby stays up for caddy.Settle
+// so Caddy is back on the permanent port before the standby goes away.
+func (s *Service) cleanupStandby(ctx context.Context, name string, drain bool) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 	defer cancel()
-	_ = os.Remove(filepath.Join(dir, registry.CaddyPortFile))
-	s.Router.Sync(ctx)
+	if drain {
+		if err := s.Sleep(ctx, caddy.Settle); err != nil {
+			s.Log.Warn("standby drain cut short", "standby", name, "error", err.Error())
+		}
+	}
 	s.Docker.Remove(ctx, name)
 	s.Log.Info("standby cleaned up", "standby", name)
 }

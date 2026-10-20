@@ -21,7 +21,10 @@ var errSim = errors.New("simulated")
 
 type pusher struct{ samples []obs.Sample }
 
-const testSlug = "203-0-113-7"
+const (
+	testSlug = "203-0-113-7"
+	webApp   = "web"
+)
 
 func (p *pusher) Push(_ context.Context, s []obs.Sample) { p.samples = append(p.samples, s...) }
 
@@ -72,58 +75,52 @@ func newFixture(t *testing.T) *fixture {
 	owned := []string{}
 	f.owned = &owned
 	f.syncer = Syncer{
-		Config:    Config{Caddyfile: filepath.Join(root, "Caddyfile"), HostSlug: testSlug, Email: "admin@x.sslip.io", Owner: func(p string) error { owned = append(owned, p); return nil }},
-		Apps:      f.apps,
-		Exec:      f.exec,
-		Listening: func(p int) bool { return p == 19002 },
-		Out:       console.New(f.out),
-		Log:       slog.New(slog.NewJSONHandler(f.logs, nil)),
-		Metrics:   f.metrics,
+		Config:  Config{Caddyfile: filepath.Join(root, "Caddyfile"), HostSlug: testSlug, Email: "admin@x.sslip.io", Owner: func(p string) error { owned = append(owned, p); return nil }},
+		Apps:    f.apps,
+		Exec:    f.exec,
+		Out:     console.New(f.out),
+		Log:     slog.New(slog.NewJSONHandler(f.logs, nil)),
+		Metrics: f.metrics,
 	}
 	return f
 }
 
 func TestRoutesAndRender(t *testing.T) {
 	f := newFixture(t)
-	if err := os.WriteFile(filepath.Join(f.root, "api", ".caddy-port"), []byte("19002\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(f.root, "web", ".caddy-port"), []byte("19001x\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	testutil.Write(t, filepath.Join(f.root, webApp, ".caddy-port"), "19001\n")
 	apps, _ := f.apps.All()
-	routes := Routes(apps, f.syncer.Listening)
-	if len(routes) != 2 || routes[0] != (Route{"web", "9001"}) || routes[1] != (Route{"api", "19002"}) {
+	routes := Routes(apps)
+	if len(routes) != 2 || routes[0] != (Route{webApp, "9001", "19001"}) || routes[1] != (Route{"api", "9002", "19002"}) {
 		t.Fatalf("routes: %+v", routes)
 	}
+	block := "\t\tlb_policy first\n\t\tlb_try_duration 30s\n\t\tlb_try_interval 250ms\n\t\tfail_duration 5s\n\t\tmax_fails 1\n\t}\n}\n\n"
 	want := header + "{\n\temail a@b\n\tgrace_period 10s\n}\n\n" +
 		"import /etc/caddy/extra/*.caddy\n\n" +
-		"web.s.sslip.io {\n\tlog\n\treverse_proxy 127.0.0.1:9001 {\n\t\tlb_try_duration 30s\n\t\tlb_try_interval 250ms\n\t}\n}\n\n" +
-		"api.s.sslip.io {\n\tlog\n\treverse_proxy 127.0.0.1:19002 {\n\t\tlb_try_duration 30s\n\t\tlb_try_interval 250ms\n\t}\n}\n\n"
+		"web.s.sslip.io {\n\tlog\n\treverse_proxy 127.0.0.1:9001 127.0.0.1:19001 {\n" + block +
+		"api.s.sslip.io {\n\tlog\n\treverse_proxy 127.0.0.1:9002 127.0.0.1:19002 {\n" + block
 	if got := Render(routes, "s", "a@b"); got != want {
 		t.Fatalf("render:\n%s", got)
 	}
 }
 
-func TestOverrideTruncatesAndIgnoresGarbage(t *testing.T) {
-	dir := t.TempDir()
-	write := func(content string) {
-		testutil.Write(t, filepath.Join(dir, registry.CaddyPortFile), content)
+func TestStandbyPortNeverPointsAtAnotherApp(t *testing.T) {
+	root := t.TempDir()
+	list := ""
+	for _, a := range [][2]string{{webApp, "9001"}, {"other", "19001"}, {"high", "55536"}, {"edge", "55535"}} {
+		dir := filepath.Join(root, a[0])
+		testutil.NoErr(t, os.MkdirAll(dir, 0o750))
+		testutil.Write(t, filepath.Join(dir, "app.conf"), "port="+a[1]+"\n")
+		list += a[0] + " " + dir + "\n"
 	}
-	only := func(port int) func(int) bool { return func(p int) bool { return p == port } }
-	write("1234567")
-	testutil.Equal(t, override(dir, only(12345)), "12345")
-	write("12345")
-	testutil.Equal(t, override(dir, only(12345)), "12345")
-	write("port: 19002/tcp\n")
-	testutil.Equal(t, override(dir, only(19002)), "19002")
-	write("ab:0")
-	testutil.Equal(t, override(dir, only(0)), "0")
-	write("none")
-	testutil.Equal(t, override(dir, func(int) bool { return true }), "")
-	write("9001")
-	testutil.Equal(t, override(dir, only(9002)), "")
-	testutil.Equal(t, override(t.TempDir(), func(int) bool { return true }), "")
+	testutil.Write(t, filepath.Join(root, "apps.list"), list)
+	apps, err := registry.Apps{Path: filepath.Join(root, "apps.list")}.All()
+	testutil.NoErr(t, err)
+	testutil.Equal(t, StandbyPort(apps, webApp), "")
+	testutil.Equal(t, StandbyPort(apps, "other"), "29001")
+	testutil.Equal(t, StandbyPort(apps, "high"), "")
+	testutil.Equal(t, StandbyPort(apps, "edge"), "65535")
+	testutil.Equal(t, StandbyPort(apps, "missing"), "")
+	testutil.Contains(t, Render([]Route{{App: webApp, Port: "9001"}}, "s", "a@b"), "reverse_proxy 127.0.0.1:9001 {\n")
 }
 
 func TestSyncWritesValidatesAndReloads(t *testing.T) {

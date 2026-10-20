@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -54,8 +55,8 @@ func TestDeployLifecycle(t *testing.T) {
 	testutil.Equal(t, res.code, 0)
 	testutil.Contains(t, res.stdout, "blue-green: starting standby web-bg", "cutting over")
 	testutil.Equal(t, h.served(), imageName+":"+goodB)
-	testutil.Contains(t, h.file("Caddyfile"), "web."+hostSlug+".sslip.io {\n\tlog\n\treverse_proxy 127.0.0.1:"+h.port+" {\n\t\tlb_try_duration 30s\n\t\tlb_try_interval 250ms\n\t}\n}")
-	testutil.Missing(t, filepath.Join(h.appDir, ".caddy-port"))
+	port, _ := strconv.Atoi(h.port)
+	testutil.Contains(t, h.file("Caddyfile"), "web."+hostSlug+".sslip.io {\n\tlog\n\treverse_proxy 127.0.0.1:"+h.port+" 127.0.0.1:"+strconv.Itoa(port+10000)+" {\n\t\tlb_policy first\n\t\tlb_try_duration 30s\n\t\tlb_try_interval 250ms\n\t\tfail_duration 5s\n\t\tmax_fails 1\n\t}\n}")
 	_, standbyLeft := h.fake.load("web-bg")
 	testutil.True(t, !standbyLeft, "standby must be removed")
 	calls := h.file("fake/calls.log")

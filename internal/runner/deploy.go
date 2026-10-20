@@ -74,7 +74,7 @@ func (s *Service) deployLocked(ctx context.Context, op *operation, conf registry
 	t := targetFor(conf)
 	healthy, oldAlive := s.blueGreen(ctx, op, conf, ref, t)
 	if healthy {
-		return s.deploySucceeded(ctx, op, conf, prev)
+		return s.deploySucceeded(ctx, op, prev)
 	}
 	return s.deployFailed(ctx, op, conf, prev, oldAlive, t)
 }
@@ -141,7 +141,7 @@ func (s *Service) pull(ctx context.Context, op *operation, image string, meta Me
 	return true
 }
 
-func (s *Service) deploySucceeded(ctx context.Context, op *operation, conf registry.AppConf, prev string) int {
+func (s *Service) deploySucceeded(ctx context.Context, op *operation, prev string) int {
 	if prev != op.tag {
 		if err := (registry.DeployState{Current: op.tag, Previous: prev}).Save(op.dir); err != nil {
 			s.Log.Error("deploy state not saved", "app", op.app, "error", err.Error())
@@ -151,9 +151,7 @@ func (s *Service) deploySucceeded(ctx context.Context, op *operation, conf regis
 	lead := s.Now().Sub(op.start)
 	s.samples = append(s.samples, obs.Sample{Name: obs.MetricLeadTime, Labels: obs.Labels{obs.LabelApp: op.app}, Value: lead.Seconds()})
 	s.Out.Printf(msgLive, msgHealthOK, op.app, op.sha7, FormatDuration(lead))
-	if conf.IsBYOC() {
-		s.Router.Sync(ctx)
-	}
+	s.Router.Sync(ctx)
 	s.Log.Info("deploy succeeded", "app", op.app, "sha", op.sha7, "previous", prev, "lead_seconds", lead.Seconds())
 	return ExitOK
 }

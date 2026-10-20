@@ -95,7 +95,8 @@ Another operation holds `/opt/deploy-hub/deploy.lock`; a waiter prints
 
 If the holder is gone (killed CI job), the lock is released with its process —
 just retry. A leftover standby is `<app>-bg`: `ssh vpn 'docker rm -f <app>-bg'`
-and `ssh vpn 'rm -f /opt/<app>/.caddy-port && sudo /opt/deploy-hub/bin/deploy-hub caddy-sync'`.
+(the route needs no change: Caddy only uses the standby port while the
+permanent one fails).
 
 ## The runner itself is broken
 

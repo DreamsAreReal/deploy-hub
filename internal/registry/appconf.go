@@ -6,11 +6,10 @@ import (
 )
 
 const (
-	AppConfFile   = "app.conf"
-	StateFile     = ".deploy-state"
-	ComposeFile   = "docker-compose.yml"
-	EnvFile       = ".env"
-	CaddyPortFile = ".caddy-port"
+	AppConfFile = "app.conf"
+	StateFile   = ".deploy-state"
+	ComposeFile = "docker-compose.yml"
+	EnvFile     = ".env"
 
 	ModeBYOC = "byoc"
 

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DreamsAreReal/deploy-hub/internal/caddy"
 	"github.com/DreamsAreReal/deploy-hub/internal/delivery"
 	"github.com/DreamsAreReal/deploy-hub/internal/obs"
 	"github.com/DreamsAreReal/deploy-hub/internal/registry"
@@ -68,6 +69,8 @@ func TestBlueGreenSwapIsZeroDowntime(t *testing.T) {
 	e.sim.startOld(goodTag)
 	e.state(registry.DeployState{Current: goodTag, Previous: ""})
 	e.write(filepath.Join(e.appDir, ".env"), "SECRET=1\n")
+	standbyAtSync := []bool{}
+	e.router.onSync = func() { standbyAtSync = append(standbyAtSync, e.sim.running["web-bg"]) }
 	if code := e.dispatch("deploy web "+good2Tag, meta()); code != ExitOK {
 		t.Fatalf("exit %d\n%s", code, e.err)
 	}
@@ -78,17 +81,32 @@ func TestBlueGreenSwapIsZeroDowntime(t *testing.T) {
 	if !ok || !strings.Contains(strings.Join(run.Args, " "), "--network web_default --env-file "+filepath.Join(e.appDir, ".env")+" --memory 256m -p 127.0.0.1:19001:8080") {
 		t.Fatalf("standby args: %v", run.Args)
 	}
-	if e.router.seen[0] != "19001" || e.router.seen[len(e.router.seen)-1] != "" {
-		t.Fatalf("route must cut to standby then back: %v", e.router.seen)
+	if len(standbyAtSync) != 1 || standbyAtSync[0] {
+		t.Fatalf("routes are synced once, after the standby is gone (no reload mid-swap): %v", standbyAtSync)
 	}
-	if _, err := os.Stat(filepath.Join(e.appDir, registry.CaddyPortFile)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("route override left behind")
+	if len(e.slept) != 1 || e.slept[0] != caddy.Settle {
+		t.Fatalf("standby must stay up while Caddy returns to the permanent port: %v", e.slept)
 	}
 	if e.sim.running["web-bg"] {
 		t.Fatal("standby not removed")
 	}
 	e.expectOut(e.out, "blue-green: starting standby web-bg on 127.0.0.1:19001 -> 8080", msgCutover)
 	e.expectLog("health gate finished", "standby cleaned up")
+}
+
+func TestTakenStandbyPortFallsBackToInPlaceRecreate(t *testing.T) {
+	e := newEnv(t)
+	e.sim.startOld(goodTag)
+	e.state(registry.DeployState{Current: goodTag})
+	e.svc.Listening = func(p int) bool { return p == 19001 }
+	if code := e.dispatch("deploy web "+good2Tag, meta()); code != ExitOK {
+		t.Fatalf("exit %d\n%s", code, e.err)
+	}
+	if _, ok := e.exec.Find("docker run"); ok {
+		t.Fatal("no standby on a port something else listens on: Caddy would route to it")
+	}
+	e.expectOut(e.err, msgNoStandbyPort)
+	e.expectLog("no free standby port")
 }
 
 func TestBrokenReleaseIsDiscardedAndProdUntouched(t *testing.T) {

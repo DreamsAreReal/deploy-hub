@@ -211,19 +211,15 @@ func (l *fakeLocker) Acquire(_ context.Context, onWait func()) (func(), error) {
 }
 
 type fakeRouter struct {
-	syncs int
-	seen  []string
-	dir   string
+	syncs  int
+	onSync func()
 }
 
 func (r *fakeRouter) Sync(context.Context) {
 	r.syncs++
-	data, err := os.ReadFile(filepath.Join(r.dir, registry.CaddyPortFile))
-	if err != nil {
-		r.seen = append(r.seen, "")
-		return
+	if r.onSync != nil {
+		r.onSync()
 	}
-	r.seen = append(r.seen, strings.TrimSpace(string(data)))
 }
 
 type capturePusher struct {
@@ -281,6 +277,7 @@ type env struct {
 	locker  *fakeLocker
 	router  *fakeRouter
 	metrics *capturePusher
+	slept   []time.Duration
 }
 
 func newEnv(t *testing.T) *env {
@@ -293,7 +290,7 @@ func newEnv(t *testing.T) *env {
 			t.Fatal(err)
 		}
 	}
-	e.router = &fakeRouter{dir: e.appDir}
+	e.router = &fakeRouter{}
 	e.write(filepath.Join(e.hubDir, "apps.list"), appName+" "+e.appDir+"\n")
 	e.write(filepath.Join(e.appDir, "docker-compose.yml"), "services: {}\n")
 	e.conf(registry.AppConf{Profile: registry.ProfileService, Port: appPort, HealthPath: "/health", Image: image, Repo: appRepo})
@@ -314,6 +311,7 @@ func newEnv(t *testing.T) *env {
 		LockWait:    time.Minute,
 		Listening:   func(int) bool { return false },
 		Now:         func() time.Time { now = now.Add(time.Second); return now },
+		Sleep:       func(ctx context.Context, d time.Duration) error { e.slept = append(e.slept, d); return ctx.Err() },
 		Out:         console.New(e.out),
 		Err:         console.New(e.err),
 		Log:         slog.New(slog.NewJSONHandler(e.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),

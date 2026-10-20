@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/console"
 
@@ -28,14 +28,29 @@ const (
 	caddyService     = "caddy"
 	adapter          = "caddyfile"
 	filePerm         = 0o600
-	overrideDigits   = 5
 	header           = "# Managed by deploy-hub caddy-sync — do not edit by hand.\n"
 	globalBlock      = "{\n\temail %s\n\tgrace_period 10s\n}\n\n"
 	extraImport      = "import /etc/caddy/extra/*.caddy\n\n"
-	siteBlock        = "%s.%s.sslip.io {\n\tlog\n\treverse_proxy 127.0.0.1:%s {\n\t\tlb_try_duration 30s\n\t\tlb_try_interval 250ms\n\t}\n}\n\n"
+	siteOpen         = "%s.%s.sslip.io {\n\tlog\n\treverse_proxy 127.0.0.1:%s"
+	standbyUpstream  = " 127.0.0.1:%s"
+	siteClose        = " {\n\t\tlb_policy first\n\t\tlb_try_duration 30s\n\t\tlb_try_interval 250ms\n\t\tfail_duration %s\n\t\tmax_fails 1\n\t}\n}\n\n"
 	msgUpToDate      = "caddy-sync: Caddyfile already up to date (no reload)"
 	msgUpdated       = "caddy-sync: Caddyfile updated and Caddy reloaded"
 	candidateSuffix  = ".new"
+
+	standbyPortOffset = 10000
+	maxPort           = 65535
+
+	// FailDuration is how long Caddy keeps an upstream out of rotation after
+	// one failed request. Traffic moves between the permanent port and the
+	// standby port of a blue-green deploy only through these passive health
+	// checks, never through a reload: a reload leaves the previous server
+	// alive on open HTTP/2 connections with the previous upstreams (#407).
+	FailDuration = 5 * time.Second
+	// Settle is how long a blue-green deploy waits after the permanent port
+	// is healthy again before it removes the standby, so Caddy has forgotten
+	// the failures of the recreate and sends nothing to the standby any more.
+	Settle = FailDuration + time.Second
 )
 
 var (
@@ -64,48 +79,44 @@ func (c Config) Validate() error {
 }
 
 type Route struct {
-	App  string
-	Port string
+	App     string
+	Port    string
+	Standby string
 }
 
-func Routes(apps []registry.Entry, listening func(int) bool) []Route {
+// Routes lists the apps with a port. Each gets the fixed loopback port of
+// its blue-green standby, port+10000, as a second upstream, unless that is
+// past 65535 or is the port of another app: Caddy must never fail over to
+// something that is not this app.
+func Routes(apps []registry.Entry) []Route {
 	var out []Route
+	taken := map[string]bool{}
 	for _, a := range apps {
 		conf, err := registry.LoadAppConf(a.Dir)
-		if err != nil {
+		if err != nil || validate.Port(conf.Port) != nil {
 			continue
 		}
-		port := override(a.Dir, listening)
-		if port == "" {
-			port = conf.Port
+		out = append(out, Route{App: a.Name, Port: conf.Port})
+		taken[conf.Port] = true
+	}
+	for i, r := range out {
+		port, _ := strconv.Atoi(r.Port)
+		if standby := strconv.Itoa(port + standbyPortOffset); port+standbyPortOffset <= maxPort && !taken[standby] {
+			out[i].Standby = standby
 		}
-		if validate.Port(port) != nil {
-			continue
-		}
-		out = append(out, Route{App: a.Name, Port: port})
 	}
 	return out
 }
 
-func override(dir string, listening func(int) bool) string {
-	data, err := os.ReadFile(filepath.Clean(filepath.Join(dir, registry.CaddyPortFile)))
-	if err != nil {
-		return ""
-	}
-	digits := strings.Map(func(r rune) rune {
-		if r >= '0' && r <= '9' {
-			return r
+// StandbyPort is the standby port the Caddyfile lists for app, or "" when it
+// has none and a deploy has to recreate in place.
+func StandbyPort(apps []registry.Entry, app string) string {
+	for _, r := range Routes(apps) {
+		if r.App == app {
+			return r.Standby
 		}
-		return -1
-	}, string(data))
-	if len(digits) > overrideDigits {
-		digits = digits[:overrideDigits]
 	}
-	p, err := strconv.Atoi(digits)
-	if err != nil || !listening(p) {
-		return ""
-	}
-	return digits
+	return ""
 }
 
 func Render(routes []Route, slug, email string) string {
@@ -114,19 +125,22 @@ func Render(routes []Route, slug, email string) string {
 	fmt.Fprintf(&b, globalBlock, email)
 	b.WriteString(extraImport)
 	for _, r := range routes {
-		fmt.Fprintf(&b, siteBlock, r.App, slug, r.Port)
+		fmt.Fprintf(&b, siteOpen, r.App, slug, r.Port)
+		if r.Standby != "" {
+			fmt.Fprintf(&b, standbyUpstream, r.Standby)
+		}
+		fmt.Fprintf(&b, siteClose, FailDuration)
 	}
 	return b.String()
 }
 
 type Syncer struct {
-	Config    Config
-	Apps      registry.Apps
-	Exec      procexec.Runner
-	Listening func(int) bool
-	Out       *console.Printer
-	Log       *slog.Logger
-	Metrics   obs.Pusher
+	Config  Config
+	Apps    registry.Apps
+	Exec    procexec.Runner
+	Out     *console.Printer
+	Log     *slog.Logger
+	Metrics obs.Pusher
 }
 
 type syncResult struct {
@@ -162,7 +176,7 @@ func (s Syncer) sync(ctx context.Context) (syncResult, error) {
 	if err != nil {
 		return syncResult{}, err
 	}
-	routes := Routes(apps, s.Listening)
+	routes := Routes(apps)
 	content := []byte(Render(routes, s.Config.HostSlug, s.Config.Email))
 	if current, rerr := os.ReadFile(s.Config.Caddyfile); rerr == nil && bytes.Equal(current, content) {
 		s.Out.Println(msgUpToDate)

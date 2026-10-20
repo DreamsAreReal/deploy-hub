@@ -33,8 +33,8 @@ push to default branch
               verify the OIDC token: signed by GitHub, issued to the hub's
               deploy.yml@main, for the app's own repository and this commit
               lock → docker login (ephemeral job token) → pull <image>@<digest> → logout
-              → blue-green: start a standby, health gate (90s), cut the route over,
-                recreate the main service, gate it, route back, drop the standby
+              → blue-green: start a standby, health gate (90s), recreate the main
+                service (Caddy fails over to the standby), gate it, drop the standby
               → ok:   state advanced, journal line, metrics pushed
               → fail: standby discarded, the current version keeps serving
 ```
@@ -437,7 +437,6 @@ If the repo ships `docker-compose.yml` (or `.yaml`, or `compose.yml`), CI runs
 | `/opt/<app>/app.conf` | `profile=`, `port=`, `health_path=`, `image=`, `repo=` (BYOC: `mode=byoc`, `main=`, `hmode=`) |
 | `/opt/<app>/.env` | app secrets (600), referenced by compose, never in git |
 | `/opt/<app>/.deploy-state` | `current=`/`previous=` sha tags — rollback source of truth |
-| `/opt/<app>/.caddy-port` | temporary route override during a blue-green cutover |
 
 ## Runner interface
 
@@ -490,12 +489,16 @@ The gate polls every 5 s for up to 90 s:
 - BYOC `hmode=process` — the main container is still running after one tick.
 
 Blue-green: when the app already runs and has a port, the new image starts as a
-standby `<app>-bg` on a free loopback port (+10000), is gated there, the Caddy
-route is pointed at it, the real service is recreated and gated, and the route
-returns to the permanent port. A broken release never touches the live
-container. The standby and the route override are removed on every exit path,
-including SIGINT/SIGTERM/SIGHUP. When the old instance was not running, a
-failed gate redeploys the previous sha; on a first deploy the app is stopped.
+standby `<app>-bg` on the fixed loopback port `port+10000` and is gated there.
+The real service is then recreated and gated; while it is down Caddy sends its
+requests to the standby by itself (see HTTPS routing), so the cutover needs no
+Caddy reload. The standby stays up 6 s after the real service is healthy again,
+until Caddy is back on the permanent port, and is removed on every exit path,
+including SIGINT/SIGTERM/SIGHUP. A broken release never touches the live
+container. The deploy recreates in place instead when the app has no standby
+port: `port+10000` is past 65535, is another app's port, or something already
+listens on it. When the old instance was not running, a failed gate redeploys
+the previous sha; on a first deploy the app is stopped.
 
 ## Observability
 
@@ -559,22 +562,35 @@ time quantiles are recording rules in the observability repo
 ## HTTPS routing
 
 Every app with a port gets `https://<app>.<host-slug>.sslip.io` →
-`reverse_proxy 127.0.0.1:<port>` with an automatic Let's Encrypt certificate
-(sslip.io resolves the name back to the VPS). `deploy-hub caddy-sync` renders
-`/etc/caddy/Caddyfile` from `apps.list`, validates it with `caddy validate`,
-writes it only when it changed (mode 600, owner `caddy`) and then reloads Caddy.
-Settings: `hub.conf`, `CADDYFILE`, `HOST_SLUG`, `ACME_EMAIL`, `CADDY_USER`.
+`reverse_proxy 127.0.0.1:<port> 127.0.0.1:<port+10000>` with an automatic
+Let's Encrypt certificate (sslip.io resolves the name back to the VPS).
+`deploy-hub caddy-sync` renders `/etc/caddy/Caddyfile` from `apps.list`,
+validates it with `caddy validate`, writes it only when it changed (mode 600,
+owner `caddy`) and then reloads Caddy. It runs after onboarding and after
+every successful deploy, once the standby is gone; an unchanged file means
+no reload. Settings: `hub.conf`, `CADDYFILE`, `HOST_SLUG`, `ACME_EMAIL`,
+`CADDY_USER`.
 
-The proxy retries the upstream (`lb_try_duration 30s`, `lb_try_interval
-250ms`), so while a container is being recreated requests wait for it instead
-of getting an instant 502.
+The second upstream is the blue-green standby port; nothing listens there
+outside a deploy. `lb_policy first` keeps every request on the permanent port
+while it answers. A request that fails there (`fail_duration 5s`, `max_fails
+1`) takes the port out of rotation for 5 s and goes to the standby. The proxy
+retries (`lb_try_duration 30s`, `lb_try_interval 250ms`), so while a container
+is recreated, requests wait for one of the two instead of getting an
+instant 502. A failed connection is always retried; a request that already
+reached an instance and broke is retried only for GET. So a POST that is in
+flight at the moment the old main container stops can still get a 502.
 
-The global block sets `grace_period 10s`. A blue-green switch reloads Caddy
-twice (standby port, then the main port again), and by default Caddy keeps the
-connections of a replaced config open forever: a client with a busy keep-alive
-connection (the task runner) would keep reaching the removed standby port and
-get 502 for minutes. With the grace period those connections are closed after
-10 s and the client reconnects to the current config.
+The route never changes during a deploy, on purpose: on a reload Caddy keeps
+the previous server alive, with its previous upstreams, for as long as a
+client holds an HTTP/2 connection open. `grace_period` does not end those
+connections. Pointing the route at the standby and back once caused 7 minutes
+of 502s to a removed standby (#407).
+
+The global block sets `grace_period 10s`, so a reload stops waiting for the
+connections of the replaced config after 10 s. It does not close an HTTP/2
+connection that is still in use (checked on Caddy 2.11.7), which is why
+blue-green never relies on a reload.
 
 Every app vhost has `log`: Caddy writes one JSON access line per request to
 journald, and the shared observability stack ships it to VictoriaLogs
