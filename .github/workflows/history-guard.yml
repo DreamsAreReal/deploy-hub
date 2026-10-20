@@ -1,6 +1,12 @@
 name: history-guard
 
 on:
+  # A push runs the workflow file from the pushed commit, so this fires at once
+  # for any branch or tag that already carries this file; refs built purely on
+  # the old history lack it and are left to the schedule and manual runs.
+  push:
+    branches: ["**"]
+    tags: ["**"]
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch:
