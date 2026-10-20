@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/delivery"
@@ -70,4 +71,13 @@ func TestHTTPNotifierPostsAJSONArray(t *testing.T) {
 	n.Notify(t.Context(), delivery.FromEntry(entry(journal.ActionDeploy, journal.ResultOK), "Owner/web"))
 	testutil.Equal(t, len(got), 2)
 	testutil.Equal(t, got[1].Step, delivery.StepLive)
+}
+
+func TestFailedPostKeepsTheSecretOutOfTheLog(t *testing.T) {
+	var logs strings.Builder
+	n := delivery.HTTPNotifier{URL: "http://127.0.0.1:1/api/deliveries/dl_secret", Client: &http.Client{},
+		Log: slog.New(slog.NewTextHandler(&logs, nil))}
+	n.Notify(t.Context(), delivery.FromEntry(entry(journal.ActionDeploy, journal.ResultOK), "Owner/web"))
+	testutil.True(t, strings.Contains(logs.String(), "delivery steps not sent"), "failure logged: "+logs.String())
+	testutil.True(t, !strings.Contains(logs.String(), "dl_secret"), "secret leaked: "+logs.String())
 }

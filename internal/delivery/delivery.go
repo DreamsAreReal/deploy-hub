@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -100,10 +101,18 @@ func (n HTTPNotifier) Notify(ctx context.Context, steps []Step) {
 		return
 	}
 	if err := n.send(ctx, steps); err != nil {
-		n.Log.Warn("delivery steps not sent", "error", err.Error(), "steps", len(steps))
+		n.Log.Warn("delivery steps not sent", "error", withoutURL(err), "steps", len(steps))
 		return
 	}
 	n.Log.Info("delivery steps sent", "steps", len(steps))
+}
+
+func withoutURL(err error) string {
+	var failed *url.Error
+	if errors.As(err, &failed) {
+		return failed.Op + ": " + failed.Err.Error()
+	}
+	return err.Error()
 }
 
 func (n HTTPNotifier) send(ctx context.Context, steps []Step) error {
