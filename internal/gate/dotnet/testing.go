@@ -146,14 +146,19 @@ func exists(p string) bool {
 
 func normalizeCoverage(_ context.Context, ws gate.Workspace) error {
 	cov := map[string]*fileCoverage{}
+	branches := map[branchKey][2]int{}
 	err := filepath.WalkDir(ws.Report(resultsDir), func(p string, d fs.DirEntry, werr error) error {
 		if werr != nil || d.IsDir() || d.Name() != coberturaFile {
 			return werr
 		}
-		return mergeCobertura(ws, p, cov)
+		return mergeCobertura(ws, p, cov, branches)
 	})
 	if err != nil {
 		return err
+	}
+	for key, counts := range branches {
+		fc := cov[key.file]
+		fc.CoveredBranches, fc.Branches = fc.CoveredBranches+counts[0], fc.Branches+counts[1]
 	}
 	data, err := json.Marshal(cov)
 	if err == nil {
@@ -176,20 +181,19 @@ type coberturaClass = struct {
 	} `xml:"lines>line"`
 }
 
-func mergeCobertura(ws gate.Workspace, file string, cov map[string]*fileCoverage) error {
+func mergeCobertura(ws gate.Workspace, file string, cov map[string]*fileCoverage, branches map[branchKey][2]int) error {
 	data, err := os.ReadFile(filepath.Clean(file))
 	var report cobertura
 	if err == nil {
 		err = xml.Unmarshal(data, &report)
 	}
-	seen := map[branchKey]bool{}
 	for _, c := range report.Classes {
-		mergeClass(rel(ws, report.path(c.Filename)), c, cov, seen)
+		mergeClass(rel(ws, report.path(c.Filename)), c, cov, branches)
 	}
 	return err
 }
 
-func mergeClass(name string, c coberturaClass, cov map[string]*fileCoverage, seen map[branchKey]bool) {
+func mergeClass(name string, c coberturaClass, cov map[string]*fileCoverage, branches map[branchKey][2]int) {
 	fc := cov[name]
 	if fc == nil {
 		fc = &fileCoverage{Lines: map[int]int{}}
@@ -198,13 +202,13 @@ func mergeClass(name string, c coberturaClass, cov map[string]*fileCoverage, see
 	for _, l := range c.Lines {
 		fc.Lines[l.Number] = max(fc.Lines[l.Number], l.Hits)
 		m := conditionCoverage.FindStringSubmatch(l.Condition)
-		if m == nil || seen[branchKey{name, l.Number}] {
+		if m == nil {
 			continue
 		}
-		seen[branchKey{name, l.Number}] = true
 		covered, _ := strconv.Atoi(m[1])
 		total, _ := strconv.Atoi(m[2])
-		fc.CoveredBranches, fc.Branches = fc.CoveredBranches+covered, fc.Branches+total
+		key := branchKey{name, l.Number}
+		branches[key] = [2]int{max(branches[key][0], covered), max(branches[key][1], total)}
 	}
 }
 
