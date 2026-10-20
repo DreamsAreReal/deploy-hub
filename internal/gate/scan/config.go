@@ -12,25 +12,26 @@ import (
 )
 
 const (
-	ZizmorBinary     = "zizmor"
-	ActionlintBinary = "actionlint"
-	HadolintBinary   = "hadolint"
-	TrivyBinary      = "trivy"
-	githubDir        = ".github"
-	zizmorConfig     = "workflow-audit.yml"
-	dockerfileGlob   = "Dockerfile*"
-	reasonWorkflows  = "CI/CD workflows have security or correctness findings"
-	reasonDockerfile = "Dockerfiles violate the lint rules"
-	reasonIaC        = "infrastructure configuration has misconfigurations"
-	reasonNoDocker   = "the app ships an image but the repository has no Dockerfile"
-	zizmorFormat     = "%s %s %s:%d"
-	actionlintFormat = "%s:%d: %s (%s)"
-	hadolintFormat   = "%s:%d: %s %s (%s)"
-	misconfFormat    = "%s %s %s:%d: %s"
-	trivySeverities  = "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
-	flagFormat       = "--format"
-	flagQuiet        = "--quiet"
-	formatJSON       = "json"
+	ZizmorBinary          = "zizmor"
+	ActionlintBinary      = "actionlint"
+	HadolintBinary        = "hadolint"
+	TrivyBinary           = "trivy"
+	githubDir             = ".github"
+	zizmorConfig          = "workflow-audit.yml"
+	dockerfileGlob        = "Dockerfile*"
+	reasonWorkflows       = "CI/CD workflows have security or correctness findings"
+	reasonDockerfile      = "Dockerfiles violate the lint rules"
+	reasonIaC             = "infrastructure configuration has misconfigurations"
+	reasonDependencyVulns = "dependencies have known vulnerabilities"
+	reasonNoDocker        = "the app ships an image but the repository has no Dockerfile"
+	zizmorFormat          = "%s %s %s:%d"
+	actionlintFormat      = "%s:%d: %s (%s)"
+	hadolintFormat        = "%s:%d: %s %s (%s)"
+	misconfFormat         = "%s %s %s:%d: %s"
+	trivySeverities       = "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
+	flagFormat            = "--format"
+	flagQuiet             = "--quiet"
+	formatJSON            = "json"
 )
 
 type zizmorFinding struct {
@@ -178,4 +179,8 @@ func trivy(ctx context.Context, ws gate.Workspace, reason, sub string, args ...s
 
 func IaC(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	return trivy(ctx, ws, reasonIaC, "config", ws.Src)
+}
+
+func DependencyVulnerabilities(ctx context.Context, ws gate.Workspace) gate.Outcome {
+	return trivy(ctx, ws, reasonDependencyVulns, "fs", "--scanners", "vuln", "--include-dev-deps", ws.Src)
 }

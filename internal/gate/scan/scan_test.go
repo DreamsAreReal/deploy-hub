@@ -198,6 +198,13 @@ func TestDockerfiles(t *testing.T) {
 const trivyFixture = `{"Results":[{"Target":"Dockerfile","Misconfigurations":[{"ID":"DS002","Title":"root user","Severity":"HIGH","CauseMetadata":{"StartLine":1}}]},
 {"Target":"app (alpine)","Vulnerabilities":[{"VulnerabilityID":"CVE-1","PkgName":"libc","InstalledVersion":"1.0","Severity":"LOW"}],"Secrets":[{"RuleID":"aws","Severity":"CRITICAL","StartLine":2}]}]}`
 
+func TestDependencyVulnerabilities(t *testing.T) {
+	w := workspace(t, script{TrivyBinary + " fs": ok(trivyFixture)})
+	out := DependencyVulnerabilities(context.Background(), w)
+	testutil.Equal(t, out.Reason, reasonDependencyVulns)
+	testutil.Contains(t, procexectest.LinesOf(w.Exec)[0], "fs --quiet", "--scanners vuln --include-dev-deps "+w.Src)
+}
+
 func TestIaCAndImage(t *testing.T) {
 	w := workspace(t, script{TrivyBinary + " config": ok(trivyFixture)})
 	out := IaC(context.Background(), w)
