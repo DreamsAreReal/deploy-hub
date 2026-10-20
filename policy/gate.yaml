@@ -257,6 +257,13 @@ apps:
     memory: 128m
     dast: {target: /, spider: 1m, max_time: 10m}
     load: {rate: 20, duration: 30s, p95: 300ms, max_error_percent: 0, concurrency: 10, paths: [/api/health, /]}
+    localized:
+      - internal/texts/
+      - internal/web/static/
+      - internal/seed/*.json
+      - widget/
+      - testdata/
+      - "*_test.go"
     scenarios:
       - id: unknown-or-retired-token-is-refused
         category: security
