@@ -113,6 +113,21 @@ func TestCrashedCheckFailsAndTheGateGoesOn(t *testing.T) {
 	testutil.Contains(t, logs.String(), `"msg":"gate check panicked"`, `"check":"`+checkCrash+`"`, `"panic":"nil map"`, `"stack":"goroutine`)
 }
 
+func TestLongChecksGetTheLongLimit(t *testing.T) {
+	ws := workspace(t, &bytes.Buffer{})
+	ws.Policy.Limits.Check = time.Millisecond
+	ws.Policy.Limits.LongCheck = time.Hour
+	var left time.Duration
+	long := Check{Name: "long", Long: true, Run: func(ctx context.Context, _ Workspace) Outcome {
+		deadline, _ := ctx.Deadline()
+		left = time.Until(deadline)
+		return Pass(nil)
+	}}
+	v := Runner{Now: clock(), Log: ws.Log, Checks: []Check{long}}.Run(context.Background(), ws, Subject{App: "x", Own: true})
+	testutil.True(t, v.Passed, "a long check is not cut at the short limit")
+	testutil.True(t, left > time.Minute && left <= time.Hour, "deadline follows long_check_timeout")
+}
+
 func TestOutcomeHelpers(t *testing.T) {
 	testutil.Equal(t, Judge(true, "r", nil, []string{"f"}), Outcome{Status: StatusPass, Findings: []string{"f"}})
 	testutil.Equal(t, Judge(false, "r", map[string]float64{"a": 1}, nil), Outcome{Status: StatusFail, Reason: "r", Values: map[string]float64{"a": 1}})

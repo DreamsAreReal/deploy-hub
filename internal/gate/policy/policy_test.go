@@ -29,6 +29,7 @@ thresholds:
   duplicate_min_tokens: 50
 limits:
   check_timeout: 30m
+  long_check_timeout: 3h
   fuzz_time: 10s
   fuzz_examples: 200
   mutant_timeout_floor: 20s
@@ -111,6 +112,7 @@ func TestParseRejects(t *testing.T) {
 		"cognitive":          {"max_cognitive_complexity: 9", "max_cognitive_complexity: 0"},
 		"tokens":             {"duplicate_min_tokens: 50", "duplicate_min_tokens: 0"},
 		"check timeout":      {"check_timeout: 30m", "check_timeout: 0s"},
+		"long check timeout": {"long_check_timeout: 3h", "long_check_timeout: 0s"},
 		"fuzz time":          {"fuzz_time: 10s", "fuzz_time: 0s"},
 		"fuzz examples":      {"fuzz_examples: 200", "fuzz_examples: 0"},
 		"mutant floor":       {"mutant_timeout_floor: 20s", "mutant_timeout_floor: 0s"},

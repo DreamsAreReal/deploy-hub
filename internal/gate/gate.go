@@ -85,6 +85,7 @@ type Check struct {
 	Name  string
 	Kind  Kind
 	Needs Need
+	Long  bool
 	Run   func(ctx context.Context, ws Workspace) Outcome
 }
 
@@ -152,7 +153,11 @@ func (r Runner) runOne(ctx context.Context, ws Workspace, subj Subject, c Check)
 		return Result{Check: c.Name, Status: StatusNA, Reason: reason}
 	}
 	t := r.Now()
-	ctx, cancel := context.WithTimeout(ctx, ws.Policy.Limits.Check)
+	limit := ws.Policy.Limits.Check
+	if c.Long {
+		limit = ws.Policy.Limits.LongCheck
+	}
+	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	out := r.runSafely(ctx, ws, c)
 	if err := ctx.Err(); err != nil {

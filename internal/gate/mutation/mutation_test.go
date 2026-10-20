@@ -26,23 +26,28 @@ import (
 )
 
 const (
-	exLess    = "a < b"
-	exGE      = "a >= b"
-	exLE      = "i <= b"
-	exGreater = "a > b"
-	exAnd     = "a < b && !(a == 0)"
-	exOr      = "a > b || a != b"
-	exMul     = "a*b"
-	exDiv     = "a/b"
-	exLEab    = "a <= b"
-	exInc     = "n + 1"
-	exConcat  = `"x" + "y"`
-	fileLib   = "lib.go"
-	fileX     = "x.go"
-	outOK     = "ok"
-	pkgLib    = "m/lib"
-	pkgApp    = "m/app"
-	srcMarker = "SRC"
+	exLess     = "a < b"
+	exGE       = "a >= b"
+	exLE       = "i <= b"
+	exGreater  = "a > b"
+	exAnd      = "a < b && !(a == 0)"
+	exOr       = "a > b || a != b"
+	exMul      = "a*b"
+	exDiv      = "a/b"
+	exLEab     = "a <= b"
+	exInc      = "n + 1"
+	exConcat   = `"x" + "y"`
+	fileLib    = "lib.go"
+	fileX      = "x.go"
+	outOK      = "ok"
+	pkgLib     = "m/lib"
+	pkgApp     = "m/app"
+	srcMarker  = "SRC"
+	failedTest = "--- FAIL: TestX"
+	ixFile     = "p/a/f.go"
+	ixPkgA     = "p/a"
+	ixPkgC     = "p/c"
+	ixPkgB     = "p/b"
 )
 
 const sample = `package lib
@@ -237,6 +242,53 @@ type fakeGo struct {
 	overlays []string
 	caches   []string
 	limit    int64
+	profiles map[string]string
+	alone    map[string]bool
+	listErr  error
+	badIndex bool
+}
+
+const (
+	libCovered = "mode: set\nm/lib/lib.go:3.22,5.2 1 1\nm/lib/lib.go:7.22,9.2 1 0\n"
+	libNothing = "mode: set\nm/lib/lib.go:3.22,5.2 1 0\nm/lib/lib.go:7.22,9.2 1 0\n"
+)
+
+func pkgArgs(args []string) []string {
+	var out []string
+	for _, a := range args {
+		if !strings.HasPrefix(a, "-") {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+func (f *fakeGo) index(c procexec.Command) (procexec.Result, error, bool) {
+	pkg := c.Args[len(c.Args)-1]
+	switch {
+	case len(c.Args) > 1 && c.Args[1] == "-list":
+		return procexec.Result{Stdout: "Test" + strings.TrimPrefix(pkg, "m/") + "\nBenchmarkSkipped\nok " + pkg + " 0.1s\n"}, f.listErr, true
+	case !slices.ContainsFunc(c.Args, func(a string) bool { return strings.HasPrefix(a, coverProfile) }):
+		return procexec.Result{}, nil, false
+	case f.alone[pkg]:
+		return procexec.Result{Stdout: failedTest}, errors.New("exit 1"), true
+	}
+	profile := libNothing
+	if pkg == pkgLib {
+		profile = libCovered
+	}
+	if custom, ok := f.profiles[pkg]; ok {
+		profile = custom
+	}
+	if f.badIndex {
+		profile = "garbage"
+	}
+	for _, a := range c.Args {
+		if path, ok := strings.CutPrefix(a, coverProfile); ok {
+			testutil.Write(f.t, path, profile)
+		}
+	}
+	return procexec.Result{Stdout: outOK}, nil, true
 }
 
 func (f *fakeGo) handle(c procexec.Command) (procexec.Result, error) {
@@ -245,7 +297,11 @@ func (f *fakeGo) handle(c procexec.Command) (procexec.Result, error) {
 		return procexec.Result{Stdout: "lib/" + fileLib + "\x00"}, nil
 	case c.Args[0] == "list":
 		return procexec.Result{Stdout: strings.ReplaceAll(f.pkgs, srcMarker, c.Dir)}, nil
-	case !strings.HasPrefix(c.Env[0], overlayEnv):
+	}
+	if res, err, ok := f.index(c); ok {
+		return res, err
+	}
+	if !strings.HasPrefix(c.Env[0], overlayEnv) {
 		testutil.Mkdir(f.t, strings.TrimPrefix(c.Env[0], cacheEnv))
 		return procexec.Result{Stdout: outOK}, f.baseErr
 	}
@@ -261,14 +317,14 @@ func (f *fakeGo) handle(c procexec.Command) (procexec.Result, error) {
 	f.caches = append(f.caches, c.Env[1:]...)
 	f.limit = c.MemoryLimit
 	f.mu.Unlock()
-	res := f.decide(mutated, c.Args[4:])
+	res := f.decide(mutated, pkgArgs(c.Args[1:]))
 	switch {
 	case res.notViable:
 		return procexec.Result{Stdout: "FAIL lib [build failed]"}, errors.New("exit 1")
 	case res.timeout:
 		return procexec.Result{Stdout: "panic: test timed out after 1s"}, errors.New("exit 1")
 	case res.killed:
-		return procexec.Result{Stdout: "--- FAIL: TestX"}, errors.New("exit 1")
+		return procexec.Result{Stdout: failedTest}, errors.New("exit 1")
 	case res.broken:
 		return procexec.Result{Stderr: "go: creating work dir: no space left on device"}, errors.New("exit 1")
 	case res.exhausted:
@@ -305,7 +361,6 @@ func setup(t *testing.T, decide func(string, []string) outcome) (gate.Workspace,
 	}
 	fg := &fakeGo{t: t, pkgs: listing.String(), decide: decide}
 	out := t.TempDir()
-	testutil.Write(t, filepath.Join(out, golang.CoverReport), "mode: atomic\nm/lib/lib.go:3.22,5.2 1 1\nm/lib/lib.go:7.22,9.2 1 0\n")
 	ws := gate.Workspace{Src: src, Out: out, Exec: &procexectest.Fake{Handler: fg.handle}, Log: slog.New(slog.DiscardHandler),
 		Policy: policy.Policy{Thresholds: policy.Thresholds{MutationScore: 50}, Limits: policy.Limits{MutantFloor: time.Second, MutantFactor: 2}}}
 	return ws, fg
@@ -345,7 +400,7 @@ func TestSurvivorsAreRetriedWithDependentPackages(t *testing.T) {
 	})
 	pkgs := `{"ImportPath":"m/lib","Name":"lib","Dir":"` + srcMarker + `/lib","GoFiles":["lib.go"],"TestGoFiles":["lib_test.go"]}
 {"ImportPath":"m/app","Name":"app","Dir":"` + srcMarker + `","XTestGoFiles":["app_test.go"],"Deps":["m/lib"]}`
-	ws.Exec = &procexectest.Fake{Handler: (&fakeGo{t: t, pkgs: pkgs, decide: func(_ string, p []string) outcome {
+	ws.Exec = &procexectest.Fake{Handler: (&fakeGo{t: t, pkgs: pkgs, profiles: map[string]string{pkgApp: libCovered}, decide: func(_ string, p []string) outcome {
 		return outcome{killed: p[0] == pkgApp}
 	}}).handle}
 	ws.Policy.Thresholds.MutationScore = 40
@@ -361,10 +416,14 @@ func TestRunFailures(t *testing.T) {
 	_, err := Run(context.Background(), ws)
 	testutil.Contains(t, err.Error(), reasonBaseline)
 	testutil.Contains(t, Check(context.Background(), ws).Reason, reasonBaseline)
-	noCover, _ := setup(t, func(string, []string) outcome { return outcome{} })
-	testutil.NoErr(t, os.Remove(filepath.Join(noCover.Out, golang.CoverReport)))
-	_, err = Run(context.Background(), noCover)
-	testutil.Fails(t, err)
+	noTests, fgList := setup(t, func(string, []string) outcome { return outcome{} })
+	fgList.listErr = errors.New("exit 2")
+	_, err = Run(context.Background(), noTests)
+	testutil.Contains(t, err.Error(), "go test -list m/lib")
+	garbled, fgBad := setup(t, func(string, []string) outcome { return outcome{} })
+	fgBad.badIndex = true
+	_, err = Run(context.Background(), garbled)
+	testutil.Is(t, err, ErrIncomplete)
 	noList, _ := setup(t, nil)
 	noList.Exec = &procexectest.Fake{Handler: func(procexec.Command) (procexec.Result, error) { return procexec.Result{}, errors.New("no go") }}
 	_, err = Run(context.Background(), noList)
@@ -415,7 +474,8 @@ func TestStagingFailureIsAnError(t *testing.T) {
 	var logs bytes.Buffer
 	ws.Log = slog.New(slog.NewJSONHandler(&logs, nil))
 	e := &engine{ws: ws, baselines: map[string]time.Duration{}, dir: filepath.Join(ws.Out, "missing", "\x00")}
-	st := e.run(context.Background(), 1, target{mutant: Mutant{File: fileX}, covered: true})
+	e.index = newIndex()
+	st := e.run(context.Background(), 1, target{mutant: Mutant{File: fileX}})
 	testutil.Equal(t, st, StatusErrored)
 	testutil.Contains(t, logs.String(), `"msg":"mutant staging failed","file":"x.go"`)
 	dir := t.TempDir()
@@ -541,7 +601,6 @@ func TestKilledMutantsAreNotRetriedAndProgressIsLogged(t *testing.T) {
 	}
 	testutil.Contains(t, logs.String(), fmt.Sprintf(`"msg":"mutation testing started","mutants":6,"workers":%d`, max(minWorkers, runtime.NumCPU()/cpuShare)))
 	testutil.Equal(t, strings.Count(logs.String(), `"msg":"mutation progress"`), 6)
-	testutil.True(t, executed(map[int]bool{}, 3) && executed(map[int]bool{3: true}, 3) && !executed(map[int]bool{3: false}, 3), "unknown lines are executed")
 }
 
 func TestExecuteHandsWorkersTheirIndex(t *testing.T) {
@@ -570,4 +629,72 @@ func TestExecuteHandsWorkersTheirIndex(t *testing.T) {
 	out := Judge(gate.Workspace{Out: t.TempDir(), Policy: policy.Policy{Thresholds: policy.Thresholds{MutationScore: 90}}}, rep, nil)
 	testutil.Equal(t, out.Status, gate.StatusPass)
 	testutil.Equal(t, Judge(ws, Report{}, ErrIncomplete).Reason, reasonIncomplet)
+}
+
+func TestOnlyTestsThatCoverTheLineRun(t *testing.T) {
+	var (
+		mu   sync.Mutex
+		runs [][]string
+	)
+	ws, _ := setup(t, nil)
+	pkgs := `{"ImportPath":"m/lib","Name":"lib","Dir":"` + srcMarker + `/lib","GoFiles":["lib.go"],"TestGoFiles":["lib_test.go"]}
+{"ImportPath":"m/app","Name":"app","Dir":"` + srcMarker + `","XTestGoFiles":["app_test.go"],"Deps":["m/lib"]}`
+	fg := &fakeGo{t: t, pkgs: pkgs, decide: func(string, []string) outcome { return outcome{} }}
+	ws.Exec = &procexectest.Fake{Handler: func(c procexec.Command) (procexec.Result, error) {
+		if len(c.Env) > 0 && strings.HasPrefix(c.Env[0], overlayEnv) {
+			mu.Lock()
+			runs = append(runs, c.Args)
+			mu.Unlock()
+		}
+		return fg.handle(c)
+	}}
+	rep, err := Run(context.Background(), ws)
+	testutil.NoErr(t, err)
+	testutil.Equal(t, rep.Counts, map[Status]int{StatusSurvived: 3, StatusNotCovered: 3})
+	testutil.Equal(t, len(runs), 3)
+	for _, args := range runs {
+		testutil.Equal(t, args[4:], []string{"-run=^(Testlib)$", pkgLib})
+	}
+}
+
+func TestIsolatedTestRunsItsPackageWhole(t *testing.T) {
+	var (
+		mu   sync.Mutex
+		pkgs [][]string
+	)
+	ws, fg := setup(t, nil)
+	fg.alone = map[string]bool{pkgLib: true}
+	fg.decide = func(_ string, p []string) outcome {
+		mu.Lock()
+		pkgs = append(pkgs, p)
+		mu.Unlock()
+		return outcome{}
+	}
+	var logs bytes.Buffer
+	ws.Log = slog.New(slog.NewJSONHandler(&logs, nil))
+	rep, err := Run(context.Background(), ws)
+	testutil.NoErr(t, err)
+	testutil.Equal(t, rep.Counts, map[Status]int{StatusSurvived: 6})
+	testutil.Equal(t, len(pkgs), 6)
+	testutil.Contains(t, logs.String(), `"msg":"test does not pass alone, its package runs whole","package":"m/lib","test":"Testlib"`, `"msg":"mutation test index built","tests":1,"isolated_packages":1`)
+}
+
+func TestSelection(t *testing.T) {
+	ix := newIndex()
+	a, b := testRef{pkg: ixPkgA, name: "TestA"}, testRef{pkg: ixPkgB, name: "TestB"}
+	ix.add(a, map[string]map[int]bool{ixFile: {1: true, 2: false}})
+	ix.add(b, map[string]map[int]bool{ixFile: {1: true, 2: false}})
+	ix.isolate(ixPkgC)
+	testutil.Equal(t, ix.selectFor(ixFile, 1, []string{ixPkgA}), selection{tests: []testRef{a, b}})
+	testutil.True(t, ix.selectFor(ixFile, 2, []string{ixPkgA}).none(), "instrumented and never executed")
+	testutil.Equal(t, ix.selectFor(ixFile, 3, []string{ixPkgA}), selection{full: true})
+	testutil.Equal(t, ix.selectFor("p/a/g.go", 1, nil), selection{full: true})
+	testutil.Equal(t, ix.selectFor(ixFile, 2, []string{ixPkgA, ixPkgC}), selection{whole: []string{ixPkgC}})
+	ix.isolate(ixPkgB)
+	testutil.Equal(t, ix.selectFor(ixFile, 1, []string{ixPkgA, ixPkgB}), selection{tests: []testRef{a}, whole: []string{ixPkgB}})
+	pk, run := selectedArgs([]testRef{b, a, a})
+	testutil.Equal(t, pk, []string{ixPkgA, ixPkgB})
+	testutil.Equal(t, run, []string{"-run=^(TestA|TestB)$"})
+	_, err := readProfile(filepath.Join(t.TempDir(), "missing.out"))
+	testutil.Fails(t, err)
 }

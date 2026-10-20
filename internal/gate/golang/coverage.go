@@ -213,12 +213,8 @@ func parseGobco(out string) (branchCount, error) {
 	return branchCount{covered: covered, total: total}, nil
 }
 
-func CoveredLines(ws gate.Workspace) (map[string]map[int]bool, error) {
-	data, err := os.ReadFile(filepath.Clean(ws.Report(CoverReport)))
-	if err != nil {
-		return nil, fmt.Errorf(reportMissing, err)
-	}
-	blocks, err := parseProfile(string(data))
+func ProfileLines(text string) (map[string]map[int]bool, error) {
+	blocks, err := parseProfile(text)
 	if err != nil {
 		return nil, err
 	}
