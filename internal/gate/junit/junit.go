@@ -19,19 +19,19 @@ const (
 	skippedForm  = "%s skipped: %s"
 )
 
-type outcomeText struct {
+type Outcome struct {
 	Message string `xml:"message,attr"`
 	Text    string `xml:",chardata"`
 }
 
 type Case struct {
-	Classname string       `xml:"classname,attr"`
-	Name      string       `xml:"name,attr"`
-	File      string       `xml:"file,attr"`
-	Time      float64      `xml:"time,attr"`
-	Failure   *outcomeText `xml:"failure"`
-	Error     *outcomeText `xml:"error"`
-	Skipped   *outcomeText `xml:"skipped"`
+	Classname string   `xml:"classname,attr"`
+	Name      string   `xml:"name,attr"`
+	File      string   `xml:"file,attr"`
+	Time      float64  `xml:"time,attr"`
+	Failure   *Outcome `xml:"failure"`
+	Error     *Outcome `xml:"error"`
+	Skipped   *Outcome `xml:"skipped"`
 }
 
 func (c Case) Passed() bool {
@@ -87,7 +87,7 @@ func Judge(cases []Case, id func(Case) string) gate.Outcome {
 	return gate.Judge(len(findings) == 0, reasonTests, values, findings)
 }
 
-func firstLine(outcomes ...*outcomeText) string {
+func firstLine(outcomes ...*Outcome) string {
 	for _, o := range outcomes {
 		if o != nil {
 			return o.Message

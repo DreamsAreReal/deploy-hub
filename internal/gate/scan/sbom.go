@@ -41,13 +41,14 @@ const (
 	npmPurl           = "pkg:npm/"
 	pyprojectManifest = "pyproject.toml"
 	npmManifest       = "package.json"
+	trackedCopy       = "sbom-src"
 )
 
 var (
 	licensedEcosystems = []string{golangPurl, npmPurl, pypiPurl, "pkg:nuget/", "pkg:maven/", "pkg:cargo/", "pkg:gem/"}
 	syftLicenseEnv     = []string{
 		"SYFT_GOLANG_SEARCH_LOCAL_MOD_CACHE_LICENSES=true", "SYFT_GOLANG_SEARCH_REMOTE_LICENSES=true",
-		"SYFT_PYTHON_SEARCH_REMOTE_LICENSES=true", "SYFT_JAVASCRIPT_SEARCH_REMOTE_LICENSES=true",
+		"SYFT_PYTHON_SEARCH_REMOTE_LICENSES=true", "SYFT_JAVASCRIPT_SEARCH_REMOTE_LICENSES=true", "SYFT_JAVASCRIPT_INCLUDE_DEV_DEPENDENCIES=true",
 	}
 	pyprojectName = regexp.MustCompile(`(?ms)^\[project\][^\[]*?^name\s*=\s*["']([^"']+)["']`)
 	pypiSeparator = regexp.MustCompile(`[-_.]+`)
@@ -70,7 +71,12 @@ type component struct {
 }
 
 func SBOM(ctx context.Context, ws gate.Workspace) gate.Outcome {
-	targets := map[string]string{SBOMSource: dirScheme + ws.Src}
+	tracked := ws.Report(trackedCopy)
+	defer func() { _ = os.RemoveAll(tracked) }()
+	if err := source.CopyTracked(ctx, ws, tracked); err != nil {
+		return gate.Fail(err.Error())
+	}
+	targets := map[string]string{SBOMSource: dirScheme + tracked}
 	if ws.Image != "" {
 		archive, err := imageArchive(ctx, ws)
 		if err != nil {
