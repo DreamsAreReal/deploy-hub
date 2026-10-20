@@ -263,7 +263,11 @@ func countPositive(values []int) int {
 }
 
 func readLcov(ws gate.Workspace, cov linecov.Report) error {
-	f, err := os.Open(ws.Report(lcovFile))
+	return readLcovFile(ws, ws.Report(lcovFile), cov)
+}
+
+func readLcovFile(ws gate.Workspace, path string, cov linecov.Report) error {
+	f, err := os.Open(filepath.Clean(path))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}

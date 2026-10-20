@@ -119,7 +119,10 @@ What each stack expects from an app repo:
   `node --test` when none is installed). Fuzz targets are fast-check property
   tests. eslint knows the browser, service worker and Node globals; anything
   else (an embedding runtime's API, say) is reached through `globalThis`. A scenario names a test as `path/to/file.test.ts > test name`.
-  Linters, `tsc` and knip come from the hub's lock in `policy/node`.
+  Linters, `tsc` and knip come from the hub's lock in `policy/node`. With
+  `node --test`, each test file first runs alone with coverage; a mutant then
+  runs only the test files that executed its line (the whole suite when none
+  did), so the time per mutant follows the tests that matter to it.
 - **.NET.** `RestorePackagesWithLockFile` with a `packages.lock.json` next to
   every project; test projects reference `coverlet.collector`. Analyzer
   severities, `TreatWarningsAsErrors` and `.editorconfig` are injected
