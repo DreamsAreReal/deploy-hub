@@ -13,6 +13,8 @@ const (
 	fuzzSetupCJS          = "fuzz-setup.cjs"
 	syntaxCheckFile       = "syntax-check.mjs"
 	knipConfigFile        = "knip.json"
+	HTMLValidateConfig    = "htmlvalidate.json"
+	StylelintConfig       = "stylelint.json"
 	scriptPerm            = 0o600
 	complexityPlaceholder = "__LIMIT__"
 )
@@ -83,6 +85,12 @@ esbuild.transformSync(readFileSync(file, "utf8"), { loader: loaders[extname(file
 const knipConfig = `{}
 `
 
+const htmlValidateConfig = `{"extends": ["html-validate:recommended"], "rules": {"require-sri": ["error", {"target": "crossorigin"}]}}
+`
+
+const stylelintConfig = `{"extends": ["stylelint-config-standard"]}
+`
+
 func writeScripts(dir string, limit int) error {
 	files := map[string]string{
 		eslintConfigFile:     eslintConfig,
@@ -91,6 +99,8 @@ func writeScripts(dir string, limit int) error {
 		fuzzSetupCJS:         fuzzSetupRequire,
 		syntaxCheckFile:      syntaxCheck,
 		knipConfigFile:       knipConfig,
+		HTMLValidateConfig:   htmlValidateConfig,
+		StylelintConfig:      stylelintConfig,
 	}
 	for name, content := range files {
 		text := strings.ReplaceAll(content, complexityPlaceholder, itoa(limit))

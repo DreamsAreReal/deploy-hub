@@ -491,3 +491,20 @@ func TestClassificationHelpers(t *testing.T) {
 	setStatus(&unknown, "todo", "")
 	testutil.Equal(t, unknown.Skipped.Message, "todo")
 }
+
+func TestToolsInstallOnce(t *testing.T) {
+	w := newWorld(t, nil)
+	dir, err := Tools(context.Background(), w.ws)
+	testutil.NoErr(t, err)
+	testutil.Equal(t, dir, tools(w.ws))
+	testutil.Contains(t, testutil.Read(t, filepath.Join(dir, HTMLValidateConfig)), `"require-sri": ["error", {"target": "crossorigin"}]`)
+	testutil.Contains(t, testutil.Read(t, filepath.Join(dir, StylelintConfig)), "stylelint-config-standard")
+	_, err = Tools(context.Background(), w.ws)
+	testutil.NoErr(t, err)
+	testutil.Equal(t, w.fake.Count("--ignore-scripts"), 1)
+	testutil.Equal(t, ToolScript(w.ws, "x", "y.js"), filepath.Join(tools(w.ws), modulesDir, "x", "y.js"))
+	failing := newWorld(t, nil)
+	failing.on("--ignore-scripts", "", errSim)
+	_, err = Tools(context.Background(), failing.ws)
+	testutil.Fails(t, err)
+}

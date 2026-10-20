@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"slices"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/policy"
@@ -14,39 +15,51 @@ const (
 	ValueBusinessScenarios = "business_scenarios_percent"
 	ValueScenarios         = "scenarios"
 	reasonScenarios        = "mandatory scenarios are not covered by passing tests"
+	reasonNoScenarios      = "the repository has no executable code and the app registers no scenarios"
 	scenarioFormat         = "%s (%s): test %s did not pass"
 	percentScale           = 100
 )
 
 func Scenarios(packs []Pack) Run {
 	return func(ctx context.Context, ws gate.Workspace) gate.Outcome {
-		passed, err := passedTests(ctx, ws, packs)
+		layout, err := layoutOf(ctx, ws, packs)
 		if err != nil {
 			return gate.Fail(err.Error())
 		}
-		tally := map[string]*scenarioTally{policy.CategorySecurity: {}, policy.CategoryBusiness: {}}
-		var findings []string
-		for _, s := range ws.App.Scenarios {
-			missing := missingTests(passed, s.Tests)
-			for _, m := range missing {
-				findings = append(findings, fmt.Sprintf(scenarioFormat, s.ID, s.Category, m))
-			}
-			tally[s.Category].add(len(missing) == 0)
+		if len(ws.App.Scenarios) == 0 && !hasCode(layout) {
+			return gate.Outcome{Status: gate.StatusNA, Reason: reasonNoScenarios}
 		}
-		values := map[string]float64{
-			ValueSecurityScenarios: tally[policy.CategorySecurity].percent(),
-			ValueBusinessScenarios: tally[policy.CategoryBusiness].percent(),
-			ValueScenarios:         float64(len(ws.App.Scenarios)),
+		passed, err := passedTests(ctx, ws, layout)
+		if err != nil {
+			return gate.Fail(err.Error())
 		}
-		return gate.Judge(len(findings) == 0 && len(ws.App.Scenarios) > 0, reasonScenarios, values, findings)
+		return judgeScenarios(ws.App.Scenarios, passed)
 	}
 }
 
-func passedTests(ctx context.Context, ws gate.Workspace, packs []Pack) (map[string]bool, error) {
-	layout, err := layoutOf(ctx, ws, packs)
-	if err != nil {
-		return nil, err
+func judgeScenarios(scenarios []policy.Scenario, passed map[string]bool) gate.Outcome {
+	tally := map[string]*scenarioTally{policy.CategorySecurity: {}, policy.CategoryBusiness: {}}
+	var findings []string
+	for _, s := range scenarios {
+		missing := missingTests(passed, s.Tests)
+		for _, m := range missing {
+			findings = append(findings, fmt.Sprintf(scenarioFormat, s.ID, s.Category, m))
+		}
+		tally[s.Category].add(len(missing) == 0)
 	}
+	values := map[string]float64{
+		ValueSecurityScenarios: tally[policy.CategorySecurity].percent(),
+		ValueBusinessScenarios: tally[policy.CategoryBusiness].percent(),
+		ValueScenarios:         float64(len(scenarios)),
+	}
+	return gate.Judge(len(findings) == 0 && len(scenarios) > 0, reasonScenarios, values, findings)
+}
+
+func hasCode(layout Layout) bool {
+	return slices.ContainsFunc(layout.Projects, func(p Project) bool { return !p.Pack.NoCode })
+}
+
+func passedTests(ctx context.Context, ws gate.Workspace, layout Layout) (map[string]bool, error) {
 	passed := map[string]bool{}
 	for _, p := range layout.Projects {
 		pws, werr := p.Workspace(ws)

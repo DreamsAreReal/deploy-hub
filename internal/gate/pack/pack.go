@@ -50,6 +50,7 @@ type Pack struct {
 	Sources   []string
 	Loose     bool
 	Outermost bool
+	NoCode    bool
 	Checks    map[string]Run
 	Passed    func(ctx context.Context, ws gate.Workspace) (map[string]bool, error)
 }

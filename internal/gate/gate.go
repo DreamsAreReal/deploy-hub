@@ -251,5 +251,14 @@ func Tail(s string) string {
 }
 
 func (ws Workspace) Rel(path string) string {
-	return filepath.ToSlash(strings.TrimPrefix(path, ws.Src+string(filepath.Separator)))
+	roots := []string{ws.Src}
+	if resolved, err := filepath.EvalSymlinks(ws.Src); err == nil {
+		roots = append(roots, resolved)
+	}
+	for _, root := range roots {
+		if rel, ok := strings.CutPrefix(path, root+string(filepath.Separator)); ok {
+			return filepath.ToSlash(rel)
+		}
+	}
+	return filepath.ToSlash(path)
 }

@@ -26,6 +26,7 @@ const (
 	toolsDir      = "node-tools"
 	cacheDir      = "npm-cache"
 	readyStamp    = "node.ready"
+	toolsStamp    = "node-tools.ready"
 	policySub     = "node"
 	toolsManifest = "tools.json"
 	toolsLock     = "tools-lock.json"
@@ -171,6 +172,20 @@ func installTools(ctx context.Context, ws gate.Workspace) error {
 		return err
 	}
 	return writeScripts(dir, ws.Policy.Thresholds.MaxCognitive)
+}
+
+func Tools(ctx context.Context, ws gate.Workspace) (string, error) {
+	if _, err := os.Stat(ws.Report(toolsStamp)); err == nil {
+		return tools(ws), nil
+	}
+	if err := installTools(ctx, ws); err != nil {
+		return "", err
+	}
+	return tools(ws), os.WriteFile(ws.Report(toolsStamp), []byte(toolsDir), stampPerm)
+}
+
+func ToolScript(ws gate.Workspace, parts ...string) string {
+	return toolScript(ws, parts...)
 }
 
 func installedVersion(dir, pkg string) (string, error) {

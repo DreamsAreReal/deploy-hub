@@ -207,3 +207,16 @@ func TestCheckNamesAreUnique(t *testing.T) {
 	}
 	testutil.Equal(t, len(Checks), 11)
 }
+
+func TestScenariosWithoutCodeAreNotApplicable(t *testing.T) {
+	packs := testPacks(nil)
+	packs[2].NoCode = true
+	packs[2].Passed = func(context.Context, gate.Workspace) (map[string]bool, error) { return map[string]bool{}, nil }
+	ws := repoWS(t, "site.sh")
+	out := Scenarios(packs)(context.Background(), ws)
+	testutil.Equal(t, out.Status, gate.StatusNA)
+	testutil.Equal(t, out.Reason, reasonNoScenarios)
+	testutil.Equal(t, Scenarios(packs)(context.Background(), repoWS(t, readme)).Status, gate.StatusNA)
+	ws.App.Scenarios = []policy.Scenario{{ID: "registered", Category: policy.CategoryBusiness, Tests: []string{testGo}}}
+	testutil.Equal(t, Scenarios(packs)(context.Background(), ws).Status, gate.StatusFail)
+}
