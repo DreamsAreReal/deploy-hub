@@ -216,7 +216,7 @@ func mypy(ctx context.Context, ws gate.Workspace) ([]string, error) {
 		"--cache-dir", ws.Report(mypyCache), "--explicit-package-bases", "--no-error-summary", "-O", "json"}, files...)
 	mypyPath := "MYPYPATH=" + filepath.Join(ws.Src, srcLayout) + string(os.PathListSeparator) + ws.Src
 	res, runErr := toolsEnv(ws).python(ctx, []string{mypyPath}, args...)
-	out := parseMypy(res.Stdout+procexec.Output(runErr), ws.Rel)
+	out := parseMypy(res.Combined(), ws.Rel)
 	if runErr != nil && len(out) == 0 {
 		return nil, runErr
 	}
@@ -278,7 +278,7 @@ func DeadCode(ctx context.Context, ws gate.Workspace) gate.Outcome {
 		return gate.Fail(err.Error())
 	}
 	res, err := toolsEnv(ws).python(ctx, nil, flagModule, "vulture", "--config", policyFile(ws, vultureConfig), ws.Src)
-	text := res.Stdout + procexec.Output(err)
+	text := res.Combined()
 	var findings []string
 	for _, line := range strings.Split(text, "\n") {
 		if strings.Contains(line, "% confidence)") {
