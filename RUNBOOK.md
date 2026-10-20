@@ -65,8 +65,11 @@ TCP ports in `/opt/deploy-hub/smoke.conf` to enable one).
 
 In VictoriaMetrics:
 `deploy_hub_operations_total{result="fail"}`, `deploy_hub_lead_time_seconds`,
-`deploy_hub_app_healthy` (refreshed on every `status`),
-`deploy_hub_gate_passed`.
+`deploy_hub_app_healthy` (refreshed every minute by `deploy-hub-status.timer`;
+check it with `ssh vpn 'systemctl list-timers deploy-hub-status.timer'`),
+`deploy_hub_gate_passed`. `deploy_hub_lead_time_seconds` has one point per
+successful deploy: query it with `last_over_time(deploy_hub_lead_time_seconds[7d])`,
+not as an instant value.
 
 A command's final line is a **snapshot of that moment**. The deploy lock
 serializes operations so two never race, but a CI push landing while you roll

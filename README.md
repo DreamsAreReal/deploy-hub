@@ -242,11 +242,12 @@ root SSH to. `<vps>` is the server address.
             chmod 440 /etc/sudoers.d/deploy-hub && visudo -cf /etc/sudoers.d/deploy-hub"
    ```
 
-7. **Daily prune**:
+7. **Daily prune and the per-minute status refresh** (keeps the metrics
+   continuous, see Observability):
 
    ```
-   scp server/systemd/deploy-hub-prune.* vpn:/etc/systemd/system/
-   ssh vpn 'systemctl daemon-reload && systemctl enable --now deploy-hub-prune.timer'
+   scp server/systemd/deploy-hub-prune.* server/systemd/deploy-hub-status.* vpn:/etc/systemd/system/
+   ssh vpn 'systemctl daemon-reload && systemctl enable --now deploy-hub-prune.timer deploy-hub-status.timer'
    ```
 
 8. **Observability** (recommended): the shared logs/metrics stack lives in its
@@ -419,7 +420,14 @@ key, `.env` content) are never logged.
 
 Metrics — pushed to VictoriaMetrics after every command
 (`DEPLOY_HUB_METRICS_URL`, default
-`http://127.0.0.1:8428/api/v1/import/prometheus`; set it empty to disable):
+`http://127.0.0.1:8428/api/v1/import/prometheus`; set it empty to disable).
+`deploy-hub-status.timer` runs `runner status` every minute, so the journal
+counters and the health gauges have a sample every minute and `increase()` over
+a window counts what happened in it. The counters cover only the apps in
+`apps.list` (plus refusals): the journal history of a removed app stops being
+pushed and its series go stale. Change failure rate, deploy frequency and lead
+time quantiles are recording rules in the observability repo
+(`rules/dora.yml`, queries in its README).
 
 | Metric | Labels | Meaning |
 |---|---|---|
@@ -427,7 +435,7 @@ Metrics — pushed to VictoriaMetrics after every command
 | `deploy_hub_last_operation_timestamp_seconds` | app, action, result | when each outcome last happened |
 | `deploy_hub_last_incident_timestamp_seconds` | app | last failed deploy or rollback — "days stable" = `(time() - this) / 86400` |
 | `deploy_hub_operation_duration_seconds` | app, action, result | duration of the operation just finished |
-| `deploy_hub_lead_time_seconds` | app | push → healthy, from the workflow start |
+| `deploy_hub_lead_time_seconds` | app | push → healthy, from the workflow start; one sample per successful deploy |
 | `deploy_hub_health_gate_duration_seconds` | app, target, result | health gate time for the standby and the main service |
 | `deploy_hub_lock_wait_seconds` | app | time spent waiting for another deploy |
 | `deploy_hub_image_pull_duration_seconds` | app, result | pull by digest and local tag |
@@ -438,7 +446,7 @@ Metrics — pushed to VictoriaMetrics after every command
 | `deploy_hub_gate_check_passed` | app, check | 1/0 per applicable check |
 | `deploy_hub_gate_check_duration_seconds` | app, check | time of each check |
 | `deploy_hub_gate_check_value` | app, check, name | every measured value: coverage, mutation score, duplication, findings, p95, … |
-| `deploy_hub_app_up`, `deploy_hub_app_healthy` | app | from `status` |
+| `deploy_hub_app_up`, `deploy_hub_app_healthy` | app | from `status` (every minute) |
 | `deploy_hub_apps_registered` | — | apps in the allowlist |
 | `deploy_hub_prune_removed_images`, `deploy_hub_prune_kept_images` | app | last prune |
 | `deploy_hub_caddy_routes`, `deploy_hub_caddy_sync_success`, `deploy_hub_caddy_reload` | — | last route sync |

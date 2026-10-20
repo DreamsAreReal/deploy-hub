@@ -125,8 +125,22 @@ func (s *Service) pushMetrics(ctx context.Context) {
 	if err != nil {
 		s.Log.Warn("journal read failed", "error", err.Error())
 	}
-	samples := append(obs.JournalSamples(entries), s.samples...)
+	samples := append(obs.JournalSamples(journal.ForApps(entries, s.registeredNames())), s.samples...)
 	s.Metrics.Push(context.WithoutCancel(ctx), samples)
+}
+
+// registeredNames lists the allowlisted apps: journal history of removed apps
+// must not keep feeding counters, or rates over a window report phantom failures.
+func (s *Service) registeredNames() []string {
+	apps, err := s.Apps.All()
+	if err != nil {
+		s.Log.Warn("apps.list unreadable", "error", err.Error())
+	}
+	names := make([]string, 0, len(apps))
+	for _, a := range apps {
+		names = append(names, a.Name)
+	}
+	return names
 }
 
 func (s *Service) since(t time.Time) int {

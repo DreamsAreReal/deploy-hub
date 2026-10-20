@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -86,4 +87,15 @@ func TestMissingAppsListRefusesNamedApps(t *testing.T) {
 		t.Fatal("must refuse")
 	}
 	e.expectOut(e.err, msgUnknownApp)
+}
+
+func TestRemovedAppsLeaveCounters(t *testing.T) {
+	const gone = "gone"
+	e := newEnv(t)
+	e.write(filepath.Join(e.hubDir, "deploys.log"),
+		"[2026-07-17T00:09:31Z] "+gone+"@b3f4cf0 deploy fail 94s\n[2026-07-17T00:10:00Z] web@1111111 deploy ok 20s\n")
+	e.dispatch("status", "")
+	testutil.True(t, e.metrics.has(obs.MetricOperationsTotal, obs.Labels{obs.LabelApp: appName}), "registered app counted")
+	testutil.True(t, !e.metrics.has(obs.MetricOperationsTotal, obs.Labels{obs.LabelApp: gone}), "removed app not counted")
+	testutil.True(t, !e.metrics.has(obs.MetricLastIncidentTime, obs.Labels{obs.LabelApp: gone}), "removed app has no incident")
 }
