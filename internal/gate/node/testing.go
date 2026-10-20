@@ -53,6 +53,7 @@ const (
 	flagReporter      = "--reporter"
 	flagTest          = "--test"
 	cmdRun            = "run"
+	reporterXUnit     = "xunit"
 	flagReporterOpt   = "--reporter-option"
 	flagTestJUnit     = "--test-reporter=junit"
 )
@@ -99,13 +100,13 @@ var adapters = map[runner]adapter{
 	runnerMocha: {
 		test: func(ws gate.Workspace) []string {
 			return []string{toolScript(ws, "c8", "bin", "c8.js"), "--reporter=json", "--reports-dir=" + ws.Report(coverageDir), "--temp-directory=" + ws.Report(v8Dir),
-				"--all", NodeBinary, local(ws, "mocha", "bin", "mocha.js"), flagReporter, "xunit", flagReporterOpt, "output=" + ws.Report(JUnitReport)}
+				"--all", NodeBinary, local(ws, "mocha", "bin", "mocha.js"), flagReporter, reporterXUnit, flagReporterOpt, "output=" + ws.Report(JUnitReport)}
 		},
 		mutant: func(ws gate.Workspace) []string {
 			return []string{local(ws, "mocha", "bin", "mocha.js"), flagBail, flagReporter, "dot"}
 		},
 		fuzz: func(ws gate.Workspace, files []string) ([]string, []string) {
-			args := append([]string{local(ws, "mocha", "bin", "mocha.js"), flagReporter, "xunit", flagReporterOpt, "output=" + ws.Report(fuzzPrefix+JUnitReport)}, files...)
+			args := append([]string{local(ws, "mocha", "bin", "mocha.js"), flagReporter, reporterXUnit, flagReporterOpt, "output=" + ws.Report(fuzzPrefix+JUnitReport)}, files...)
 			return args, []string{envNodeOptions + filepath.Join(tools(ws), fuzzSetupFile)}
 		},
 	},
