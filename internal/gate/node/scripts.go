@@ -21,10 +21,12 @@ const (
 
 const eslintConfig = `import js from "@eslint/js";
 import sonarjs from "eslint-plugin-sonarjs";
+import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["**/node_modules/**", "**/dist/**", "**/build/**", "**/coverage/**"] },
+  { ignores: ["**/node_modules/**", "**/dist/**", "**/build/**", "**/coverage/**", "**/testdata/**"] },
+  { languageOptions: { globals: { ...globals.browser, ...globals.serviceworker, ...globals.node } } },
   js.configs.recommended,
   ...tseslint.configs.strict,
   sonarjs.configs.recommended,
@@ -47,7 +49,7 @@ const complexityConfig = `import sonarjs from "eslint-plugin-sonarjs";
 import tseslint from "typescript-eslint";
 
 export default [
-  { ignores: ["**/node_modules/**", "**/dist/**", "**/build/**", "**/coverage/**"] },
+  { ignores: ["**/node_modules/**", "**/dist/**", "**/build/**", "**/coverage/**", "**/testdata/**"] },
   {
     files: ["**/*.{js,mjs,cjs,jsx,ts,mts,cts,tsx}"],
     languageOptions: { parser: tseslint.parser },
@@ -82,7 +84,7 @@ const loaders = { ".ts": "ts", ".mts": "ts", ".cts": "ts", ".tsx": "tsx", ".jsx"
 esbuild.transformSync(readFileSync(file, "utf8"), { loader: loaders[extname(file)] ?? "js", logLevel: "silent" });
 `
 
-const knipConfig = `{}
+const knipConfig = `{"ignore": ["**/testdata/**"]}
 `
 
 const htmlValidateConfig = `{"extends": ["html-validate:recommended"], "rules": {"require-sri": ["error", {"target": "crossorigin"}]}}

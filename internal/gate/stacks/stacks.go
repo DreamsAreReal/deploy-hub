@@ -13,6 +13,7 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/python"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/scan"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/shell"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/sqlfiles"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/static"
 )
 
@@ -25,7 +26,7 @@ const (
 )
 
 func All() []pack.Pack {
-	return []pack.Pack{goPack(), pythonPack(), nodePack(), dotnetPack(), shellPack(), staticPack()}
+	return []pack.Pack{goPack(), pythonPack(), nodePack(), dotnetPack(), shellPack(), staticPack(), sqlPack()}
 }
 
 func staticPack() pack.Pack {
@@ -48,6 +49,29 @@ func staticPack() pack.Pack {
 			pack.CheckVulns:        static.NoDeps,
 		},
 		Passed: static.Passed,
+	}
+}
+
+func sqlPack() pack.Pack {
+	return pack.Pack{
+		Stack:   sqlfiles.Stack,
+		Sources: sqlfiles.Sources,
+		Loose:   true,
+		NoCode:  true,
+		Checks: map[string]pack.Run{
+			pack.CheckModules:      sqlfiles.NoDeps,
+			pack.CheckDependencies: sqlfiles.NoDeps,
+			pack.CheckLint:         sqlfiles.Lint,
+			pack.CheckComplexity:   sqlfiles.NoCode,
+			pack.CheckDeadCode:     sqlfiles.NoCode,
+			pack.CheckTests:        sqlfiles.NoCode,
+			pack.CheckLineCoverage: sqlfiles.NoCode,
+			pack.CheckBranches:     sqlfiles.NoCode,
+			pack.CheckFuzz:         sqlfiles.NoCode,
+			pack.CheckMutation:     sqlfiles.NoCode,
+			pack.CheckVulns:        sqlfiles.NoDeps,
+		},
+		Passed: sqlfiles.Passed,
 	}
 }
 

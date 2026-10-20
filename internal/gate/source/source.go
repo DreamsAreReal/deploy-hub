@@ -35,6 +35,7 @@ const (
 	locationForm  = "%s:%d"
 	copyDirPerm   = 0o700
 	copyFilePerm  = 0o600
+	fixtureDir    = "testdata"
 )
 
 var lex = lexis.Lex
@@ -69,6 +70,10 @@ func Tracked(ctx context.Context, ex procexec.Runner, dir string) ([]string, err
 		}
 	}
 	return files, nil
+}
+
+func Fixture(rel string) bool {
+	return slices.Contains(strings.Split(path.Dir(rel), "/"), fixtureDir)
 }
 
 func Select(ctx context.Context, ws gate.Workspace, keep func(string) bool) ([]string, error) {

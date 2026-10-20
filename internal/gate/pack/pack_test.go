@@ -56,6 +56,12 @@ func TestDiscoverFindsProjectsAndOrphans(t *testing.T) {
 	})
 }
 
+func TestFixturesBelongToNoProject(t *testing.T) {
+	layout := Discover([]string{manifestA, "cmd/app.go", "lib/testdata/old.cs", "testdata/run.sh", "store/testdata/schema.rb"}, testPacks(nil))
+	testutil.Equal(t, len(layout.Projects), 1)
+	testutil.Equal(t, len(layout.Orphans), 0)
+}
+
 func TestLooseSourcesJoinARootProject(t *testing.T) {
 	layout := Discover([]string{"a.sh", "deep/b.sh"}, testPacks(nil))
 	testutil.Equal(t, len(layout.Projects), 1)
