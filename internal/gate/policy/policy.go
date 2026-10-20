@@ -1,0 +1,291 @@
+package policy
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"time"
+
+	"go.yaml.in/yaml/v3"
+
+	"github.com/DreamsAreReal/deploy-hub/internal/validate"
+)
+
+const (
+	KindBinary  = "binary"
+	KindService = "service"
+	KindWorker  = "worker"
+
+	CategorySecurity = "security"
+	CategoryBusiness = "business"
+
+	percentCeiling = 100
+	policyChecks   = 7
+	appChecks      = 3
+)
+
+var (
+	cpus      = regexp.MustCompile(`^[0-9]{1,2}(\.[0-9]{1,2})?$`)
+	digestRef = regexp.MustCompile(`^[a-z0-9./_-]+@sha256:[0-9a-f]{64}$`)
+)
+
+var (
+	ErrPolicy     = errors.New("invalid gate policy")
+	ErrUnknownApp = errors.New("app is not registered in the gate policy")
+)
+
+type Policy struct {
+	Owners         []string       `yaml:"owners"`
+	Thresholds     Thresholds     `yaml:"thresholds"`
+	Limits         Limits         `yaml:"limits"`
+	Licenses       []string       `yaml:"licenses"`
+	Dependencies   []string       `yaml:"dependencies"`
+	ForbiddenFiles []string       `yaml:"forbidden_files"`
+	Markers        []string       `yaml:"markers"`
+	SASTRules      []string       `yaml:"sast_rulesets"`
+	Images         Images         `yaml:"images"`
+	Apps           map[string]App `yaml:"apps"`
+}
+
+type Images struct {
+	Semgrep string `yaml:"semgrep"`
+	ZAP     string `yaml:"zap"`
+}
+
+type Thresholds struct {
+	LineCoverage    float64 `yaml:"line_coverage"`
+	BranchCoverage  float64 `yaml:"branch_coverage"`
+	MutationScore   float64 `yaml:"mutation_score"`
+	MaxCognitive    int     `yaml:"max_cognitive_complexity"`
+	MaxDuplication  float64 `yaml:"max_duplication_percent"`
+	DuplicateTokens int     `yaml:"duplicate_min_tokens"`
+}
+
+type Limits struct {
+	Check          time.Duration `yaml:"check_timeout"`
+	FuzzTime       time.Duration `yaml:"fuzz_time"`
+	MutantFloor    time.Duration `yaml:"mutant_timeout_floor"`
+	MutantFactor   int           `yaml:"mutant_timeout_factor"`
+	FindingsListed int           `yaml:"findings_listed"`
+	StageReady     time.Duration `yaml:"stage_ready_timeout"`
+}
+
+type App struct {
+	Repo      string      `yaml:"repo"`
+	Kind      string      `yaml:"kind"`
+	Port      int         `yaml:"port"`
+	Health    string      `yaml:"health"`
+	CPUs      string      `yaml:"cpus"`
+	Memory    string      `yaml:"memory"`
+	DAST      DAST        `yaml:"dast"`
+	Env       []string    `yaml:"env"`
+	Scenarios []Scenario  `yaml:"scenarios"`
+	Load      LoadProfile `yaml:"load"`
+}
+
+type Scenario struct {
+	ID       string   `yaml:"id"`
+	Category string   `yaml:"category"`
+	Tests    []string `yaml:"tests"`
+}
+
+type LoadProfile struct {
+	Rate        int           `yaml:"rate"`
+	Duration    time.Duration `yaml:"duration"`
+	P95         time.Duration `yaml:"p95"`
+	MaxErrors   float64       `yaml:"max_error_percent"`
+	Concurrency int           `yaml:"concurrency"`
+	Paths       []string      `yaml:"paths"`
+}
+
+type DAST struct {
+	Target  string        `yaml:"target"`
+	OpenAPI string        `yaml:"openapi"`
+	Spider  time.Duration `yaml:"spider"`
+	MaxTime time.Duration `yaml:"max_time"`
+}
+
+func LoadFile(path string) (Policy, error) {
+	data, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return Policy{}, err
+	}
+	return Parse(data)
+}
+
+func Parse(data []byte) (Policy, error) {
+	var p Policy
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&p); err != nil {
+		return Policy{}, fmt.Errorf("%w: %w", ErrPolicy, err)
+	}
+	return p, p.Validate()
+}
+
+func (p Policy) App(name string) (App, error) {
+	app, ok := p.Apps[name]
+	if !ok {
+		return App{}, fmt.Errorf("%w: %s", ErrUnknownApp, name)
+	}
+	return app, nil
+}
+
+func (p Policy) Owns(owner string) bool {
+	for _, o := range p.Owners {
+		if o == owner {
+			return true
+		}
+	}
+	return false
+}
+
+func (p Policy) Validate() error {
+	errs := make([]error, 0, len(p.Apps)+policyChecks)
+	errs = append(errs,
+		p.Thresholds.validate(), p.Limits.validate(), p.Images.validate(),
+		nonEmpty("owners", p.Owners), nonEmpty("licenses", p.Licenses), nonEmpty("markers", p.Markers), nonEmpty("sast_rulesets", p.SASTRules),
+	)
+	for name, app := range p.Apps {
+		errs = append(errs, app.validate(name))
+	}
+	return errors.Join(errs...)
+}
+
+func nonEmpty(field string, values []string) error {
+	if len(values) == 0 {
+		return fmt.Errorf("%w: %s must not be empty", ErrPolicy, field)
+	}
+	return nil
+}
+
+func percent(field string, v float64) error {
+	if v <= 0 || v > percentCeiling {
+		return fmt.Errorf("%w: %s must be in (0, 100]", ErrPolicy, field)
+	}
+	return nil
+}
+
+func positive(field string, v int64) error {
+	if v <= 0 {
+		return fmt.Errorf("%w: %s must be positive", ErrPolicy, field)
+	}
+	return nil
+}
+
+func (t Thresholds) validate() error {
+	return errors.Join(
+		percent("line_coverage", t.LineCoverage),
+		percent("branch_coverage", t.BranchCoverage),
+		percent("mutation_score", t.MutationScore),
+		percent("max_duplication_percent", t.MaxDuplication),
+		positive("max_cognitive_complexity", int64(t.MaxCognitive)),
+		positive("duplicate_min_tokens", int64(t.DuplicateTokens)),
+	)
+}
+
+func (l Limits) validate() error {
+	return errors.Join(
+		positive("check_timeout", int64(l.Check)),
+		positive("fuzz_time", int64(l.FuzzTime)),
+		positive("mutant_timeout_floor", int64(l.MutantFloor)),
+		positive("mutant_timeout_factor", int64(l.MutantFactor)),
+		positive("findings_listed", int64(l.FindingsListed)),
+		positive("stage_ready_timeout", int64(l.StageReady)),
+	)
+}
+
+func (i Images) validate() error {
+	return errors.Join(pinned("images.semgrep", i.Semgrep), pinned("images.zap", i.ZAP))
+}
+
+func pinned(field, ref string) error {
+	if !digestRef.MatchString(ref) {
+		return fmt.Errorf("%w: %s must be pinned by sha256 digest", ErrPolicy, field)
+	}
+	return nil
+}
+
+func (a App) validate(name string) error {
+	errs := make([]error, 0, len(a.Scenarios)+appChecks)
+	errs = append(errs, validate.AppName(name), validate.RepoSlug(a.Repo), a.validateKind(name))
+	seen := map[string]bool{}
+	for _, s := range a.Scenarios {
+		errs = append(errs, s.validate(name, seen))
+	}
+	return errors.Join(errs...)
+}
+
+func (a App) validateKind(name string) error {
+	switch a.Kind {
+	case KindBinary, KindWorker:
+		return nil
+	case KindService:
+		return errors.Join(
+			validate.Port(fmt.Sprint(a.Port)), validate.HealthPath(a.Health), validate.MemLimit(a.Memory),
+			validCPUs("apps."+name+".cpus", a.CPUs), a.Load.validate(name), a.DAST.validate(name),
+		)
+	default:
+		return fmt.Errorf("%w: app %s: unknown kind %q", ErrPolicy, name, a.Kind)
+	}
+}
+
+func (l LoadProfile) validate(app string) error {
+	field := "apps." + app + ".load."
+	return errors.Join(
+		positive(field+"rate", int64(l.Rate)),
+		positive(field+"duration", int64(l.Duration)),
+		positive(field+"p95", int64(l.P95)),
+		positive(field+"concurrency", int64(l.Concurrency)),
+		validPaths(field+"paths", l.Paths),
+	)
+}
+
+func validPaths(field string, paths []string) error {
+	errs := make([]error, 0, len(paths)+1)
+	errs = append(errs, nonEmpty(field, paths))
+	for _, p := range paths {
+		errs = append(errs, validate.HealthPath(p))
+	}
+	return errors.Join(errs...)
+}
+
+func (d DAST) validate(app string) error {
+	field := "apps." + app + ".dast."
+	errs := []error{positive(field+"spider", int64(d.Spider)), positive(field+"max_time", int64(d.MaxTime))}
+	for _, p := range []string{d.OpenAPI, d.Target} {
+		if p != "" {
+			errs = append(errs, validate.HealthPath(p))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func validCPUs(field, v string) error {
+	if !cpus.MatchString(v) {
+		return fmt.Errorf("%w: %s must be a decimal CPU count", ErrPolicy, field)
+	}
+	return nil
+}
+
+func (s Scenario) validate(app string, seen map[string]bool) error {
+	if s.ID == "" || seen[s.ID] {
+		return fmt.Errorf("%w: app %s: scenario id %q is empty or repeated", ErrPolicy, app, s.ID)
+	}
+	seen[s.ID] = true
+	if s.Category != CategorySecurity && s.Category != CategoryBusiness {
+		return fmt.Errorf("%w: app %s: scenario %s: unknown category %q", ErrPolicy, app, s.ID, s.Category)
+	}
+	return nonEmpty("apps."+app+".scenarios."+s.ID+".tests", s.Tests)
+}
+
+func (a App) HasImage() bool {
+	return a.Kind != KindBinary
+}
+
+func (a App) HasHTTP() bool {
+	return a.Kind == KindService
+}

@@ -1,0 +1,40 @@
+binaries:
+  - name: golangci-lint
+    url: https://github.com/golangci/golangci-lint/releases/download/v2.15.0/golangci-lint-2.15.0-linux-amd64.tar.gz
+    sha256: 9b7fe6a6bf6334b98decf8d86b11415ea7889afdabdd1959fdce23af2a9ebcea
+    member: golangci-lint-2.15.0-linux-amd64/golangci-lint
+  - name: gitleaks
+    url: https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+    sha256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    member: gitleaks
+  - name: trufflehog
+    url: https://github.com/trufflesecurity/trufflehog/releases/download/v3.99.2/trufflehog_3.99.2_linux_amd64.tar.gz
+    sha256: 3c7b0d1dc4278294269bfdd7594bca8bb28c78da0a4a06ad202ded37b48deca4
+    member: trufflehog
+  - name: osv-scanner
+    url: https://github.com/google/osv-scanner/releases/download/v2.7.0/osv-scanner_linux_amd64
+    sha256: 160c6253e2922e9e0a6a9771c5c4c40a4b3c6090b34a3cdd5e80c96cc2e4218b
+  - name: syft
+    url: https://github.com/anchore/syft/releases/download/v1.54.1/syft_1.54.1_linux_amd64.tar.gz
+    sha256: c069905b391cc4c20a5ba65ad5c10be2a7ba074f8ea6ad203e24d14e303dad47
+    member: syft
+  - name: trivy
+    url: https://github.com/aquasecurity/trivy/releases/download/v0.76.0/trivy_0.76.0_Linux-64bit.tar.gz
+    sha256: e24b1c51293c1b15e4ba8d45bbc7891ba053f90278ec2698f3562c993e145fe7
+    member: trivy
+  - name: hadolint
+    url: https://github.com/hadolint/hadolint/releases/download/v2.15.1/hadolint-linux-x86_64
+    sha256: c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507
+  - name: actionlint
+    url: https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+    sha256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+    member: actionlint
+  - name: zizmor
+    url: https://github.com/zizmorcore/zizmor/releases/download/v1.31.1/zizmor-x86_64-unknown-linux-gnu.tar.gz
+    sha256: d185f726bdaf92df78273217dfdd24ebcd6b0ef48cf3ce776ff5762b6e138c99
+    member: zizmor
+go:
+  - github.com/rillig/gobco@v1.3.4
+  - github.com/uudashr/gocognit/cmd/gocognit@v1.3.0
+  - golang.org/x/tools/cmd/deadcode@v0.52.0
+  - golang.org/x/vuln/cmd/govulncheck@v1.9.0

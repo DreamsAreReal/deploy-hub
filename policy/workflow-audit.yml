@@ -1,0 +1,8 @@
+rules:
+  undocumented-permissions:
+    disable: true
+  unpinned-uses:
+    config:
+      policies:
+        DreamsAreReal/deploy-hub/*: ref-pin
+        "*": hash-pin

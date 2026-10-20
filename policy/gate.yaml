@@ -1,0 +1,193 @@
+owners:
+  - DreamsAreReal
+thresholds:
+  line_coverage: 90
+  branch_coverage: 90
+  mutation_score: 90
+  max_cognitive_complexity: 9
+  max_duplication_percent: 2
+  duplicate_min_tokens: 50
+limits:
+  check_timeout: 75m
+  fuzz_time: 15s
+  mutant_timeout_floor: 20s
+  mutant_timeout_factor: 3
+  findings_listed: 40
+  stage_ready_timeout: 90s
+licenses:
+  - 0BSD
+  - Apache-2.0
+  - BSD-2-Clause
+  - BSD-3-Clause
+  - CC0-1.0
+  - ISC
+  - MIT
+  - MPL-2.0
+  - Unlicense
+  - Zlib
+dependencies:
+  - go.yaml.in/yaml/v3
+forbidden_files:
+  - "*state*.md"
+  - "*.bak"
+  - "*.orig"
+  - "*.rej"
+  - "*.swp"
+  - "*.tmp"
+  - "*~"
+  - "*.log"
+  - "*.out"
+  - "*.prof"
+  - "*.pprof"
+  - "*.test"
+  - "*.pem"
+  - "*.key"
+  - "*.p12"
+  - "*.pfx"
+  - "id_rsa*"
+  - "id_ed25519*"
+  - ".env"
+  - ".ds_store"
+  - "coverage.out"
+  - "coverage.html"
+  - "coverage.txt"
+  - "*.coverprofile"
+  - "cover.out"
+  - "__debug_bin*"
+  - "*.sarif"
+  - ".semgrepignore"
+  - ".gitleaksignore"
+  - ".gitleaks.toml"
+  - ".trufflehogignore"
+  - ".trivyignore*"
+  - ".hadolint.y*ml"
+  - ".golangci.y*ml"
+  - "zizmor.y*ml"
+  - "osv-scanner.toml"
+  - ".snyk"
+markers:
+  - todo
+  - fixme
+  - hack
+  - xxx
+sast_rulesets:
+  - p/default
+  - p/security-audit
+  - p/owasp-top-ten
+  - p/cwe-top-25
+  - p/secrets
+  - p/golang
+  - p/gosec
+  - p/github-actions
+  - p/dockerfile
+  - p/docker-compose
+images:
+  semgrep: semgrep/semgrep@sha256:529ee8a277ec8adc5b534d7c74eea0a47e9de21d62852b6ba7ac6ba9566845c3
+  zap: ghcr.io/zaproxy/zaproxy@sha256:5ccfff9a411743ab2615136a2edd7416bec9ce41572fa94e935df38c14adb2b6
+apps:
+  deploy-hub:
+    repo: DreamsAreReal/deploy-hub
+    kind: binary
+    scenarios:
+      - id: forced-command-allows-only-runner-verbs
+        category: security
+        tests:
+          - e2e.TestForcedCommandRefusesEverythingElse
+          - internal/runner.TestRefusedRequests
+      - id: unknown-app-is-refused
+        category: security
+        tests:
+          - internal/runner.TestMissingAppsListRefusesNamedApps
+      - id: tampered-request-parameters-are-refused
+        category: security
+        tests:
+          - internal/runner.TestParseRequest
+          - internal/runner.TestBYOCRejections
+      - id: oversized-input-is-refused
+        category: security
+        tests:
+          - internal/runner.TestOversizedMetaIsRejected
+      - id: concurrent-deploys-are-serialized
+        category: security
+        tests:
+          - internal/runner.TestLockBusy
+      - id: rendered-compose-cannot-escape-limits
+        category: security
+        tests:
+          - internal/compose.TestRenderRejectsUnsafeOutputs
+      - id: provision-input-is-validated
+        category: security
+        tests:
+          - internal/provision.TestRequestValidate
+      - id: rendered-compose-binds-loopback-only
+        category: security
+        tests:
+          - internal/compose.TestRenderRejectsPublicInterfaces
+          - internal/compose.TestRenderBindsEveryPortToLoopback
+      - id: deploy-requires-hub-workflow-identity
+        category: security
+        tests:
+          - internal/oidc.TestVerifyRejectsForgedAndTamperedTokens
+          - internal/oidc.TestVerifyRejectsClaims
+          - internal/runner.TestDeployRequiresVerifiedIdentity
+          - e2e.TestOnlyTheHubWorkflowCanDeploy
+      - id: app-is-bound-to-its-repository
+        category: security
+        tests:
+          - internal/runner.TestAppWithoutRepoBindingIsRefused
+          - internal/runner.TestIdentityExpectationsAreBoundToAppAndCommit
+          - internal/gate/catalog.TestRegistration
+      - id: rollback-only-to-gated-versions
+        category: security
+        tests:
+          - internal/runner.TestRollbackOnlyToDeployedVersions
+          - e2e.TestRollbackCannotReachUngatedImages
+      - id: gate-report-cannot-be-forged
+        category: security
+        tests:
+          - internal/runner.TestReportRejections
+          - internal/gate.TestDecodeRejects
+      - id: untrusted-input-is-fuzzed
+        category: security
+        tests:
+          - internal/runner.FuzzParseRequest
+          - internal/runner.FuzzReadMeta
+          - internal/compose.FuzzRender
+          - internal/oidc.FuzzVerify
+          - internal/gate.FuzzDecode
+      - id: toolchain-downloads-are-verified
+        category: security
+        tests:
+          - internal/tools.TestInstallFailures
+      - id: deploy-lifecycle
+        category: business
+        tests:
+          - e2e.TestDeployLifecycle
+      - id: broken-release-keeps-serving
+        category: business
+        tests:
+          - e2e.TestBrokenReleaseKeepsServing
+          - internal/runner.TestBrokenReleaseIsDiscardedAndProdUntouched
+      - id: zero-downtime-cutover
+        category: business
+        tests:
+          - internal/runner.TestBlueGreenSwapIsZeroDowntime
+      - id: rollback-to-previous
+        category: business
+        tests:
+          - internal/runner.TestRollbackToPrevious
+      - id: failed-first-deploy-stops-app
+        category: business
+        tests:
+          - internal/runner.TestFirstDeployFailureStopsApp
+      - id: gate-verdict-reaches-logs-and-metrics
+        category: business
+        tests:
+          - e2e.TestGateVerdictIsRecorded
+          - internal/runner.TestReportRecordsBlockedVerdict
+          - internal/runner.TestReportRecordsPassedVerdict
+      - id: any-failed-check-blocks-the-deploy
+        category: business
+        tests:
+          - internal/gate.TestRunnerCollectsResults
+          - internal/gate.TestUnfinishedCheckFails

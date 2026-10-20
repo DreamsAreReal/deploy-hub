@@ -1,0 +1,202 @@
+name: deploy
+
+on:
+  workflow_call:
+    inputs:
+      app:
+        description: App name, must match the central gate policy and apps.list on the VPS
+        required: true
+        type: string
+      dockerfile:
+        description: Path to the Dockerfile inside the repo, used when the repo has no compose file
+        required: false
+        type: string
+        default: Dockerfile
+    secrets:
+      VPS_SSH_KEY:
+        required: true
+      VPS_HOST:
+        required: true
+      VPS_HOST_KEY:
+        required: true
+
+permissions: {}
+
+jobs:
+  deploy:
+    name: gate and deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    env:
+      APP: ${{ inputs.app }}
+      VPS_USER: deploy
+      OIDC_AUDIENCE: deploy-hub
+    steps:
+      - name: Validate inputs
+        env:
+          DOCKERFILE: ${{ inputs.dockerfile }}
+        run: |
+          printf '%s' "$APP" | grep -Eq '^[a-z0-9][a-z0-9._-]{0,40}$' \
+            || { echo "invalid app name: $APP"; exit 1; }
+          printf '%s' "$DOCKERFILE" | grep -Eq '^[A-Za-z0-9._/-]{1,200}$' \
+            || { echo "invalid dockerfile path"; exit 1; }
+          case "$DOCKERFILE" in
+            /*|..|../*|*/../*|*/..) echo "dockerfile must stay inside the repo"; exit 1 ;;
+          esac
+
+      - name: Record start time
+        id: start
+        run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Toolchain
+        id: hub
+        uses: DreamsAreReal/deploy-hub/.github/actions/hub@fa5640e9e57da0c4cb3fd24fbde8042dc8506afb
+
+      - name: Resolve build inputs
+        id: ctx
+        env:
+          DOCKERFILE: ${{ inputs.dockerfile }}
+          TOOLCHAIN: ${{ steps.hub.outputs.bin }}
+        run: |
+          export PATH="$TOOLCHAIN:$PATH"
+          compose=""
+          for f in docker-compose.yml docker-compose.yaml compose.yml; do
+            if [ -f "$f" ]; then compose="$f"; break; fi
+          done
+          if [ -n "$compose" ]; then
+            META="$(deploy-hub render "$APP" "$compose" "$RUNNER_TEMP/rendered-compose.yml")"
+            printf '%s\n' "$META"
+            { echo "byoc=1"; printf '%s\n' "$META"; } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "byoc=0"
+              echo "dockerfile=$DOCKERFILE"
+              echo "context=$(dirname "$DOCKERFILE")"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build image
+        id: image
+        env:
+          DOCKERFILE: ${{ steps.ctx.outputs.dockerfile }}
+          CONTEXT: ${{ steps.ctx.outputs.context }}
+        run: |
+          OWNER="$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+          IMAGE="ghcr.io/${OWNER}/${APP}"
+          TAG="sha-${GITHUB_SHA}"
+          docker build \
+            -f "$DOCKERFILE" \
+            --build-arg GIT_SHA="$GITHUB_SHA" \
+            --build-arg BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -t "$IMAGE:$TAG" "$CONTEXT"
+          { echo "image=$IMAGE"; echo "tag=$TAG"; } >> "$GITHUB_OUTPUT"
+
+      - name: Quality gate
+        id: gate
+        env:
+          POLICY: ${{ steps.hub.outputs.policy }}
+          IMAGE: ${{ steps.image.outputs.image }}:${{ steps.image.outputs.tag }}
+          FORK: ${{ github.event.repository.fork }}
+          TOOLCHAIN: ${{ steps.hub.outputs.bin }}
+        run: |
+          set -o pipefail
+          export PATH="$TOOLCHAIN:$PATH"
+          extra=()
+          if [ "$FORK" = "true" ]; then extra+=(--fork); fi
+          deploy-hub gate --app "$APP" --repo "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" \
+            --policy "$POLICY" --src "$GITHUB_WORKSPACE" --out "$RUNNER_TEMP/gate" --image "$IMAGE" "${extra[@]}"
+
+      - name: Keep gate reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: gate-reports
+          path: |
+            ${{ runner.temp }}/gate/verdict.json
+            ${{ runner.temp }}/gate/mutation.json
+            ${{ runner.temp }}/gate/sbom-*.cdx.json
+          if-no-files-found: ignore
+
+      - name: Connect to the VPS
+        if: always()
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          HOST_KEY: ${{ secrets.VPS_HOST_KEY }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$HOST_KEY" >> ~/.ssh/known_hosts
+
+      - name: Report the verdict to the hub
+        if: always()
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          set -euo pipefail
+          verdict="$RUNNER_TEMP/gate/verdict.json"
+          test -s "$verdict" || { echo "no gate verdict was produced"; exit 1; }
+          oidc="$(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$OIDC_AUDIENCE" | jq -r .value)"
+          {
+            printf 'oidc=%s\n' "$oidc"
+            printf 'verdict=%s\n' "$(base64 -w0 "$verdict")"
+          } | ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes \
+                "$VPS_USER@$VPS_HOST" "report $APP sha-${GITHUB_SHA}"
+
+      - name: Push the gated image
+        id: push
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+          TAG: ${{ steps.image.outputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+          docker push "$IMAGE:$TAG"
+          docker logout ghcr.io
+          ref="$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$TAG")"
+          echo "digest=${ref##*@}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy on the VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          START_EPOCH: ${{ steps.start.outputs.epoch }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+          BYOC: ${{ steps.ctx.outputs.byoc }}
+          BYOC_MAIN: ${{ steps.ctx.outputs.main }}
+          BYOC_PORT: ${{ steps.ctx.outputs.port }}
+          BYOC_HEALTH: ${{ steps.ctx.outputs.health }}
+        run: |
+          set -euo pipefail
+          SUBJECT="$(git log -1 --pretty=%s | tr -d '\r\n' | cut -c1-120)"
+          oidc="$(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$OIDC_AUDIENCE" | jq -r .value)"
+          {
+            printf 'token=%s\n' "$GH_TOKEN"
+            printf 'actor=%s\n' "$ACTOR"
+            printf 'subject=%s\n' "$SUBJECT"
+            printf 'start=%s\n' "$START_EPOCH"
+            printf 'oidc=%s\n' "$oidc"
+            printf 'digest=%s\n' "$DIGEST"
+            if [ "$BYOC" = 1 ]; then
+              printf 'compose=%s\n' "$(base64 -w0 "$RUNNER_TEMP/rendered-compose.yml")"
+              printf 'main=%s\n' "$BYOC_MAIN"
+              printf 'hport=%s\n' "$BYOC_PORT"
+              printf 'hmode=%s\n' "$BYOC_HEALTH"
+            fi
+          } | ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes \
+                "$VPS_USER@$VPS_HOST" "deploy $APP sha-${GITHUB_SHA}"

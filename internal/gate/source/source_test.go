@@ -1,0 +1,169 @@
+package source
+
+import (
+	"context"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/DreamsAreReal/deploy-hub/internal/gate"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/policy"
+	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
+	"github.com/DreamsAreReal/deploy-hub/internal/testutil"
+)
+
+const (
+	pkgA        = "package a\n"
+	ignoreFile  = ".semgrepignore"
+	fileMain    = "main.go"
+	fileCI      = "ci.yml"
+	fileReadme  = "README.md"
+	fileBadYAML = "bad.yml"
+	fileNested  = "a/b.go"
+	fileA       = "a.go"
+)
+
+var (
+	markerTodo  = strings.ToUpper("todo")
+	markerFixme = strings.ToUpper("fixme")
+)
+
+func repo(t *testing.T, files map[string]string) gate.Workspace {
+	t.Helper()
+	dir := t.TempDir()
+	for name, content := range files {
+		testutil.Write(t, filepath.Join(dir, filepath.FromSlash(name)), content)
+	}
+	ws := gate.Workspace{
+		Src: dir, Out: t.TempDir(), Exec: procexec.NewOS(GitBinary), Log: slog.New(slog.DiscardHandler),
+		Policy: policy.Policy{Markers: []string{"todo", "fixme"}, ForbiddenFiles: []string{"*state*.md", "*.bak", ignoreFile}},
+	}
+	git(t, ws, "init", "-q")
+	git(t, ws, "add", "-A")
+	return ws
+}
+
+func git(t *testing.T, ws gate.Workspace, args ...string) {
+	t.Helper()
+	_, err := ws.Exec.Run(context.Background(), procexec.Command{Name: GitBinary, Args: append([]string{"-C", ws.Src}, args...)})
+	if err != nil {
+		t.Fatalf("git %v: %v %s", args, err, procexec.Output(err))
+	}
+}
+
+func TestCommentsFoundInEveryLanguage(t *testing.T) {
+	ws := repo(t, map[string]string{
+		fileMain:               "package main\n\n// note\nfunc main() { /* inline */ }\n",
+		"clean.go":             "package main\n\nvar s = \"// not a comment\"\n",
+		fileCI:                 "on: push # trailing\njobs: {}\n",
+		"compose.yaml":         "# head\nservices: {}\n",
+		"Dockerfile":           "FROM scratch\n# comment\n",
+		"build.Dockerfile":     "FROM scratch\n",
+		"run.sh":               "#!/bin/sh\n  # indented\necho ok\n",
+		"Makefile":             "all:\n\t# recipe comment\n",
+		fileReadme:             "# Title\n",
+		"blob.bin":             "\x00# not text\n",
+		"blob.sh":              "\x00\n# binary with a NUL first\n",
+		"late.sh":              "echo\n\x00# NUL later\n",
+		"bad.go":               "package main\n\"unterminated\n",
+		fileBadYAML:            "a: [\n",
+		".gitignore":           "# ignored files\n*.out\n",
+		"app.service":          "[Unit]\n#x\n",
+		"nested/dir/script.py": "#!/usr/bin/env python3\nprint(1)\n",
+	})
+	out := Comments(context.Background(), ws)
+	testutil.Equal(t, out.Status, gate.StatusFail)
+	want := []string{
+		".gitignore:1", "Dockerfile:2", "Makefile:2", "app.service:2", "bad.go:2: string literal not terminated", fileBadYAML, "ci.yml:1",
+		"compose.yaml:2", "main.go:3", "main.go:4", "run.sh:2",
+	}
+	testutil.Equal(t, len(out.Findings), len(want))
+	for i, w := range want {
+		testutil.Contains(t, out.Findings[i], w)
+	}
+	testutil.Equal(t, out.Values[gate.ValueFindings], float64(len(want)))
+}
+
+func TestCleanRepositoryPasses(t *testing.T) {
+	ws := repo(t, map[string]string{fileMain: "package main\n", fileCI: "on: push\n", fileReadme: "Notes\n"})
+	testutil.Equal(t, Comments(context.Background(), ws).Status, gate.StatusPass)
+	testutil.Equal(t, Markers(context.Background(), ws).Status, gate.StatusPass)
+	testutil.Equal(t, Hygiene(context.Background(), ws).Status, gate.StatusPass)
+}
+
+func TestMarkers(t *testing.T) {
+	ws := repo(t, map[string]string{
+		fileA:      "package a\n\nvar x = \"" + markerTodo + " later\"\n",
+		fileReadme: "Fix " + markerFixme + " soon\nthe todo list is lowercase\n" + markerTodo + "S are not markers\n",
+	})
+	out := Markers(context.Background(), ws)
+	testutil.Equal(t, out.Status, gate.StatusFail)
+	testutil.Equal(t, out.Findings, []string{fileReadme + ":1: " + markerFixme, "a.go:3: " + markerTodo})
+}
+
+func TestHygiene(t *testing.T) {
+	ws := repo(t, map[string]string{"docs/STATE.md": "x", "main.go.bak": "x", ignoreFile: "", "ok.go": "package ok\n"})
+	out := Hygiene(context.Background(), ws)
+	testutil.Equal(t, out.Findings, []string{
+		ignoreFile + " matches " + ignoreFile, "docs/STATE.md matches *state*.md", "main.go.bak matches *.bak",
+	})
+}
+
+func TestNotARepository(t *testing.T) {
+	ws := gate.Workspace{Src: t.TempDir(), Exec: procexec.NewOS(GitBinary), Log: slog.New(slog.DiscardHandler)}
+	for _, out := range []gate.Outcome{Comments(context.Background(), ws), Markers(context.Background(), ws), Hygiene(context.Background(), ws)} {
+		testutil.Equal(t, out.Status, gate.StatusFail)
+		testutil.Contains(t, out.Reason, "git ls-files")
+	}
+	testutil.Fails(t, CopyTracked(context.Background(), ws, t.TempDir()))
+	ws.Src = filepath.Join(ws.Src, "missing")
+	testutil.Fails(t, CopyTracked(context.Background(), ws, t.TempDir()))
+}
+
+func TestCopyTracked(t *testing.T) {
+	ws := repo(t, map[string]string{fileNested: pkgA, "c.txt": "c"})
+	testutil.NoErr(t, os.Symlink("c.txt", filepath.Join(ws.Src, "link")))
+	git(t, ws, "add", "link")
+	testutil.Write(t, filepath.Join(ws.Src, "untracked.txt"), "u")
+	dest := filepath.Join(t.TempDir(), "copy")
+	testutil.NoErr(t, CopyTracked(context.Background(), ws, dest))
+	testutil.Equal(t, testutil.Read(t, filepath.Join(dest, "a", "b.go")), pkgA)
+	testutil.Equal(t, testutil.Read(t, filepath.Join(dest, "c.txt")), "c")
+	testutil.Missing(t, filepath.Join(dest, "untracked.txt"))
+	testutil.Missing(t, filepath.Join(dest, "link"))
+	testutil.Perm(t, filepath.Join(dest, "c.txt"), copyFilePerm)
+}
+
+func TestCopyTrackedFailures(t *testing.T) {
+	ws := repo(t, map[string]string{fileNested: pkgA})
+	blocker := filepath.Join(t.TempDir(), "file")
+	testutil.Write(t, blocker, "")
+	testutil.Fails(t, CopyTracked(context.Background(), ws, filepath.Join(blocker, "dest")))
+	dest := t.TempDir()
+	testutil.Write(t, filepath.Join(dest, "a"), "a file where a directory is needed")
+	testutil.Fails(t, CopyTracked(context.Background(), ws, dest))
+	testutil.NoErr(t, os.Remove(filepath.Join(ws.Src, "a", "b.go")))
+	testutil.NoErr(t, os.Mkdir(filepath.Join(ws.Src, "a", "b.go"), 0o700))
+	testutil.NoErr(t, CopyTracked(context.Background(), ws, t.TempDir()))
+	unreadable := repo(t, map[string]string{"secret.txt": "x"})
+	testutil.NoErr(t, os.Chmod(filepath.Join(unreadable.Src, "secret.txt"), 0))
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(unreadable.Src, "secret.txt"), 0o600) })
+	testutil.Fails(t, CopyTracked(context.Background(), unreadable, t.TempDir()))
+	gone := repo(t, map[string]string{"x.txt": "x"})
+	testutil.NoErr(t, os.Remove(filepath.Join(gone.Src, "x.txt")))
+	testutil.Fails(t, CopyTracked(context.Background(), gone, t.TempDir()))
+}
+
+func TestLanguage(t *testing.T) {
+	ws := repo(t, map[string]string{
+		fileA:      "package a\n\nvar s = \"café — ok\"\n",
+		fileReadme: "English\n\u0441\u0442\u0440\u043e\u043a\u0430\n",
+		"b.txt":    "plain\n\n\u65e5\u672c\n",
+	})
+	out := Language(context.Background(), ws)
+	testutil.Equal(t, out.Findings, []string{fileReadme + ":2: '\u0441'", "b.txt:3: '\u65e5'"})
+	clean := repo(t, map[string]string{fileA: "package a\n\nvar s = \"naïve façade 42 ✓\"\n"})
+	testutil.Equal(t, Language(context.Background(), clean).Status, gate.StatusPass)
+}

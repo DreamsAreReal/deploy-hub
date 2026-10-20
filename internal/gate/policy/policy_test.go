@@ -1,0 +1,159 @@
+package policy
+
+import (
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+
+	"github.com/DreamsAreReal/deploy-hub/internal/testutil"
+)
+
+const (
+	ownersLine = "owners: [Owner]"
+	pathsLine  = "paths: [/health]"
+)
+
+const digest = "@sha256:" + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+const valid = `owners: [Owner]
+thresholds:
+  line_coverage: 90
+  branch_coverage: 90
+  mutation_score: 90
+  max_cognitive_complexity: 9
+  max_duplication_percent: 2
+  duplicate_min_tokens: 50
+limits:
+  check_timeout: 30m
+  fuzz_time: 10s
+  mutant_timeout_floor: 20s
+  mutant_timeout_factor: 3
+  findings_listed: 20
+  stage_ready_timeout: 30s
+licenses: [MIT]
+dependencies: [example.com/dep]
+forbidden_files: ["*.bak"]
+markers: [todo]
+sast_rulesets: [p/default]
+images:
+  semgrep: semgrep/semgrep` + digest + `
+  zap: ghcr.io/zaproxy/zaproxy` + digest + `
+apps:
+  hub:
+    repo: Owner/hub
+    kind: binary
+    scenarios:
+      - id: refuse
+        category: security
+        tests: [internal/x.TestRefuse]
+  web:
+    repo: Owner/web
+    kind: service
+    port: 8080
+    health: /health
+    cpus: "0.5"
+    memory: 256m
+    env: [MODE=test]
+    dast: {spider: 1m, max_time: 5m, openapi: /openapi.json}
+    load: {rate: 20, duration: 30s, p95: 300ms, max_error_percent: 0, concurrency: 10, paths: [/health]}
+  bot:
+    repo: Owner/bot
+    kind: worker
+`
+
+func TestParseValidPolicy(t *testing.T) {
+	p, err := Parse([]byte(valid))
+	testutil.NoErr(t, err)
+	testutil.True(t, p.Owns("Owner") && !p.Owns("Other"), "owners")
+	web, err := p.App("web")
+	testutil.NoErr(t, err)
+	testutil.True(t, web.HasImage() && web.HasHTTP(), "service has image and HTTP")
+	testutil.Equal(t, web.Load.P95.Milliseconds(), int64(300))
+	testutil.Equal(t, web.DAST.OpenAPI, "/openapi.json")
+	hub, _ := p.App("hub")
+	testutil.True(t, !hub.HasImage() && !hub.HasHTTP(), "binary has neither")
+	bot, _ := p.App("bot")
+	testutil.True(t, bot.HasImage() && !bot.HasHTTP(), "worker has an image only")
+	_, err = p.App("ghost")
+	testutil.Is(t, err, ErrUnknownApp)
+}
+
+func TestLoadFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "gate.yaml")
+	testutil.Write(t, path, valid)
+	_, err := LoadFile(path)
+	testutil.NoErr(t, err)
+	_, err = LoadFile(filepath.Join(t.TempDir(), "missing.yaml"))
+	testutil.True(t, os.IsNotExist(err), "missing file")
+}
+
+func TestRepositoryPolicyIsValid(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	_, err := LoadFile(filepath.Join(filepath.Dir(file), "..", "..", "..", "policy", "gate.yaml"))
+	testutil.NoErr(t, err)
+}
+
+func TestParseRejects(t *testing.T) {
+	cases := map[string][2]string{
+		"unknown field":      {ownersLine, ownersLine + "\nextra: 1"},
+		"not yaml":           {ownersLine, "owners: [Owner"},
+		"no owners":          {ownersLine, "owners: []"},
+		"zero coverage":      {"line_coverage: 90", "line_coverage: 0"},
+		"coverage over 100":  {"branch_coverage: 90", "branch_coverage: 101"},
+		"mutation":           {"mutation_score: 90", "mutation_score: -1"},
+		"duplication":        {"max_duplication_percent: 2", "max_duplication_percent: 0"},
+		"cognitive":          {"max_cognitive_complexity: 9", "max_cognitive_complexity: 0"},
+		"tokens":             {"duplicate_min_tokens: 50", "duplicate_min_tokens: 0"},
+		"check timeout":      {"check_timeout: 30m", "check_timeout: 0s"},
+		"fuzz time":          {"fuzz_time: 10s", "fuzz_time: 0s"},
+		"mutant floor":       {"mutant_timeout_floor: 20s", "mutant_timeout_floor: 0s"},
+		"mutant factor":      {"mutant_timeout_factor: 3", "mutant_timeout_factor: 0"},
+		"findings listed":    {"findings_listed: 20", "findings_listed: 0"},
+		"stage ready":        {"stage_ready_timeout: 30s", "stage_ready_timeout: 0s"},
+		"licenses":           {"licenses: [MIT]", "licenses: []"},
+		"markers":            {"markers: [todo]", "markers: []"},
+		"rulesets":           {"sast_rulesets: [p/default]", "sast_rulesets: []"},
+		"unpinned semgrep":   {"semgrep: semgrep/semgrep" + digest, "semgrep: semgrep/semgrep:latest"},
+		"unpinned zap":       {"zap: ghcr.io/zaproxy/zaproxy" + digest, "zap: ghcr.io/zaproxy/zaproxy:stable"},
+		"app name":           {"  hub:\n", "  Hub!:\n"},
+		"repo":               {"repo: Owner/hub", "repo: hub"},
+		"kind":               {"kind: binary", "kind: daemon"},
+		"port":               {"port: 8080", "port: 0"},
+		"health":             {"health: /health", "health: health"},
+		"memory":             {"memory: 256m", "memory: lots"},
+		"cpus":               {`cpus: "0.5"`, `cpus: "half"`},
+		"rate":               {"rate: 20", "rate: 0"},
+		"duration":           {"duration: 30s", "duration: 0s"},
+		"p95":                {"p95: 300ms", "p95: 0s"},
+		"concurrency":        {"concurrency: 10", "concurrency: 0"},
+		"load paths":         {pathsLine, "paths: []"},
+		"load path value":    {pathsLine, "paths: [health]"},
+		"spider":             {"spider: 1m", "spider: 0s"},
+		"dast max time":      {"max_time: 5m", "max_time: 0s"},
+		"openapi":            {"openapi: /openapi.json", "openapi: openapi"},
+		"scenario id":        {"id: refuse", `id: ""`},
+		"scenario category":  {"category: security", "category: style"},
+		"scenario tests":     {"tests: [internal/x.TestRefuse]", "tests: []"},
+		"duplicate scenario": {"        tests: [internal/x.TestRefuse]\n", "        tests: [internal/x.TestRefuse]\n      - id: refuse\n        category: business\n        tests: [a.TestB]\n"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			testutil.True(t, strings.Contains(valid, c[0]), "fixture has "+c[0])
+			_, err := Parse([]byte(strings.Replace(valid, c[0], c[1], 1)))
+			testutil.Fails(t, err)
+		})
+	}
+}
+
+func FuzzParse(f *testing.F) {
+	f.Add([]byte(valid))
+	f.Add([]byte("owners: []"))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		p, err := Parse(data)
+		if err == nil && (len(p.Owners) == 0 || p.Thresholds.MutationScore <= 0 || p.Limits.Check <= 0) {
+			t.Fatalf("invalid policy accepted: %+v", p)
+		}
+	})
+}

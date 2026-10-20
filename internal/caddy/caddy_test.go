@@ -1,0 +1,243 @@
+package caddy
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/DreamsAreReal/deploy-hub/internal/console"
+	"github.com/DreamsAreReal/deploy-hub/internal/obs"
+	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
+	"github.com/DreamsAreReal/deploy-hub/internal/procexec/procexectest"
+	"github.com/DreamsAreReal/deploy-hub/internal/registry"
+	"github.com/DreamsAreReal/deploy-hub/internal/testutil"
+)
+
+var errSim = errors.New("simulated")
+
+type pusher struct{ samples []obs.Sample }
+
+const testSlug = "203-0-113-7"
+
+func (p *pusher) Push(_ context.Context, s []obs.Sample) { p.samples = append(p.samples, s...) }
+
+func (p *pusher) value(name string) float64 {
+	for _, s := range p.samples {
+		if s.Name == name {
+			return s.Value
+		}
+	}
+	return -1
+}
+
+type fixture struct {
+	root    string
+	apps    registry.Apps
+	exec    *procexectest.Fake
+	out     *bytes.Buffer
+	logs    *bytes.Buffer
+	metrics *pusher
+	owned   *[]string
+	syncer  Syncer
+}
+
+func newFixture(t *testing.T) *fixture {
+	t.Helper()
+	root := t.TempDir()
+	f := &fixture{root: root, apps: registry.Apps{Path: filepath.Join(root, "apps.list")}, exec: &procexectest.Fake{}, out: &bytes.Buffer{}, logs: &bytes.Buffer{}, metrics: &pusher{}}
+	app := func(name, conf string) string {
+		dir := filepath.Join(root, name)
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if conf != "" {
+			if err := os.WriteFile(filepath.Join(dir, "app.conf"), []byte(conf), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return dir
+	}
+	list := "web " + app("web", "port=9001\n") + "\n" +
+		"bot " + app("bot", "profile=bot\n") + "\n" +
+		"bad " + app("bad", "port=1\n") + "\n" +
+		"noconf " + app("noconf", "") + "\n" +
+		"api " + app("api", "port=9002\n") + "\n"
+	if err := os.WriteFile(f.apps.Path, []byte(list), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	owned := []string{}
+	f.owned = &owned
+	f.syncer = Syncer{
+		Config:    Config{Caddyfile: filepath.Join(root, "Caddyfile"), HostSlug: testSlug, Email: "admin@x.sslip.io", Owner: func(p string) error { owned = append(owned, p); return nil }},
+		Apps:      f.apps,
+		Exec:      f.exec,
+		Listening: func(p int) bool { return p == 19002 },
+		Out:       console.New(f.out),
+		Log:       slog.New(slog.NewJSONHandler(f.logs, nil)),
+		Metrics:   f.metrics,
+	}
+	return f
+}
+
+func TestRoutesAndRender(t *testing.T) {
+	f := newFixture(t)
+	if err := os.WriteFile(filepath.Join(f.root, "api", ".caddy-port"), []byte("19002\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.root, "web", ".caddy-port"), []byte("19001x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	apps, _ := f.apps.All()
+	routes := Routes(apps, f.syncer.Listening)
+	if len(routes) != 2 || routes[0] != (Route{"web", "9001"}) || routes[1] != (Route{"api", "19002"}) {
+		t.Fatalf("routes: %+v", routes)
+	}
+	want := header + "{\n\temail a@b\n}\n\n" +
+		"import /etc/caddy/extra/*.caddy\n\n" +
+		"web.s.sslip.io {\n\tlog\n\treverse_proxy 127.0.0.1:9001 {\n\t\tlb_try_duration 30s\n\t\tlb_try_interval 250ms\n\t}\n}\n\n" +
+		"api.s.sslip.io {\n\tlog\n\treverse_proxy 127.0.0.1:19002 {\n\t\tlb_try_duration 30s\n\t\tlb_try_interval 250ms\n\t}\n}\n\n"
+	if got := Render(routes, "s", "a@b"); got != want {
+		t.Fatalf("render:\n%s", got)
+	}
+}
+
+func TestOverrideTruncatesAndIgnoresGarbage(t *testing.T) {
+	dir := t.TempDir()
+	write := func(content string) {
+		testutil.Write(t, filepath.Join(dir, registry.CaddyPortFile), content)
+	}
+	only := func(port int) func(int) bool { return func(p int) bool { return p == port } }
+	write("1234567")
+	testutil.Equal(t, override(dir, only(12345)), "12345")
+	write("12345")
+	testutil.Equal(t, override(dir, only(12345)), "12345")
+	write("port: 19002/tcp\n")
+	testutil.Equal(t, override(dir, only(19002)), "19002")
+	write("ab:0")
+	testutil.Equal(t, override(dir, only(0)), "0")
+	write("none")
+	testutil.Equal(t, override(dir, func(int) bool { return true }), "")
+	write("9001")
+	testutil.Equal(t, override(dir, only(9002)), "")
+	testutil.Equal(t, override(t.TempDir(), func(int) bool { return true }), "")
+}
+
+func TestSyncWritesValidatesAndReloads(t *testing.T) {
+	f := newFixture(t)
+	testutil.NoErr(t, f.syncer.Run(context.Background()))
+	candidate := f.syncer.Config.Caddyfile + candidateSuffix
+	testutil.Equal(t, f.exec.Lines(), []string{"caddy validate --config " + candidate + " --adapter caddyfile", "systemctl reload caddy"})
+	testutil.Equal(t, *f.owned, []string{candidate})
+	testutil.Missing(t, candidate)
+	testutil.Contains(t, testutil.Read(t, f.syncer.Config.Caddyfile), "web."+testSlug+".sslip.io")
+	testutil.Perm(t, f.syncer.Config.Caddyfile, filePerm)
+	testutil.Equal(t, f.out.String(), msgUpdated+"\n")
+	testutil.Contains(t, f.logs.String(), `"msg":"caddyfile updated","routes":2`)
+	testutil.Equal(t, f.metrics.value(obs.MetricCaddyReloads), 1.0)
+	testutil.Equal(t, f.metrics.value(obs.MetricCaddyRoutes), 2.0)
+	testutil.Equal(t, f.metrics.value(obs.MetricCaddySyncSuccess), 1.0)
+}
+
+func TestSyncReplacesAChangedCaddyfile(t *testing.T) {
+	f := newFixture(t)
+	testutil.Write(t, f.syncer.Config.Caddyfile, "stale\n")
+	testutil.NoErr(t, f.syncer.Run(context.Background()))
+	testutil.Contains(t, testutil.Read(t, f.syncer.Config.Caddyfile), "web."+testSlug+".sslip.io")
+	testutil.Equal(t, f.exec.Count("reload"), 1)
+}
+
+func TestSyncIsIdempotent(t *testing.T) {
+	f := newFixture(t)
+	testutil.NoErr(t, f.syncer.Run(context.Background()))
+	second := &procexectest.Fake{}
+	f.syncer.Exec = second
+	f.out.Reset()
+	f.metrics.samples = nil
+	testutil.NoErr(t, f.syncer.Run(context.Background()))
+	testutil.Equal(t, len(second.Calls()), 0)
+	testutil.Equal(t, f.out.String(), msgUpToDate+"\n")
+	testutil.Contains(t, f.logs.String(), `"msg":"caddyfile unchanged","routes":2`)
+	testutil.Equal(t, f.metrics.value(obs.MetricCaddyReloads), 0.0)
+	testutil.Equal(t, f.metrics.value(obs.MetricCaddyRoutes), 2.0)
+}
+
+func failing(binary string) procexectest.Handler {
+	return func(c procexec.Command) (procexec.Result, error) {
+		if c.Name == binary {
+			return procexec.Result{Stderr: "boom"}, errSim
+		}
+		return procexec.Result{}, nil
+	}
+}
+
+func assertFailedSync(t *testing.T, f *fixture) {
+	t.Helper()
+	testutil.Equal(t, f.metrics.value(obs.MetricCaddySyncSuccess), 0.0)
+	testutil.Equal(t, f.metrics.value(obs.MetricCaddyReloads), 0.0)
+	testutil.Equal(t, f.metrics.value(obs.MetricCaddyRoutes), -1.0)
+	testutil.Equal(t, f.out.String(), "")
+}
+
+func TestSyncRejectsInvalidConfig(t *testing.T) {
+	f := newFixture(t)
+	f.exec.Handler = failing(caddyBinary)
+	testutil.Is(t, f.syncer.Run(context.Background()), ErrInvalidConfig)
+	testutil.Missing(t, f.syncer.Config.Caddyfile)
+	testutil.Missing(t, f.syncer.Config.Caddyfile+candidateSuffix)
+	testutil.Equal(t, f.exec.Count("reload"), 0)
+	testutil.Contains(t, f.logs.String(), `"msg":"caddyfile invalid"`, `"output":"boom"`)
+	assertFailedSync(t, f)
+}
+
+func TestSyncReloadFailure(t *testing.T) {
+	f := newFixture(t)
+	f.exec.Handler = failing(systemctlBinary)
+	testutil.Is(t, f.syncer.Run(context.Background()), errSim)
+	testutil.Contains(t, f.logs.String(), `"msg":"caddy reload failed"`)
+	assertFailedSync(t, f)
+}
+
+func TestSyncOwnerFailure(t *testing.T) {
+	f := newFixture(t)
+	f.syncer.Config.Owner = func(string) error { return errSim }
+	testutil.Is(t, f.syncer.Run(context.Background()), errSim)
+	testutil.Missing(t, f.syncer.Config.Caddyfile+candidateSuffix)
+	testutil.Equal(t, len(f.exec.Calls()), 0)
+	assertFailedSync(t, f)
+}
+
+func TestSyncPathFailures(t *testing.T) {
+	f := newFixture(t)
+	f.syncer.Config.Caddyfile = filepath.Join(f.root, "missing", "Caddyfile")
+	testutil.Fails(t, f.syncer.Run(context.Background()))
+	assertFailedSync(t, f)
+	f2 := newFixture(t)
+	f2.syncer.Apps = registry.Apps{Path: filepath.Join(f2.root, "nope")}
+	testutil.Fails(t, f2.syncer.Run(context.Background()))
+	assertFailedSync(t, f2)
+	f3 := newFixture(t)
+	f3.syncer.Config.HostSlug = ""
+	testutil.Is(t, f3.syncer.Run(context.Background()), ErrBadSlug)
+	assertFailedSync(t, f3)
+	f4 := newFixture(t)
+	testutil.Mkdir(t, f4.syncer.Config.Caddyfile)
+	testutil.Fails(t, f4.syncer.Run(context.Background()))
+	testutil.Missing(t, f4.syncer.Config.Caddyfile+candidateSuffix)
+}
+
+func TestConfigValidate(t *testing.T) {
+	ok := Config{HostSlug: testSlug, Email: "admin@" + testSlug + ".sslip.io"}
+	if err := ok.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := (Config{HostSlug: "bad slug; rm", Email: ok.Email}).Validate(); !errors.Is(err, ErrBadSlug) {
+		t.Fatal("slug")
+	}
+	if err := (Config{HostSlug: ok.HostSlug, Email: "no-at\n}"}).Validate(); !errors.Is(err, ErrBadEmail) {
+		t.Fatal("email")
+	}
+}

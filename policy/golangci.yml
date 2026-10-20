@@ -1,0 +1,76 @@
+version: "2"
+run:
+  tests: true
+  relative-path-mode: gomod
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - copyloopvar
+    - durationcheck
+    - errcheck
+    - errorlint
+    - exhaustive
+    - forcetypeassert
+    - goconst
+    - gocritic
+    - godox
+    - gosec
+    - govet
+    - ineffassign
+    - misspell
+    - mnd
+    - nakedret
+    - nilerr
+    - noctx
+    - prealloc
+    - revive
+    - staticcheck
+    - unconvert
+    - unparam
+    - unused
+    - usestdlibvars
+    - wastedassign
+    - asciicheck
+    - bidichk
+    - containedctx
+    - dupword
+    - errname
+    - gochecknoinits
+    - gosmopolitan
+    - iface
+    - intrange
+    - nilnil
+    - predeclared
+    - recvcheck
+    - sloglint
+    - usetesting
+  settings:
+    gosec:
+      excludes:
+        - G204
+    iface:
+      enable:
+        - identical
+        - opaque
+    goconst:
+      min-len: 2
+      min-occurrences: 2
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+    revive:
+      rules:
+        - name: unexported-return
+        - name: exported
+          disabled: true
+        - name: package-comments
+          disabled: true
+formatters:
+  enable:
+    - gofmt
+    - goimports
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

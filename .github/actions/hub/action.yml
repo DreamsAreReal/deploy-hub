@@ -1,0 +1,31 @@
+name: deploy-hub toolchain
+description: Builds the deploy-hub binary and installs the pinned quality gate toolchain
+outputs:
+  bin:
+    description: Directory with the deploy-hub binary and the gate tools
+    value: ${{ steps.build.outputs.bin }}
+  policy:
+    description: Path to the central gate policy
+    value: ${{ steps.build.outputs.policy }}
+runs:
+  using: composite
+  steps:
+    - name: Set up Go
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+      with:
+        go-version-file: ${{ github.action_path }}/../../../go.mod
+        cache: false
+    - name: Build deploy-hub and install the toolchain
+      id: build
+      shell: bash
+      env:
+        HUB_DIR: ${{ github.action_path }}/../../..
+      run: |
+        set -euo pipefail
+        hub="$(cd "$HUB_DIR" && pwd)"
+        bin="$RUNNER_TEMP/deploy-hub-toolchain"
+        make -C "$hub" toolchain TOOLS_DIR="$bin"
+        {
+          echo "bin=$bin"
+          echo "policy=$hub/policy/gate.yaml"
+        } >> "$GITHUB_OUTPUT"

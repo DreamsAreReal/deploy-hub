@@ -1,0 +1,116 @@
+package procexec
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+	"time"
+)
+
+type Command struct {
+	Name  string
+	Args  []string
+	Env   []string
+	Stdin string
+	Dir   string
+}
+
+type Result struct {
+	Stdout string
+	Stderr string
+}
+
+func (r Result) Combined() string {
+	return strings.TrimSpace(r.Stdout + r.Stderr)
+}
+
+type Runner interface {
+	Run(ctx context.Context, cmd Command) (Result, error)
+}
+
+type Error struct {
+	Err    error
+	Output string
+}
+
+func (e *Error) Error() string { return e.Err.Error() }
+
+func (e *Error) Unwrap() error { return e.Err }
+
+func Output(err error) string {
+	if e, ok := errors.AsType[*Error](err); ok {
+		return e.Output
+	}
+	return ""
+}
+
+const waitDelay = 5 * time.Second
+
+var ErrNotAllowed = errors.New("binary is not in the allowlist")
+
+type builder func(ctx context.Context, args []string) *exec.Cmd
+
+var known = map[string]builder{
+	"actionlint": func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "actionlint", a...) },
+	"caddy":      func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "caddy", a...) },
+	"deadcode":   func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "deadcode", a...) },
+	"docker":     func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "docker", a...) },
+	"gh":         func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "gh", a...) },
+	"git":        func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "git", a...) },
+	"gitleaks":   func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "gitleaks", a...) },
+	"go":         func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "go", a...) },
+	"gobco":      func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "gobco", a...) },
+	"gocognit":   func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "gocognit", a...) },
+	"golangci-lint": func(ctx context.Context, a []string) *exec.Cmd {
+		return exec.CommandContext(ctx, "golangci-lint", a...)
+	},
+	"govulncheck": func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "govulncheck", a...) },
+	"hadolint":    func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "hadolint", a...) },
+	"osv-scanner": func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "osv-scanner", a...) },
+	"ssh":         func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "ssh", a...) },
+	"ssh-keygen":  func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "ssh-keygen", a...) },
+	"sudo":        func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "sudo", a...) },
+	"syft":        func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "syft", a...) },
+	"systemctl":   func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "systemctl", a...) },
+	"trivy":       func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "trivy", a...) },
+	"trufflehog":  func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "trufflehog", a...) },
+	"zizmor":      func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "zizmor", a...) },
+}
+
+type OS struct {
+	allowed map[string]builder
+}
+
+func NewOS(names ...string) OS {
+	allowed := make(map[string]builder, len(names))
+	for _, n := range names {
+		if b, ok := known[n]; ok {
+			allowed[n] = b
+		}
+	}
+	return OS{allowed: allowed}
+}
+
+func (o OS) Run(ctx context.Context, c Command) (Result, error) {
+	build, ok := o.allowed[c.Name]
+	if !ok {
+		return Result{}, fmt.Errorf("%w: %s", ErrNotAllowed, c.Name)
+	}
+	var stdout, stderr bytes.Buffer
+	cmd := build(ctx, c.Args)
+	cmd.Env = append(os.Environ(), c.Env...)
+	cmd.Dir = c.Dir
+	cmd.Stdin = strings.NewReader(c.Stdin)
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	cmd.WaitDelay = waitDelay
+	err := cmd.Run()
+	res := Result{Stdout: stdout.String(), Stderr: stderr.String()}
+	if err != nil {
+		return res, &Error{Err: errors.Join(ctx.Err(), err), Output: res.Combined()}
+	}
+	return res, nil
+}

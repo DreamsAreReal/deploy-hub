@@ -1,0 +1,242 @@
+package runner
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/DreamsAreReal/deploy-hub/internal/console"
+
+	"github.com/DreamsAreReal/deploy-hub/internal/docker"
+	"github.com/DreamsAreReal/deploy-hub/internal/health"
+	"github.com/DreamsAreReal/deploy-hub/internal/hub"
+	"github.com/DreamsAreReal/deploy-hub/internal/journal"
+	"github.com/DreamsAreReal/deploy-hub/internal/obs"
+	"github.com/DreamsAreReal/deploy-hub/internal/registry"
+	"github.com/DreamsAreReal/deploy-hub/internal/smoke"
+)
+
+const (
+	ExitOK          = 0
+	ExitFail        = 1
+	cleanupTimeout  = 30 * time.Second
+	historyLines    = 20
+	statusProbeTime = 3 * time.Second
+	fileMode        = 0o600
+)
+
+type Locker interface {
+	Acquire(ctx context.Context, onWait func()) (func(), error)
+}
+
+type Router interface {
+	Sync(ctx context.Context)
+}
+
+type Service struct {
+	Paths       hub.Paths
+	Apps        registry.Apps
+	Journal     journal.Journal
+	Docker      docker.Client
+	Gate        health.Gate
+	HTTP        health.HTTPChecker
+	Router      Router
+	Locker      Locker
+	LockWait    time.Duration
+	Listening   func(int) bool
+	Now         func() time.Time
+	Out         *console.Printer
+	Err         *console.Printer
+	Log         *slog.Logger
+	Metrics     obs.Pusher
+	Identity    Verifier
+	Audience    string
+	WorkflowRef string
+	samples     []obs.Sample
+}
+
+type operation struct {
+	app   string
+	dir   string
+	tag   string
+	sha7  string
+	t0    time.Time
+	start time.Time
+}
+
+func (s *Service) Dispatch(ctx context.Context, raw string, stdin io.Reader) int {
+	defer s.pushMetrics(ctx)
+	req, err := ParseRequest(raw)
+	if err != nil {
+		return s.refuse(raw, refusalMessage(err))
+	}
+	s.Log.Info("request accepted", "verb", req.Verb, "app", req.App, "tag", req.Tag)
+	if req.Verb == VerbStatus {
+		return s.status(ctx)
+	}
+	entry, err := s.Apps.Lookup(req.App)
+	if err != nil {
+		return s.refuse(raw, msgUnknownApp)
+	}
+	switch req.Verb {
+	case VerbHistory:
+		return s.history(req.App)
+	case VerbDeploy:
+		return s.deploy(ctx, raw, entry, req.Tag, stdin)
+	case VerbReport:
+		return s.report(ctx, raw, entry, req.Tag, stdin)
+	default:
+		return s.rollback(ctx, raw, entry, req.Tag)
+	}
+}
+
+func (s *Service) refuse(raw, msg string) int {
+	s.Err.Println(msg)
+	s.Log.Warn("request refused", "reason", msg, "fingerprint", Fingerprint(raw))
+	s.record(journal.Entry{App: journal.NoValue, Sha7: journal.NoValue, Action: journal.ActionRefuse, Result: fmt.Sprintf(deniedFormat, Fingerprint(raw))})
+	return ExitFail
+}
+
+func (s *Service) record(e journal.Entry) {
+	if journal.IsContainerOp(e.Action) {
+		e.Extra = "smoke=" + smoke.Check(s.Paths.Smoke(), s.Listening)
+	}
+	if err := s.Journal.Append(e); err != nil {
+		s.Log.Error("journal append failed", "error", err.Error())
+	}
+	s.Log.Info("journal entry", "app", e.App, "sha", e.Sha7, "action", e.Action, "result", e.Result, "seconds", e.Seconds, "extra", e.Extra)
+	if e.Action != journal.ActionRefuse {
+		s.samples = append(s.samples, obs.Sample{
+			Name:   obs.MetricOperationDuration,
+			Labels: obs.Labels{obs.LabelApp: e.App, obs.LabelAction: e.Action, obs.LabelResult: e.Result},
+			Value:  float64(e.Seconds),
+		})
+	}
+}
+
+func (s *Service) pushMetrics(ctx context.Context) {
+	entries, err := s.Journal.Entries()
+	if err != nil {
+		s.Log.Warn("journal read failed", "error", err.Error())
+	}
+	samples := append(obs.JournalSamples(entries), s.samples...)
+	s.Metrics.Push(context.WithoutCancel(ctx), samples)
+}
+
+func (s *Service) since(t time.Time) int {
+	return int(s.Now().Sub(t).Seconds())
+}
+
+func (s *Service) acquire(ctx context.Context, app string) (func(), error) {
+	t := s.Now()
+	release, err := s.Locker.Acquire(ctx, func() { s.Out.Println(msgLockWait) })
+	waited := s.Now().Sub(t).Seconds()
+	s.samples = append(s.samples, obs.Sample{Name: obs.MetricLockWait, Labels: obs.Labels{obs.LabelApp: app}, Value: waited})
+	if err != nil {
+		s.Err.Printf(msgLockBusy, s.LockWait)
+		s.Log.Error("lock not acquired", "app", app, "error", err.Error(), "waited_seconds", waited)
+		return nil, err
+	}
+	s.Log.Debug("lock acquired", "app", app, "waited_seconds", waited)
+	return release, nil
+}
+
+func (s *Service) loadConf(dir, app string) (registry.AppConf, error) {
+	conf, err := registry.LoadAppConf(dir)
+	if err != nil {
+		s.Err.Printf("%s (%s)\n", msgNoConf, app)
+		s.Log.Error("app.conf missing", "app", app, "dir", dir, "error", err.Error())
+	}
+	return conf, err
+}
+
+func composePath(dir string) string {
+	return filepath.Join(dir, registry.ComposeFile)
+}
+
+func (s *Service) container(ctx context.Context, app, dir string, conf registry.AppConf) string {
+	if conf.IsBYOC() {
+		return app
+	}
+	return s.Docker.ComposeContainer(ctx, composePath(dir), docker.MainService)
+}
+
+func (s *Service) composeUp(ctx context.Context, dir string, conf registry.AppConf, ref string) {
+	opts := docker.UpOptions{File: composePath(dir), Image: ref, Pull: docker.PullNever, Services: []string{docker.MainService}}
+	if conf.IsBYOC() {
+		opts.Pull, opts.Services = docker.PullMissing, nil
+	}
+	if err := s.Docker.ComposeUp(ctx, opts); err != nil {
+		s.Log.Warn("compose up failed", "dir", dir, "image", ref, "error", err.Error())
+	}
+}
+
+func (s *Service) upSidecars(ctx context.Context, dir string, conf registry.AppConf, ref string) {
+	if !conf.IsBYOC() {
+		return
+	}
+	err := s.Docker.ComposeUp(ctx, docker.UpOptions{File: composePath(dir), Image: ref, Pull: docker.PullMissing, NoRecreate: true})
+	if err != nil {
+		s.Log.Warn("sidecars up failed", "dir", dir, "error", err.Error())
+	}
+}
+
+func targetFor(conf registry.AppConf) health.Target {
+	return health.Target{Mode: conf.HealthMode(), Port: conf.Port, Path: conf.HealthPath}
+}
+
+func (s *Service) gateMain(ctx context.Context, op *operation, conf registry.AppConf, t health.Target) bool {
+	t.Container = s.container(ctx, op.app, op.dir, conf)
+	started := s.Now()
+	ok := s.Gate.Wait(ctx, t)
+	s.samples = append(s.samples, obs.Sample{
+		Name:   obs.MetricHealthGateDuration,
+		Labels: obs.Labels{obs.LabelApp: op.app, obs.LabelTarget: targetMain, obs.LabelResult: resultOf(ok)},
+		Value:  s.Now().Sub(started).Seconds(),
+	})
+	s.Log.Info("health gate finished", "app", op.app, "target", targetMain, "mode", t.Mode, "healthy", ok)
+	return ok
+}
+
+func resultOf(ok bool) string {
+	if ok {
+		return journal.ResultOK
+	}
+	return journal.ResultFail
+}
+
+func ensureFile(path string) error {
+	f, err := os.OpenFile(filepath.Clean(path), os.O_CREATE|os.O_WRONLY, fileMode)
+	if err != nil {
+		return err
+	}
+	return f.Close()
+}
+
+func (s *Service) appendLastError(app, out string) {
+	f, err := os.OpenFile(s.Paths.LastError(), os.O_APPEND|os.O_WRONLY|os.O_CREATE, fileMode)
+	if err != nil {
+		s.Log.Warn("last-error.log not writable", "error", err.Error())
+		return
+	}
+	line := fmt.Sprintf(lastErrorFormat, s.Now().UTC().Format(journal.TimeLayout), app, strings.TrimSpace(out))
+	_, werr := f.WriteString(line)
+	if err := errors.Join(werr, f.Close()); err != nil {
+		s.Log.Warn("last-error.log write failed", "error", err.Error())
+	}
+}
+
+func FormatDuration(d time.Duration) string {
+	secs := int(d.Seconds())
+	const minute = 60
+	if secs >= minute {
+		return fmt.Sprintf("%dm%02ds", secs/minute, secs%minute)
+	}
+	return fmt.Sprintf("%ds", secs)
+}
