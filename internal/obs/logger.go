@@ -23,9 +23,9 @@ func ParseLevel(v string) slog.Level {
 	return lvl
 }
 
-func NewLogger(w io.Writer, level slog.Level, command string) *slog.Logger {
+func NewLogger(w io.Writer, level slog.Level, command string, counts *LevelCounts) *slog.Logger {
 	h := slog.NewJSONHandler(w, &slog.HandlerOptions{Level: level})
-	return slog.New(h).With("service", "deploy-hub", "command", command)
+	return slog.New(Counting(h, counts)).With("service", "deploy-hub", "command", command)
 }
 
 func OpenLogFile(path string) (io.WriteCloser, error) {

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"os"
@@ -205,6 +206,7 @@ type Fetcher struct {
 	Client *http.Client
 	URL    string
 	Cache  string
+	Log    *slog.Logger
 }
 
 func (f Fetcher) Keys(ctx context.Context) (KeySet, error) {
@@ -223,8 +225,12 @@ func (f Fetcher) Keys(ctx context.Context) (KeySet, error) {
 }
 
 func (f Fetcher) store(data []byte) {
-	if err := os.MkdirAll(filepath.Dir(f.Cache), cacheDirPerm); err == nil {
-		_ = os.WriteFile(filepath.Clean(f.Cache), data, cachePerm)
+	err := os.MkdirAll(filepath.Dir(f.Cache), cacheDirPerm)
+	if err == nil {
+		err = os.WriteFile(filepath.Clean(f.Cache), data, cachePerm)
+	}
+	if err != nil {
+		f.Log.Warn("signing key cache not written", "error", err.Error())
 	}
 }
 

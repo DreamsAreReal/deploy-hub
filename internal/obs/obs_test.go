@@ -147,8 +147,8 @@ func TestParseLevel(t *testing.T) {
 
 func TestNewLoggerWritesJSON(t *testing.T) {
 	var buf bytes.Buffer
-	NewLogger(&buf, slog.LevelInfo, "runner").Info("hello", "app", "x")
-	NewLogger(&buf, slog.LevelInfo, "runner").Debug("hidden")
+	NewLogger(&buf, slog.LevelInfo, "runner", &LevelCounts{}).Info("hello", "app", "x")
+	NewLogger(&buf, slog.LevelInfo, "runner", &LevelCounts{}).Debug("hidden")
 	var rec map[string]any
 	if err := json.Unmarshal(buf.Bytes(), &rec); err != nil {
 		t.Fatalf("not one JSON record: %q", buf.String())

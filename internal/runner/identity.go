@@ -39,7 +39,7 @@ func (s *Service) authorize(ctx context.Context, verb string, entry registry.Ent
 	s.samples = append(s.samples, obs.Sample{
 		Name:   obs.MetricIdentityVerified,
 		Labels: obs.Labels{obs.LabelApp: entry.Name, obs.LabelVerb: verb},
-		Value:  boolValue(err == nil),
+		Value:  obs.Bool(err == nil),
 	})
 	return err
 }

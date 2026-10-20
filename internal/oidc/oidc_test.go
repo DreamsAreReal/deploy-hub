@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -242,7 +243,7 @@ func TestFetcherDownloadsAndCaches(t *testing.T) {
 	}))
 	defer srv.Close()
 	cache := filepath.Join(t.TempDir(), "cache", "jwks.json")
-	f := Fetcher{Client: srv.Client(), URL: srv.URL, Cache: cache}
+	f := Fetcher{Client: srv.Client(), URL: srv.URL, Cache: cache, Log: slog.New(slog.DiscardHandler)}
 	ks, err := f.Keys(context.Background())
 	testutil.NoErr(t, err)
 	testutil.True(t, ks[testKid] != nil, "fetched key")
@@ -283,8 +284,10 @@ func TestFetcherFailures(t *testing.T) {
 		serve(w, r, jwks(t, &key.PublicKey))
 	}))
 	defer good.Close()
-	_, err = Fetcher{Client: good.Client(), URL: good.URL, Cache: filepath.Join(blocked, "jwks.json")}.Keys(context.Background())
+	var logs strings.Builder
+	_, err = Fetcher{Client: good.Client(), URL: good.URL, Cache: filepath.Join(blocked, "jwks.json"), Log: slog.New(slog.NewJSONHandler(&logs, nil))}.Keys(context.Background())
 	testutil.NoErr(t, err)
+	testutil.Contains(t, logs.String(), "signing key cache not written")
 	_, statErr := os.Stat(filepath.Join(blocked, "jwks.json"))
 	testutil.True(t, statErr != nil, "cache under a file cannot be written")
 }

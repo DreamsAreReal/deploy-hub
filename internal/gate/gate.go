@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -23,6 +24,8 @@ const (
 	StatusNA   Status = "n/a"
 
 	ValueFindings = "findings"
+	ValueCrashed  = "crashed"
+	crashedFormat = "check crashed: %v"
 	verdictPerm   = 0o600
 	moreFormat    = "and %d more"
 	outputTail    = 600
@@ -151,13 +154,24 @@ func (r Runner) runOne(ctx context.Context, ws Workspace, subj Subject, c Check)
 	t := r.Now()
 	ctx, cancel := context.WithTimeout(ctx, ws.Policy.Limits.Check)
 	defer cancel()
-	out := c.Run(ctx, ws)
+	out := r.runSafely(ctx, ws, c)
 	if err := ctx.Err(); err != nil {
 		out = Fail(fmt.Sprintf("check did not complete: %v", err))
 	}
 	res := Result{Check: c.Name, Status: out.Status, Reason: out.Reason, Values: out.Values, Findings: capFindings(out.Findings, ws.Policy.Limits.FindingsListed), Seconds: r.Now().Sub(t).Seconds()}
 	r.logResult(res, len(out.Findings))
 	return res
+}
+
+func (r Runner) runSafely(ctx context.Context, ws Workspace, c Check) (out Outcome) {
+	defer func() {
+		if p := recover(); p != nil {
+			r.Log.Error("gate check panicked", "check", c.Name, "panic", fmt.Sprint(p), "stack", string(debug.Stack()))
+			out = Fail(fmt.Sprintf(crashedFormat, p))
+			out.Values = map[string]float64{ValueCrashed: 1}
+		}
+	}()
+	return c.Run(ctx, ws)
 }
 
 func (r Runner) logResult(res Result, total int) {

@@ -32,7 +32,10 @@ const (
 	detailRestore = "rollback"
 )
 
-var ErrRejected = errors.New("delivery step rejected")
+var (
+	ErrRejected = errors.New("delivery step rejected")
+	ErrDisabled = errors.New("delivery disabled")
+)
 
 type Step struct {
 	Repo   string `json:"repo"`
@@ -44,7 +47,7 @@ type Step struct {
 }
 
 type Notifier interface {
-	Notify(ctx context.Context, steps []Step)
+	Notify(ctx context.Context, steps []Step) error
 }
 
 func RepoLabel(repo string) string {
@@ -96,15 +99,19 @@ type HTTPNotifier struct {
 	Log    *slog.Logger
 }
 
-func (n HTTPNotifier) Notify(ctx context.Context, steps []Step) {
-	if n.URL == "" || len(steps) == 0 {
-		return
+func (n HTTPNotifier) Notify(ctx context.Context, steps []Step) error {
+	if n.URL == "" {
+		return ErrDisabled
+	}
+	if len(steps) == 0 {
+		return nil
 	}
 	if err := n.send(ctx, steps); err != nil {
 		n.Log.Warn("delivery steps not sent", "error", withoutURL(err), "steps", len(steps))
-		return
+		return err
 	}
 	n.Log.Info("delivery steps sent", "steps", len(steps))
+	return nil
 }
 
 func withoutURL(err error) string {
@@ -140,4 +147,4 @@ func (n HTTPNotifier) send(ctx context.Context, steps []Step) error {
 
 type Discard struct{}
 
-func (Discard) Notify(context.Context, []Step) {}
+func (Discard) Notify(context.Context, []Step) error { return ErrDisabled }

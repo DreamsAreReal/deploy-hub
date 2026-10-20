@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -187,7 +188,7 @@ func TestReportRecordsBlockedVerdict(t *testing.T) {
 	testutil.True(t, e.metrics.has(obs.MetricGateCheckDuration, obs.Labels{obs.LabelCheck: checkMutation}), "check duration")
 	testutil.True(t, !e.metrics.has(obs.MetricGateCheckVerdict, obs.Labels{obs.LabelCheck: checkDAST}), "n/a check emits no pass metric")
 	testutil.True(t, e.metrics.has(obs.MetricOperationsTotal, obs.Labels{obs.LabelAction: "gate", obs.LabelResult: "fail"}), "journal counter")
-	testutil.Contains(t, e.logs.String(), `"msg":"gate check failed"`, `"check":"mutation"`, "a.go:1 survived", `"msg":"gate check not applicable"`, `"msg":"gate check passed"`)
+	testutil.Contains(t, e.logs.String(), `"level":"WARN","msg":"gate check failed"`, `"check":"mutation"`, "a.go:1 survived", `"msg":"gate check not applicable"`, `"msg":"gate check passed"`)
 	testutil.Equal(t, e.exec.Count("docker"), 0)
 	testutil.Equal(t, registry.LoadState(e.appDir), registry.DeployState{})
 	e.expectLog("gate verdict recorded")
@@ -260,7 +261,7 @@ func TestReportRequestShape(t *testing.T) {
 
 func TestOIDCVerifierUsesFetchedKeys(t *testing.T) {
 	cache := filepath.Join(t.TempDir(), "jwks.json")
-	v := OIDCVerifier{Fetcher: oidc.Fetcher{Client: &http.Client{}, URL: "http://127.0.0.1:1/jwks", Cache: cache}}
+	v := OIDCVerifier{Fetcher: oidc.Fetcher{Client: &http.Client{}, URL: "http://127.0.0.1:1/jwks", Cache: cache, Log: slog.New(slog.DiscardHandler)}}
 	_, err := v.Verify(context.Background(), "a.b.c", oidc.Expect{})
 	testutil.Is(t, err, oidc.ErrKeys)
 	key, err := rsa.GenerateKey(rand.Reader, 2048)

@@ -340,6 +340,7 @@ root SSH to. `<vps>` is the server address.
 
 9. **Observability** (recommended): the shared logs/metrics stack lives in its
    own repo, [DreamsAreReal/observability](https://github.com/DreamsAreReal/observability).
+   Load the hub's alert rules into it (see "Alerts" under Observability).
 
 Verify the hub answers: `VPS_ADDR=<vps> go run ./cmd/deploy-hub onboard status`
 prints a header (an empty app list is fine on a fresh hub).
@@ -504,10 +505,21 @@ the previous sha; on a first deploy the app is stopped.
 
 Logs — every server command writes JSON lines to
 `/opt/deploy-hub/logs/<command>.log`; `gate` and `tools` log JSON to stderr in
-CI (each check, its values and findings; mutation progress). To ship the server
+CI (each check, its values and findings; mutation progress). Every command logs
+`command started` and `command finished` (exit code, result, duration, number
+of warning and error records). A panic in a command or in one gate check is
+recovered and logged with its stack (`command panicked`, `gate check
+panicked`); the command exits 1, the crashed check fails with the value
+`crashed=1` and the other checks still run. To ship the server
 logs to VictoriaLogs, the observability stack's Vector needs a `file` source
 over `/opt/deploy-hub/logs/*.log`. Secrets (registry token, OIDC token, deploy
 key, `.env` content) are never logged.
+
+A CI step that fails before the gate wrote a verdict (checkout, toolchain,
+build inputs, image build, or the gate itself crashing or timing out) is still
+reported: the deploy workflow sends a one-check verdict named `ci-<step>`, so
+the journal records `gate fail`, the tracker gets `checks fail` and the
+metrics show which step broke.
 
 ### Delivery steps
 
@@ -558,6 +570,55 @@ time quantiles are recording rules in the observability repo
 | `deploy_hub_prune_removed_images`, `deploy_hub_prune_kept_images` | app | last prune |
 | `deploy_hub_caddy_routes`, `deploy_hub_caddy_sync_success`, `deploy_hub_caddy_reload` | — | last route sync |
 | `deploy_hub_provision_created_resources` | app | files/lines created by the last provision |
+| `deploy_hub_command_exit_code` | command | exit code of a server command run (`runner`, `caddy-sync`, `prune`, `provision`, `facts`); one sample per run |
+| `deploy_hub_command_duration_seconds` | command, result | run time; result `ok`, `fail`, `usage` or `panic` |
+| `deploy_hub_command_panicked` | command | 1 when the run recovered a panic |
+| `deploy_hub_command_log_records` | command, level | warning and error log records of the run |
+| `deploy_hub_request` | verb, app | one sample per runner request for a registered app (`app="-"` for `status`) |
+| `deploy_hub_request_refused` | verb, reason | one sample per refusal; reason `bad-request`, `unknown-app`, `bad-tag`, `bad-compose`, `no-identity`, `identity-unverified`, `no-repo-binding`, `not-gated`, `bad-digest`, `bad-verdict` |
+| `deploy_hub_delivery_success` | — | 1/0 for the tracker post of the run (absent when delivery is off or there was nothing to post) |
+| `deploy_hub_journal_readable` | — | 0 when `deploys.log` could not be read; the journal counters are then not pushed |
+
+### Alerts
+
+[`server/vmalert/deploy-hub.yml`](server/vmalert/deploy-hub.yml) holds the
+vmalert rules over these metrics: a hub that pushed nothing for 5 minutes, a
+panic, error log records, a failed server command, a failed deploy, redeploy or
+rollback, a gate rejection (per check, `ci-<step>` included), a crashed gate
+check, any refused request, an app unhealthy for 5 minutes, a failed Caddy
+sync, a deploy waiting over 120 s for the lock, a failed tracker post and an
+unreadable journal. `go test ./internal/obs` fails when a rule uses a metric
+that the code does not declare, or when a problem metric has no rule.
+
+To load them, copy the file into the observability stack's `rules/` directory
+and add `-rule=/etc/vmalert/deploy-hub.yml` to its `vmalert-metrics`
+service. Check a change before shipping it:
+
+```
+docker run --rm -v $PWD/server/vmalert:/r:ro victoriametrics/vmalert:v1.152.0 -dryRun -rule=/r/deploy-hub.yml
+```
+
+### Usage analytics
+
+Event metrics (`deploy_hub_request`, `deploy_hub_request_refused`, the gate
+gauges, `deploy_hub_command_*`) get one sample per event, so counting raw
+samples over a window counts events. Queries for VictoriaMetrics:
+
+| Question | Query |
+|---|---|
+| Runner requests by verb and app, last 30 days | `sum by (verb, app) (count_over_time(deploy_hub_request[30d]))` |
+| Refusals by reason | `sum by (reason) (count_over_time(deploy_hub_request_refused[30d]))` |
+| Gate runs per app | `count_over_time(deploy_hub_gate_passed[30d])` |
+| Which checks block deploys most | `sort_desc(sum by (check) (count_over_time(deploy_hub_gate_check_passed[30d]) - sum_over_time(deploy_hub_gate_check_passed[30d])))` |
+| Slowest checks | `topk(5, max by (check) (max_over_time(deploy_hub_gate_check_duration_seconds[30d])))` |
+| Coverage, mutation score, duplication trend | `deploy_hub_gate_check_value{check="mutation"}` (and `line-coverage`, `branch-coverage`, `duplication`) |
+| CI failures before the gate | `sum by (check) (count_over_time(deploy_hub_gate_check_passed{check=~"ci-.*"}[30d]))` |
+| Failed deploys and rollbacks | `sum by (app, action) (increase_prometheus(deploy_hub_operations_total{result="fail"}[30d]))` |
+| Server command runs and failures | `sum by (command, result) (count_over_time(deploy_hub_command_duration_seconds[30d]))` |
+| Error log records per command | `sum by (command) (sum_over_time(deploy_hub_command_log_records{level="error"}[30d]))` |
+
+Per-app HTTP traffic comes from the Caddy access log in VictoriaLogs
+(`log_type:access host:<app host>`), not from these metrics.
 
 ## HTTPS routing
 

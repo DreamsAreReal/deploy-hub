@@ -43,14 +43,14 @@ func (s *Service) swap(ctx context.Context, op *operation, conf registry.AppConf
 	}
 	standby := s.standbySpec(ctx, op.dir, name, old, ref, t.Port)
 	standby.HostPort = caddy.StandbyPort(apps, op.app)
-	s.Docker.Remove(ctx, name)
+	if err := s.Docker.Remove(ctx, name); err != nil {
+		s.Log.Debug("no leftover standby removed", "standby", name, "error", err.Error())
+	}
 	if hostPort, err := strconv.Atoi(standby.HostPort); err != nil || s.Listening(hostPort) {
 		s.Err.Println(msgNoStandbyPort)
 		s.Log.Warn("no free standby port", "app", op.app, "port", standby.HostPort)
 		return s.recreate(ctx, op, conf, ref, t), false
 	}
-	// The Caddyfile must list the standby upstream before the standby
-	// starts; reloading now, with no standby yet, is harmless.
 	s.Router.Sync(ctx)
 	drain := false
 	defer func() { s.cleanupStandby(ctx, name, drain) }()
@@ -101,10 +101,6 @@ func (s *Service) gateStandby(ctx context.Context, app string, t health.Target, 
 	return ok
 }
 
-// cleanupStandby removes the standby. Caddy lists the standby port next to
-// the permanent one and fails over between them by itself (no reload); once
-// the permanent service was recreated, the standby stays up for caddy.Settle
-// so Caddy is back on the permanent port before the standby goes away.
 func (s *Service) cleanupStandby(ctx context.Context, name string, drain bool) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 	defer cancel()
@@ -113,6 +109,9 @@ func (s *Service) cleanupStandby(ctx context.Context, name string, drain bool) {
 			s.Log.Warn("standby drain cut short", "standby", name, "error", err.Error())
 		}
 	}
-	s.Docker.Remove(ctx, name)
+	if err := s.Docker.Remove(ctx, name); err != nil {
+		s.Log.Error("standby not removed, it keeps its memory", "standby", name, "error", err.Error())
+		return
+	}
 	s.Log.Info("standby cleaned up", "standby", name)
 }

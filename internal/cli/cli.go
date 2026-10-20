@@ -3,11 +3,13 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/user"
+	"runtime/debug"
 	"strconv"
 	"time"
 
@@ -83,19 +85,19 @@ type App struct {
 }
 
 type handler struct {
-	run       func(ctx context.Context, a *App, ex procexec.Runner, args []string) int
-	binaries  []string
-	logToFile bool
-	verbose   bool
+	run      func(ctx context.Context, a *App, ex procexec.Runner, args []string) int
+	binaries []string
+	onServer bool
+	verbose  bool
 }
 
 var handlers = map[string]handler{
-	CmdRunner:    {run: runRunner, binaries: []string{binDocker, binSudo}, logToFile: true},
+	CmdRunner:    {run: runRunner, binaries: []string{binDocker, binSudo}, onServer: true},
 	CmdRender:    {run: runRender},
-	CmdCaddySync: {run: runCaddySync, binaries: []string{binCaddy, binSystemctl}, logToFile: true},
-	CmdPrune:     {run: runPrune, binaries: []string{binDocker}, logToFile: true},
-	CmdProvision: {run: runProvision, binaries: []string{binCaddy, binSystemctl}, logToFile: true},
-	CmdFacts:     {run: runFacts, logToFile: true},
+	CmdCaddySync: {run: runCaddySync, binaries: []string{binCaddy, binSystemctl}, onServer: true},
+	CmdPrune:     {run: runPrune, binaries: []string{binDocker}, onServer: true},
+	CmdProvision: {run: runProvision, binaries: []string{binCaddy, binSystemctl}, onServer: true},
+	CmdFacts:     {run: runFacts, onServer: true},
 	CmdOnboard:   {run: runOnboard, binaries: []string{binGH, binGit, binSSH, onboard.SSHKeygen}},
 	CmdGate:      {run: runGate, binaries: gateBinaries, verbose: true},
 	CmdTools:     {run: runTools, binaries: []string{tools.GoBinary, tools.TarBinary}, verbose: true},
@@ -139,38 +141,54 @@ func Run(ctx context.Context, args []string, env Env, stdio IO, deps Deps) int {
 		stderr.Println(err.Error())
 		return ExitFail
 	}
-	log, closeLog := openLogger(cfg, args[0], h, stdio.Stderr)
+	counts := &obs.LevelCounts{}
+	log, closeLog := openLogger(cfg, args[0], h, stdio.Stderr, counts)
 	defer closeLog()
 	a := &App{Config: cfg, IO: stdio, Out: stdout, Err: stderr, Now: deps.Now, Log: log, Owner: deps.Owner, Exec: deps.Exec, Checks: deps.Checks}
 	started := time.Now()
-	code := h.run(ctx, a, a.Exec(h.binaries...), args[1:])
+	log.Info("command started", "args", len(args)-1)
+	code, panicked := a.invoke(ctx, h, args[1:])
 	if werr := errors.Join(stdout.Err(), stderr.Err()); werr != nil {
 		log.Error("output write failed", "error", werr.Error())
 		code = ExitFail
 	}
-	log.Info("command finished", "exit_code", code, "duration_seconds", time.Since(started).Seconds())
+	run := obs.CommandRun{Command: args[0], ExitCode: code, Panicked: panicked, Seconds: time.Since(started).Seconds(), Logs: counts}
+	log.Info("command finished", "exit_code", code, "result", run.Result(), "duration_seconds", run.Seconds, "warnings", counts.Warnings(), "errors", counts.Errors())
+	if h.onServer {
+		a.metrics().Push(context.WithoutCancel(ctx), run.Samples())
+	}
 	return code
 }
 
-func openLogger(cfg Config, command string, h handler, stderr io.Writer) (*slog.Logger, func()) {
+func (a *App) invoke(ctx context.Context, h handler, args []string) (code int, panicked bool) {
+	defer func() {
+		if p := recover(); p != nil {
+			a.Log.Error("command panicked", "panic", fmt.Sprint(p), "stack", string(debug.Stack()))
+			code, panicked = ExitFail, true
+		}
+	}()
+	return h.run(ctx, a, a.Exec(h.binaries...), args), false
+}
+
+func openLogger(cfg Config, command string, h handler, stderr io.Writer, counts *obs.LevelCounts) (*slog.Logger, func()) {
 	level := obs.ParseLevel(cfg.LogLevel)
 	path := cfg.LogFile
-	if path == "" && h.logToFile {
+	if path == "" && h.onServer {
 		path = cfg.Paths.LogFile(command)
 	}
 	if path == "" {
 		if cfg.LogLevel == "" && !h.verbose {
 			level = slog.LevelWarn
 		}
-		return obs.NewLogger(stderr, level, command), func() {}
+		return obs.NewLogger(stderr, level, command, counts), func() {}
 	}
 	f, err := obs.OpenLogFile(path)
 	if err != nil {
-		l := obs.NewLogger(stderr, slog.LevelWarn, command)
+		l := obs.NewLogger(stderr, slog.LevelWarn, command, counts)
 		l.Warn("log file unavailable, logging to stderr", "path", path, "error", err.Error())
 		return l, func() {}
 	}
-	return obs.NewLogger(f, level, command), func() { _ = f.Close() }
+	return obs.NewLogger(f, level, command, counts), func() { _ = f.Close() }
 }
 
 func (a *App) metrics() obs.Pusher {

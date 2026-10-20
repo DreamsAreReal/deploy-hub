@@ -55,7 +55,7 @@ func (s *Service) recordGate(app, tag string, v gate.Verdict) {
 	s.record(journal.Entry{App: app, Sha7: registry.Sha7(tag), Action: journal.ActionGate, Result: resultOf(v.Passed), Seconds: int(v.Seconds)})
 	own := boolLabel(v.Own)
 	s.samples = append(s.samples,
-		obs.Sample{Name: obs.MetricGateVerdict, Labels: obs.Labels{obs.LabelApp: app, obs.LabelOwn: own}, Value: boolValue(v.Passed)},
+		obs.Sample{Name: obs.MetricGateVerdict, Labels: obs.Labels{obs.LabelApp: app, obs.LabelOwn: own}, Value: obs.Bool(v.Passed)},
 		obs.Sample{Name: obs.MetricGateDuration, Labels: obs.Labels{obs.LabelApp: app}, Value: v.Seconds},
 		obs.Sample{Name: obs.MetricGateFailedChecks, Labels: obs.Labels{obs.LabelApp: app}, Value: float64(len(v.Failed()))},
 	)
@@ -73,14 +73,14 @@ func (s *Service) recordCheck(app, tag string, r gate.Result) {
 	}
 	labels := obs.Labels{obs.LabelApp: app, obs.LabelCheck: r.Check}
 	s.samples = append(s.samples,
-		obs.Sample{Name: obs.MetricGateCheckVerdict, Labels: labels, Value: boolValue(r.Status == gate.StatusPass)},
+		obs.Sample{Name: obs.MetricGateCheckVerdict, Labels: labels, Value: obs.Bool(r.Status == gate.StatusPass)},
 		obs.Sample{Name: obs.MetricGateCheckDuration, Labels: labels, Value: r.Seconds},
 	)
 	for name, value := range r.Values {
 		s.samples = append(s.samples, obs.Sample{Name: obs.MetricGateCheckValue, Labels: obs.Labels{obs.LabelApp: app, obs.LabelCheck: r.Check, obs.LabelName: name}, Value: value})
 	}
 	if r.Status == gate.StatusFail {
-		s.Log.Error("gate check failed", "app", app, "tag", tag, "check", r.Check, "reason", r.Reason, "values", r.Values, "findings", r.Findings)
+		s.Log.Warn("gate check failed", "app", app, "tag", tag, "check", r.Check, "reason", r.Reason, "values", r.Values, "findings", r.Findings)
 		return
 	}
 	s.Log.Info("gate check passed", "app", app, "tag", tag, "check", r.Check, "values", r.Values)

@@ -56,6 +56,8 @@ type sim struct {
 	mainName     string
 	pullErr      error
 	loginErr     error
+	logoutErr    error
+	rmErr        error
 	standbyErr   error
 	validateErr  error
 	stopErr      error
@@ -92,6 +94,8 @@ func (s *sim) handle(c procexec.Command) (procexec.Result, error) {
 	switch a[0] {
 	case "login":
 		return procexec.Result{}, s.loginErr
+	case "logout":
+		return procexec.Result{}, s.logoutErr
 	case "pull":
 		if s.pullErr != nil {
 			return procexec.Result{Stderr: "manifest unknown"}, s.pullErr
@@ -108,6 +112,9 @@ func (s *sim) handle(c procexec.Command) (procexec.Result, error) {
 	case "run":
 		return s.run(a)
 	case "rm":
+		if s.rmErr != nil {
+			return procexec.Result{}, s.rmErr
+		}
 		delete(s.running, a[2])
 	}
 	return procexec.Result{}, nil
@@ -231,6 +238,11 @@ func (c *capturePusher) Push(_ context.Context, s []obs.Sample) {
 }
 
 func (c *capturePusher) has(name string, labels obs.Labels) bool {
+	_, ok := c.value(name, labels)
+	return ok
+}
+
+func (c *capturePusher) value(name string, labels obs.Labels) (float64, bool) {
 	for _, s := range c.samples {
 		if s.Name != name {
 			continue
@@ -240,10 +252,10 @@ func (c *capturePusher) has(name string, labels obs.Labels) bool {
 			match = match && s.Labels[k] == v
 		}
 		if match {
-			return true
+			return s.Value, true
 		}
 	}
-	return false
+	return 0, false
 }
 
 type fakeVerifier struct {

@@ -43,16 +43,8 @@ const (
 
 	standbyPortOffset = 10000
 
-	// FailDuration is how long Caddy keeps an upstream out of rotation after
-	// one failed request. Traffic moves between the permanent port and the
-	// standby port of a blue-green deploy only through these passive health
-	// checks, never through a reload: a reload leaves the previous server
-	// alive on open HTTP/2 connections with the previous upstreams (#407).
 	FailDuration = 5 * time.Second
-	// Settle is how long a blue-green deploy waits after the permanent port
-	// is healthy again before it removes the standby, so Caddy has forgotten
-	// the failures of the recreate and sends nothing to the standby any more.
-	Settle = FailDuration + time.Second
+	Settle       = FailDuration + time.Second
 )
 
 var (
@@ -86,10 +78,6 @@ type Route struct {
 	Standby string
 }
 
-// Routes lists the apps with a port. Each gets the fixed loopback port of
-// its blue-green standby, port+10000, as a second upstream, unless that is
-// past 65535 or is the port of another app: Caddy must never fail over to
-// something that is not this app.
 func Routes(apps []registry.Entry) []Route {
 	var out []Route
 	taken := map[string]bool{}
@@ -110,8 +98,6 @@ func Routes(apps []registry.Entry) []Route {
 	return out
 }
 
-// StandbyPort is the standby port the Caddyfile lists for app, or "" when it
-// has none and a deploy has to recreate in place.
 func StandbyPort(apps []registry.Entry, app string) string {
 	for _, r := range Routes(apps) {
 		if r.App == app {
@@ -158,21 +144,14 @@ type syncResult struct {
 func (s Syncer) Run(ctx context.Context) error {
 	res, err := s.sync(ctx)
 	samples := []obs.Sample{
-		{Name: obs.MetricCaddySyncSuccess, Labels: obs.Labels{}, Value: boolValue(err == nil)},
-		{Name: obs.MetricCaddyReloads, Labels: obs.Labels{}, Value: boolValue(res.reloaded)},
+		{Name: obs.MetricCaddySyncSuccess, Labels: obs.Labels{}, Value: obs.Bool(err == nil)},
+		{Name: obs.MetricCaddyReloads, Labels: obs.Labels{}, Value: obs.Bool(res.reloaded)},
 	}
 	if err == nil {
 		samples = append(samples, obs.Sample{Name: obs.MetricCaddyRoutes, Labels: obs.Labels{}, Value: float64(res.routes)})
 	}
 	s.Metrics.Push(ctx, samples)
 	return err
-}
-
-func boolValue(v bool) float64 {
-	if v {
-		return 1
-	}
-	return 0
 }
 
 func (s Syncer) sync(ctx context.Context) (syncResult, error) {
@@ -202,9 +181,6 @@ func (s Syncer) sync(ctx context.Context) (syncResult, error) {
 	return syncResult{reloaded: true, routes: len(routes)}, nil
 }
 
-// withoutForeignStandby drops a standby upstream that something already
-// listens on. caddy-sync runs before a blue-green standby starts and after
-// it is gone, so a listener there is not this app.
 func (s Syncer) withoutForeignStandby(routes []Route) []Route {
 	for i, r := range routes {
 		if port, _ := strconv.Atoi(r.Standby); r.Standby != "" && s.Listening(port) {
