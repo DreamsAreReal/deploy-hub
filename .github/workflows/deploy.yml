@@ -37,6 +37,7 @@ jobs:
       OIDC_AUDIENCE: deploy-hub
     steps:
       - name: Validate inputs
+        id: inputs
         env:
           DOCKERFILE: ${{ inputs.dockerfile }}
         run: |
@@ -53,6 +54,7 @@ jobs:
         run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
 
       - name: Check out
+        id: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
@@ -139,13 +141,28 @@ jobs:
           printf '%s\n' "$HOST_KEY" >> ~/.ssh/known_hosts
 
       - name: Report the verdict to the hub
-        if: always()
+        if: always() && steps.inputs.outcome == 'success'
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
+          CHECKOUT: ${{ steps.checkout.outcome }}
+          TOOLCHAIN: ${{ steps.hub.outcome }}
+          BUILD_INPUTS: ${{ steps.ctx.outcome }}
+          IMAGE_BUILD: ${{ steps.image.outcome }}
         run: |
           set -euo pipefail
           verdict="$RUNNER_TEMP/gate/verdict.json"
-          test -s "$verdict" || { echo "no gate verdict was produced"; exit 1; }
+          if [ ! -s "$verdict" ]; then
+            stage=gate
+            for pair in "checkout=$CHECKOUT" "toolchain=$TOOLCHAIN" "build-inputs=$BUILD_INPUTS" "image-build=$IMAGE_BUILD"; do
+              if [ "${pair#*=}" != success ]; then stage="${pair%%=*}"; break; fi
+            done
+            echo "no gate verdict was produced; reporting the failed step: $stage"
+            mkdir -p "$RUNNER_TEMP/gate"
+            jq -n --arg app "$APP" --arg repo "$GITHUB_REPOSITORY" --arg commit "$GITHUB_SHA" --arg check "ci-$stage" \
+              '{app: $app, repo: $repo, commit: $commit, own: false, passed: false, seconds: 0,
+                results: [{check: $check, status: "fail", reason: "the CI step failed before the gate produced a verdict", seconds: 0}]}' \
+              > "$verdict"
+          fi
           oidc="$(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$OIDC_AUDIENCE" | jq -r .value)"
           {
