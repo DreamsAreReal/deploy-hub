@@ -95,6 +95,24 @@ func refusalMessage(err error) string {
 	return msgRefused
 }
 
+func refusalReason(msg string) string {
+	if reason, ok := refusalReasons[msg]; ok {
+		return reason
+	}
+	return reasonOther
+}
+
+func verbOf(raw string) string {
+	f := strings.Fields(raw)
+	if len(f) == 0 {
+		return verbInvalid
+	}
+	if _, known := maxWords[f[0]]; known {
+		return f[0]
+	}
+	return verbInvalid
+}
+
 func Fingerprint(raw string) string {
 	var b strings.Builder
 	for _, r := range strings.ReplaceAll(raw, " ", "_") {

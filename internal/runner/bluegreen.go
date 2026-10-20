@@ -43,7 +43,9 @@ func (s *Service) swap(ctx context.Context, op *operation, conf registry.AppConf
 	}
 	standby := s.standbySpec(ctx, op.dir, name, old, ref, t.Port)
 	standby.HostPort = caddy.StandbyPort(apps, op.app)
-	s.Docker.Remove(ctx, name)
+	if err := s.Docker.Remove(ctx, name); err != nil {
+		s.Log.Debug("no leftover standby removed", "standby", name, "error", err.Error())
+	}
 	if hostPort, err := strconv.Atoi(standby.HostPort); err != nil || s.Listening(hostPort) {
 		s.Err.Println(msgNoStandbyPort)
 		s.Log.Warn("no free standby port", "app", op.app, "port", standby.HostPort)
@@ -113,6 +115,9 @@ func (s *Service) cleanupStandby(ctx context.Context, name string, drain bool) {
 			s.Log.Warn("standby drain cut short", "standby", name, "error", err.Error())
 		}
 	}
-	s.Docker.Remove(ctx, name)
+	if err := s.Docker.Remove(ctx, name); err != nil {
+		s.Log.Error("standby not removed, it keeps its memory", "standby", name, "error", err.Error())
+		return
+	}
 	s.Log.Info("standby cleaned up", "standby", name)
 }

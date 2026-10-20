@@ -72,7 +72,7 @@ func runRunner(ctx context.Context, a *App, ex procexec.Runner, args []string) i
 		Metrics:   a.metrics(),
 		Delivery:  a.delivery(),
 		Identity: runner.OIDCVerifier{Fetcher: oidc.Fetcher{
-			Client: &http.Client{}, URL: a.Config.JWKSURL, Cache: a.Config.JWKSCache,
+			Client: &http.Client{}, URL: a.Config.JWKSURL, Cache: a.Config.JWKSCache, Log: a.Log,
 		}},
 		Audience:    a.Config.Audience,
 		WorkflowRef: a.Config.WorkflowRef(),

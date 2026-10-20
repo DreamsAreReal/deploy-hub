@@ -68,7 +68,7 @@ func TestHTTPNotifierPostsAJSONArray(t *testing.T) {
 	}))
 	defer tracker.Close()
 	n := delivery.HTTPNotifier{URL: tracker.URL, Client: tracker.Client(), Log: slog.New(slog.DiscardHandler)}
-	n.Notify(t.Context(), delivery.FromEntry(entry(journal.ActionDeploy, journal.ResultOK), "Owner/web"))
+	testutil.NoErr(t, n.Notify(t.Context(), delivery.FromEntry(entry(journal.ActionDeploy, journal.ResultOK), "Owner/web")))
 	testutil.Equal(t, len(got), 2)
 	testutil.Equal(t, got[1].Step, delivery.StepLive)
 }
@@ -77,7 +77,18 @@ func TestFailedPostKeepsTheSecretOutOfTheLog(t *testing.T) {
 	var logs strings.Builder
 	n := delivery.HTTPNotifier{URL: "http://127.0.0.1:1/api/deliveries/dl_secret", Client: &http.Client{},
 		Log: slog.New(slog.NewTextHandler(&logs, nil))}
-	n.Notify(t.Context(), delivery.FromEntry(entry(journal.ActionDeploy, journal.ResultOK), "Owner/web"))
+	testutil.Fails(t, n.Notify(t.Context(), delivery.FromEntry(entry(journal.ActionDeploy, journal.ResultOK), "Owner/web")))
 	testutil.True(t, strings.Contains(logs.String(), "delivery steps not sent"), "failure logged: "+logs.String())
 	testutil.True(t, !strings.Contains(logs.String(), "dl_secret"), "secret leaked: "+logs.String())
+}
+
+func TestNotifierOutcomeWithoutAPostOrAURL(t *testing.T) {
+	calls := 0
+	tracker := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls++ }))
+	defer tracker.Close()
+	steps := delivery.FromEntry(entry(journal.ActionDeploy, journal.ResultOK), "Owner/web")
+	testutil.NoErr(t, delivery.HTTPNotifier{URL: tracker.URL, Client: tracker.Client(), Log: slog.New(slog.DiscardHandler)}.Notify(t.Context(), nil))
+	testutil.Is(t, delivery.HTTPNotifier{Client: tracker.Client(), Log: slog.New(slog.DiscardHandler)}.Notify(t.Context(), steps), delivery.ErrDisabled)
+	testutil.Is(t, delivery.Discard{}.Notify(t.Context(), steps), delivery.ErrDisabled)
+	testutil.Equal(t, calls, 0)
 }

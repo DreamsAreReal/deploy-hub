@@ -29,6 +29,10 @@ const (
 	MetricCommandDuration      = "deploy_hub_command_duration_seconds"
 	MetricCommandPanicked      = "deploy_hub_command_panicked"
 	MetricCommandLogRecords    = "deploy_hub_command_log_records"
+	MetricRequest              = "deploy_hub_request"
+	MetricRequestRefused       = "deploy_hub_request_refused"
+	MetricDeliverySuccess      = "deploy_hub_delivery_success"
+	MetricJournalReadable      = "deploy_hub_journal_readable"
 
 	LabelApp     = "app"
 	LabelAction  = "action"
@@ -40,6 +44,7 @@ const (
 	LabelVerb    = "verb"
 	LabelCommand = "command"
 	LabelLevel   = "level"
+	LabelReason  = "reason"
 
 	LevelWarn  = "warn"
 	LevelError = "error"

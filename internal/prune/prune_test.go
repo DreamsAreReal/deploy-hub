@@ -21,12 +21,13 @@ import (
 var errSim = errors.New("simulated")
 
 type images struct {
-	tags     map[string][]string
-	removed  []string
-	failRm   string
-	failList bool
-	pruned   bool
-	listed   []string
+	tags      map[string][]string
+	removed   []string
+	failRm    string
+	failList  bool
+	failPrune bool
+	pruned    bool
+	listed    []string
 }
 
 func (i *images) ImageTags(_ context.Context, image string) ([]string, error) {
@@ -45,7 +46,13 @@ func (i *images) RemoveImage(_ context.Context, ref string) error {
 	return nil
 }
 
-func (i *images) PruneDangling(context.Context) { i.pruned = true }
+func (i *images) PruneDangling(context.Context) error {
+	i.pruned = true
+	if i.failPrune {
+		return errSim
+	}
+	return nil
+}
 
 type pusher struct{ samples []obs.Sample }
 
@@ -153,6 +160,12 @@ func TestRunToleratesFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	testutil.Contains(t, logs3.String(), `"msg":"journal append failed"`)
+	p4, im4, _, _, logs4 := setup(t)
+	im4.failPrune = true
+	testutil.NoErr(t, p4.Run(context.Background()))
+	testutil.Contains(t, logs4.String(), `"msg":"dangling image prune failed"`)
+	testutil.Contains(t, logs4.String(), `"msg":"app.conf unreadable, images kept","app":"noconf"`)
+	testutil.Excludes(t, logs4.String(), `"app":"noimage"`)
 }
 
 func TestRunErrors(t *testing.T) {

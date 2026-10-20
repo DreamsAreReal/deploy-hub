@@ -121,7 +121,7 @@ func (s *Service) pull(ctx context.Context, op *operation, image string, meta Me
 			s.record(journal.Entry{App: op.app, Sha7: op.sha7, Action: journal.ActionDeploy, Result: journal.ResultFail, Seconds: s.since(op.t0)})
 			return false
 		}
-		defer s.Docker.Logout(context.WithoutCancel(ctx), hub.RegistryHost)
+		defer s.logout(context.WithoutCancel(ctx), op.app)
 	}
 	s.Out.Printf(msgPulling, pinned)
 	started := s.Now()
@@ -203,4 +203,10 @@ func (s *Service) stopFirstDeploy(ctx context.Context, op *operation, conf regis
 	err := s.Docker.ComposeStop(ctx, composePath(op.dir), conf.Image+":"+op.tag, dockerMain)
 	s.record(journal.Entry{App: op.app, Sha7: op.sha7, Action: journal.ActionStop, Result: resultOf(err == nil)})
 	s.Err.Println(msgFirstFail)
+}
+
+func (s *Service) logout(ctx context.Context, app string) {
+	if err := s.Docker.Logout(ctx, hub.RegistryHost); err != nil {
+		s.Log.Error("registry logout failed, credentials may remain in the docker config", "app", app, "registry", hub.RegistryHost, "error", err.Error())
+	}
 }

@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -260,7 +261,7 @@ func TestReportRequestShape(t *testing.T) {
 
 func TestOIDCVerifierUsesFetchedKeys(t *testing.T) {
 	cache := filepath.Join(t.TempDir(), "jwks.json")
-	v := OIDCVerifier{Fetcher: oidc.Fetcher{Client: &http.Client{}, URL: "http://127.0.0.1:1/jwks", Cache: cache}}
+	v := OIDCVerifier{Fetcher: oidc.Fetcher{Client: &http.Client{}, URL: "http://127.0.0.1:1/jwks", Cache: cache, Log: slog.New(slog.DiscardHandler)}}
 	_, err := v.Verify(context.Background(), "a.b.c", oidc.Expect{})
 	testutil.Is(t, err, oidc.ErrKeys)
 	key, err := rsa.GenerateKey(rand.Reader, 2048)

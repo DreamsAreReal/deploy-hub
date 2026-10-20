@@ -39,7 +39,10 @@ func (s *Service) status(ctx context.Context) int {
 		s.Log.Error("apps.list unreadable", "error", err.Error())
 		return ExitFail
 	}
-	entries, _ := s.Journal.Entries()
+	entries, err := s.Journal.Entries()
+	if err != nil {
+		s.Log.Warn("journal read failed", "error", err.Error())
+	}
 	s.Out.Println(statusHeader)
 	for _, a := range apps {
 		st := s.appStatus(ctx, a, journal.ForApp(entries, a.Name))

@@ -59,4 +59,34 @@ const (
 	wordBlocked         = "blocked"
 	labelYes            = "true"
 	labelNo             = "false"
+
+	verbInvalid      = "invalid"
+	reasonOther      = "other"
+	reasonBadRequest = "bad-request"
+	reasonUnknownApp = "unknown-app"
+	reasonBadTag     = "bad-tag"
+	reasonBadCompose = "bad-compose"
+	reasonNoIdentity = "no-identity"
+	reasonUnverified = "identity-unverified"
+	reasonNoRepo     = "no-repo-binding"
+	reasonNotGated   = "not-gated"
+	reasonBadDigest  = "bad-digest"
+	reasonBadVerdict = "bad-verdict"
 )
+
+var refusalReasons = map[string]string{
+	msgRefused:        reasonBadRequest,
+	msgUnknownApp:     reasonUnknownApp,
+	msgBadTag:         reasonBadTag,
+	msgBadMain:        reasonBadCompose,
+	msgBadHPort:       reasonBadCompose,
+	msgBadHMode:       reasonBadCompose,
+	msgBadCompose:     reasonBadCompose,
+	msgComposeInvalid: reasonBadCompose,
+	msgNoIdentity:     reasonNoIdentity,
+	msgUnverified:     reasonUnverified,
+	msgNoRepo:         reasonNoRepo,
+	msgNotGated:       reasonNotGated,
+	msgBadDigest:      reasonBadDigest,
+	msgBadVerdict:     reasonBadVerdict,
+}

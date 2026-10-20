@@ -23,7 +23,7 @@ const (
 type Images interface {
 	ImageTags(ctx context.Context, image string) ([]string, error)
 	RemoveImage(ctx context.Context, ref string) error
-	PruneDangling(ctx context.Context)
+	PruneDangling(ctx context.Context) error
 }
 
 type Pruner struct {
@@ -48,14 +48,20 @@ func (p Pruner) Run(ctx context.Context) error {
 	for _, a := range apps {
 		samples = append(samples, p.app(ctx, a, journal.ForApp(entries, a.Name))...)
 	}
-	p.Images.PruneDangling(ctx)
+	if err := p.Images.PruneDangling(ctx); err != nil {
+		p.Log.Warn("dangling image prune failed", "error", err.Error())
+	}
 	p.Metrics.Push(ctx, samples)
 	return nil
 }
 
 func (p Pruner) app(ctx context.Context, a registry.Entry, entries []journal.Entry) []obs.Sample {
 	conf, err := registry.LoadAppConf(a.Dir)
-	if err != nil || conf.Image == "" {
+	if err != nil {
+		p.Log.Warn("app.conf unreadable, images kept", "app", a.Name, "error", err.Error())
+		return nil
+	}
+	if conf.Image == "" {
 		return nil
 	}
 	started := p.Now()

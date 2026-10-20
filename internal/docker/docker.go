@@ -49,8 +49,9 @@ func (c Client) Login(ctx context.Context, registry, user, token string) error {
 	return err
 }
 
-func (c Client) Logout(ctx context.Context, registry string) {
-	_, _ = c.run(ctx, nil, "", "", "logout", registry)
+func (c Client) Logout(ctx context.Context, registry string) error {
+	_, err := c.run(ctx, nil, "", "", "logout", registry)
+	return err
 }
 
 func (c Client) Pull(ctx context.Context, ref string) (string, error) {
@@ -170,8 +171,9 @@ func (c Client) RunStandby(ctx context.Context, s Standby) error {
 	return err
 }
 
-func (c Client) Remove(ctx context.Context, container string) {
-	_, _ = c.run(ctx, nil, "", "", "rm", "-f", container)
+func (c Client) Remove(ctx context.Context, container string) error {
+	_, err := c.run(ctx, nil, "", "", "rm", "-f", container)
+	return err
 }
 
 func (c Client) ImageTags(ctx context.Context, image string) ([]string, error) {
@@ -187,8 +189,9 @@ func (c Client) RemoveImage(ctx context.Context, ref string) error {
 	return err
 }
 
-func (c Client) PruneDangling(ctx context.Context) {
-	_, _ = c.run(ctx, nil, "", "", "image", "prune", "-f")
+func (c Client) PruneDangling(ctx context.Context) error {
+	_, err := c.run(ctx, nil, "", "", "image", "prune", "-f")
+	return err
 }
 
 func firstLine(s string) string {

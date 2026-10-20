@@ -35,7 +35,7 @@ func TestLoginLogoutPull(t *testing.T) {
 	if err := c.Login(ctx, "ghcr.io", "actor", "tok"); err != nil {
 		t.Fatal(err)
 	}
-	c.Logout(ctx, "ghcr.io")
+	testutil.NoErr(t, c.Logout(ctx, "ghcr.io"))
 	if _, err := c.Pull(ctx, "img:sha-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -177,8 +177,8 @@ func TestImageCommands(t *testing.T) {
 	if err := c.RemoveImage(ctx, "img:sha-1"); err != nil {
 		t.Fatal(err)
 	}
-	c.Remove(ctx, standbyName)
-	c.PruneDangling(ctx)
+	testutil.NoErr(t, c.Remove(ctx, standbyName))
+	testutil.NoErr(t, c.PruneDangling(ctx))
 	want := []string{"docker images img --format {{.Tag}}", "docker rmi img:sha-1", "docker rm -f a-bg", "docker image prune -f"}
 	if !reflect.DeepEqual(f.Lines(), want) {
 		t.Fatalf("got %v", f.Lines())
@@ -187,4 +187,7 @@ func TestImageCommands(t *testing.T) {
 	if _, err := bad.ImageTags(ctx, "img"); !errors.Is(err, errBoom) {
 		t.Fatal("tags error")
 	}
+	testutil.Is(t, bad.Logout(ctx, "ghcr.io"), errBoom)
+	testutil.Is(t, bad.Remove(ctx, standbyName), errBoom)
+	testutil.Is(t, bad.PruneDangling(ctx), errBoom)
 }

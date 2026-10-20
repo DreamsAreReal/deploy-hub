@@ -83,12 +83,14 @@ func (s *Service) Dispatch(ctx context.Context, raw string, stdin io.Reader) int
 	}
 	s.Log.Info("request accepted", "verb", req.Verb, "app", req.App, "tag", req.Tag)
 	if req.Verb == VerbStatus {
+		s.requested(req.Verb, journal.NoValue)
 		return s.status(ctx)
 	}
 	entry, err := s.Apps.Lookup(req.App)
 	if err != nil {
 		return s.refuse(raw, msgUnknownApp)
 	}
+	s.requested(req.Verb, entry.Name)
 	switch req.Verb {
 	case VerbHistory:
 		return s.history(req.App)
@@ -101,9 +103,15 @@ func (s *Service) Dispatch(ctx context.Context, raw string, stdin io.Reader) int
 	}
 }
 
+func (s *Service) requested(verb, app string) {
+	s.samples = append(s.samples, obs.Sample{Name: obs.MetricRequest, Labels: obs.Labels{obs.LabelVerb: verb, obs.LabelApp: app}, Value: 1})
+}
+
 func (s *Service) refuse(raw, msg string) int {
 	s.Err.Println(msg)
-	s.Log.Warn("request refused", "reason", msg, "fingerprint", Fingerprint(raw))
+	reason, verb := refusalReason(msg), verbOf(raw)
+	s.Log.Warn("request refused", "reason", msg, "reason_code", reason, "verb", verb, "fingerprint", Fingerprint(raw))
+	s.samples = append(s.samples, obs.Sample{Name: obs.MetricRequestRefused, Labels: obs.Labels{obs.LabelVerb: verb, obs.LabelReason: reason}, Value: 1})
 	s.record(journal.Entry{App: journal.NoValue, Sha7: journal.NoValue, Action: journal.ActionRefuse, Result: fmt.Sprintf(deniedFormat, Fingerprint(raw))})
 	return ExitFail
 }
@@ -139,20 +147,30 @@ func (s *Service) repoOf(app string) string {
 }
 
 func (s *Service) pushDeliveries(ctx context.Context) {
-	if s.Delivery == nil {
+	if s.Delivery == nil || len(s.steps) == 0 {
 		return
 	}
-	s.Delivery.Notify(context.WithoutCancel(ctx), s.steps)
+	err := s.Delivery.Notify(context.WithoutCancel(ctx), s.steps)
+	if errors.Is(err, delivery.ErrDisabled) {
+		return
+	}
+	s.samples = append(s.samples, obs.Sample{Name: obs.MetricDeliverySuccess, Labels: obs.Labels{}, Value: obs.Bool(err == nil)})
 }
 
 func (s *Service) pushMetrics(ctx context.Context) {
+	samples := s.journalSamples()
+	s.Metrics.Push(context.WithoutCancel(ctx), append(samples, s.samples...))
+}
+
+func (s *Service) journalSamples() []obs.Sample {
 	entries, err := s.Journal.Entries()
+	readable := obs.Sample{Name: obs.MetricJournalReadable, Labels: obs.Labels{}, Value: obs.Bool(err == nil)}
 	if err != nil {
-		s.Log.Warn("journal read failed", "error", err.Error())
+		s.Log.Error("journal read failed, journal counters not pushed", "error", err.Error())
+		return []obs.Sample{readable}
 	}
 	names := s.registeredNames()
-	samples := append(obs.JournalSamples(journal.ForApps(entries, names), names), s.samples...)
-	s.Metrics.Push(context.WithoutCancel(ctx), samples)
+	return append(obs.JournalSamples(journal.ForApps(entries, names), names), readable)
 }
 
 func (s *Service) registeredNames() []string {
