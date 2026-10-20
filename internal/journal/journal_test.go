@@ -95,6 +95,13 @@ func TestForAppAndTail(t *testing.T) {
 	testutil.Equal(t, len(Tail(a, 0)), 0)
 }
 
+func TestForApps(t *testing.T) {
+	entries := append(queryFixture(), entry(NoValue, NoValue, ActionRefuse, "denied(x)", 8))
+	testutil.Equal(t, len(ForApps(entries, []string{"b"})), 2)
+	testutil.Equal(t, len(ForApps(entries, []string{"a", "b"})), 8)
+	testutil.Equal(t, len(ForApps(entries, nil)), 1)
+}
+
 func TestSuccessfulShas(t *testing.T) {
 	testutil.Equal(t, SuccessfulShas(ForApp(queryFixture(), "a")), []string{"1111111", "3333333"})
 	testutil.Equal(t, len(SuccessfulShas([]Entry{entry("a", "2222222", ActionDeploy, ResultFail, 1)})), 0)

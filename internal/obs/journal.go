@@ -8,10 +8,7 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/journal"
 )
 
-const (
-	refusedResult = "denied"
-	samplesPerKey = 2
-)
+const refusedResult = "denied"
 
 type opKey struct {
 	app, action, result string
@@ -29,8 +26,16 @@ func compareKeys(a, b opKey) int {
 	return cmp.Or(cmp.Compare(a.app, b.app), cmp.Compare(a.action, b.action), cmp.Compare(a.result, b.result))
 }
 
-func JournalSamples(entries []journal.Entry) []Sample {
+// JournalSamples counts the journal per app, action and result. The deploy ok
+// and fail counters of every app in apps start at 0, so the first failure of an
+// app is an increase of an existing series, not a new series a rate misses.
+func JournalSamples(entries []journal.Entry, apps []string) []Sample {
 	counts := map[opKey]int{}
+	for _, app := range apps {
+		for _, result := range []string{journal.ResultOK, journal.ResultFail} {
+			counts[opKey{app: app, action: journal.ActionDeploy, result: result}] = 0
+		}
+	}
 	last := map[opKey]float64{}
 	incidents := map[string]float64{}
 	for _, e := range entries {
@@ -42,13 +47,13 @@ func JournalSamples(entries []journal.Entry) []Sample {
 		}
 	}
 	keys := slices.SortedFunc(maps.Keys(counts), compareKeys)
-	out := make([]Sample, 0, len(keys)*samplesPerKey+len(incidents))
+	out := make([]Sample, 0, len(keys)+len(last)+len(incidents))
 	for _, k := range keys {
 		l := Labels{LabelApp: k.app, LabelAction: k.action, LabelResult: k.result}
-		out = append(out,
-			Sample{Name: MetricOperationsTotal, Labels: l, Value: float64(counts[k])},
-			Sample{Name: MetricLastOperationTime, Labels: l, Value: last[k]},
-		)
+		out = append(out, Sample{Name: MetricOperationsTotal, Labels: l, Value: float64(counts[k])})
+		if counts[k] > 0 {
+			out = append(out, Sample{Name: MetricLastOperationTime, Labels: l, Value: last[k]})
+		}
 	}
 	for _, app := range slices.Sorted(maps.Keys(incidents)) {
 		out = append(out, Sample{Name: MetricLastIncidentTime, Labels: Labels{LabelApp: app}, Value: incidents[app]})

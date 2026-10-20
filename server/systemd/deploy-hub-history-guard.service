@@ -1,0 +1,11 @@
+[Unit]
+Description=deploy-hub: dispatch history-guard in deploy-hub and tasks
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+DynamicUser=yes
+LoadCredential=github-header:/etc/deploy-hub/history-guard.header
+ExecStart=/usr/bin/curl -fsS --retry 3 --max-time 30 -X POST -H "Accept: application/vnd.github+json" -H @${CREDENTIALS_DIRECTORY}/github-header -d "{\"ref\":\"main\"}" https://api.github.com/repos/DreamsAreReal/deploy-hub/actions/workflows/history-guard.yml/dispatches
+ExecStart=/usr/bin/curl -fsS --retry 3 --max-time 30 -X POST -H "Accept: application/vnd.github+json" -H @${CREDENTIALS_DIRECTORY}/github-header -d "{\"ref\":\"main\"}" https://api.github.com/repos/DreamsAreReal/tasks/actions/workflows/history-guard.yml/dispatches

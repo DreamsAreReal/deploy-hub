@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -118,6 +119,17 @@ func ForApp(entries []Entry, app string) []Entry {
 	var out []Entry
 	for _, e := range entries {
 		if e.App == app {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// ForApps keeps the entries of the given apps and the app-less ones (refusals).
+func ForApps(entries []Entry, apps []string) []Entry {
+	var out []Entry
+	for _, e := range entries {
+		if e.App == NoValue || slices.Contains(apps, e.App) {
 			out = append(out, e)
 		}
 	}
