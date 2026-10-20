@@ -59,7 +59,7 @@ versions and checksums: [`policy/tools.yaml`](policy/tools.yaml).
 | Check | What blocks a deploy | Tool |
 |---|---|---|
 | `registration` | app missing from the policy or deployed from another repository | — |
-| `hygiene` | state/backup/debug/report files, keys, scanner-suppression files tracked in git | — |
+| `hygiene` | state/backup/debug/report files, keys, scanner-suppression files tracked in git, except the exact paths an app lists in `allowed_files` | — |
 | `comments` | any comment or documentation string in source and configuration files of any language (Python docstrings included); prose (`.md`, `.txt`, …) and tool-generated lockfiles are not source, `// indirect` is the only note allowed in `go.mod` | go/scanner, YAML parser, chroma lexers |
 | `markers` | work markers (the four listed in the policy) anywhere in tracked files | — |
 | `language` | a letter outside the Latin script in a tracked file, except under the app's `localized` paths (UI texts and their tests) | — |
@@ -196,6 +196,11 @@ itself is never load-tested.
 when the app declares an OpenAPI path) for the time budget in the policy; any
 alert of Low risk or above blocks the deploy.
 
+**Allowed files.** `allowed_files` lists exact paths (same pattern rules as
+`localized`) that an app may track although they match `forbidden_files`, for
+example the working notes `docs/STATE.md` of an app built with agents. Keys,
+`.env` and suppression files stay forbidden everywhere else.
+
 **Localized paths.** An app whose interface is not in English lists where its
 UI texts and their tests live: `dir/` matches that directory at any depth, a
 pattern without `/` matches the file name, any other pattern matches the whole
@@ -219,6 +224,7 @@ apps:
     memory: 256m
     env: [APP_MODE=test]     # non-secret settings the app needs to boot
     localized: [internal/texts/, "*_test.go"]  # UI texts and tests that may use another language
+    allowed_files: [docs/STATE.md]             # tracked although forbidden_files matches it
     dast: {target: /api, spider: 1m, max_time: 10m}
     load: {rate: 20, duration: 30s, p95: 300ms, max_error_percent: 0, concurrency: 10, paths: [/health]}
     scenarios:

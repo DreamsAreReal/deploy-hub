@@ -57,6 +57,7 @@ apps:
     repo: Owner/hub
     kind: binary
     localized: [internal/texts/]
+    allowed_files: [docs/STATE.md]
     scenarios:
       - id: refuse
         category: security
@@ -164,6 +165,7 @@ func TestParseRejects(t *testing.T) {
 		"absolute localized": {localizedLine, "localized: [/etc/]"},
 		"escaping localized": {localizedLine, "localized: [a/../b]"},
 		"bad localized":      {localizedLine, "localized: [\"[\"]"},
+		"escaping allowed":   {"allowed_files: [docs/STATE.md]", "allowed_files: [../STATE.md]"},
 		"duplicate scenario": {"        tests: [internal/x.TestRefuse]\n", "        tests: [internal/x.TestRefuse]\n      - id: refuse\n        category: business\n        tests: [a.TestB]\n"},
 	}
 	for name, c := range cases {
@@ -206,4 +208,14 @@ func TestIsLocalized(t *testing.T) {
 	}
 	testutil.Equal(t, App{Localized: []string{"texts/"}}.IsLocalized("atexts/a.go"), false)
 	testutil.Equal(t, App{}.IsLocalized("internal/texts/a.go"), false)
+}
+
+func TestAllowsFile(t *testing.T) {
+	app := App{Allowed: []string{"docs/STATE.md", "docs/tasks/*/STATE.md"}}
+	testutil.True(t, app.AllowsFile("docs/STATE.md"), "listed path")
+	testutil.True(t, app.AllowsFile("docs/tasks/web-app/STATE.md"), "pattern path")
+	testutil.True(t, !app.AllowsFile("STATE.md"), "other directory")
+	testutil.True(t, !app.AllowsFile("docs/tasks/a/b/STATE.md"), "deeper path")
+	testutil.True(t, !app.AllowsFile("docs/.env"), "unlisted file in docs")
+	testutil.True(t, !App{}.AllowsFile("docs/STATE.md"), "nothing allowed by default")
 }
