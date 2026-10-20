@@ -81,15 +81,9 @@ func TestBlueGreenSwapIsZeroDowntime(t *testing.T) {
 	if !ok || !strings.Contains(strings.Join(run.Args, " "), "--network web_default --env-file "+filepath.Join(e.appDir, ".env")+" --memory 256m -p 127.0.0.1:19001:8080") {
 		t.Fatalf("standby args: %v", run.Args)
 	}
-	if len(standbyAtSync) != 1 || standbyAtSync[0] {
-		t.Fatalf("routes are synced once, before the standby starts (no reload mid-swap): %v", standbyAtSync)
-	}
-	if len(e.slept) != 1 || e.slept[0] != caddy.Settle {
-		t.Fatalf("standby must stay up while Caddy returns to the permanent port: %v", e.slept)
-	}
-	if e.sim.running["web-bg"] {
-		t.Fatal("standby not removed")
-	}
+	testutil.Equal(t, standbyAtSync, []bool{false})
+	testutil.Equal(t, e.slept, []time.Duration{caddy.Settle})
+	testutil.True(t, !e.sim.running["web-bg"], "standby not removed")
 	e.expectOut(e.out, "blue-green: starting standby web-bg on 127.0.0.1:19001 -> 8080", msgCutover)
 	e.expectLog("health gate finished", "standby cleaned up")
 }
