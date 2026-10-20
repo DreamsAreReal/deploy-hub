@@ -8,6 +8,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -42,16 +43,21 @@ const (
 	pyprojectManifest = "pyproject.toml"
 	npmManifest       = "package.json"
 	trackedCopy       = "sbom-src"
+	nugetPurl         = "pkg:nuget/"
+	nuspecExt         = ".nuspec"
+	nugetPackagesEnv  = "NUGET_PACKAGES"
 )
 
 var (
-	licensedEcosystems = []string{golangPurl, npmPurl, pypiPurl, "pkg:nuget/", "pkg:maven/", "pkg:cargo/", "pkg:gem/"}
+	licensedEcosystems = []string{golangPurl, npmPurl, pypiPurl, nugetPurl, "pkg:maven/", "pkg:cargo/", "pkg:gem/"}
 	syftLicenseEnv     = []string{
 		"SYFT_GOLANG_SEARCH_LOCAL_MOD_CACHE_LICENSES=true", "SYFT_GOLANG_SEARCH_REMOTE_LICENSES=true",
 		"SYFT_PYTHON_SEARCH_REMOTE_LICENSES=true", "SYFT_JAVASCRIPT_SEARCH_REMOTE_LICENSES=true", "SYFT_JAVASCRIPT_INCLUDE_DEV_DEPENDENCIES=true",
 	}
-	pyprojectName = regexp.MustCompile(`(?ms)^\[project\][^\[]*?^name\s*=\s*["']([^"']+)["']`)
-	pypiSeparator = regexp.MustCompile(`[-_.]+`)
+	pyprojectName  = regexp.MustCompile(`(?ms)^\[project\][^\[]*?^name\s*=\s*["']([^"']+)["']`)
+	pypiSeparator  = regexp.MustCompile(`[-_.]+`)
+	nuspecLicense  = regexp.MustCompile(`<license type="expression">([^<]+)</license>|<licenseUrl>https://licenses\.nuget\.org/([^<]+)</licenseUrl>`)
+	dotnetProjects = []string{".csproj", ".fsproj", ".vbproj"}
 )
 
 type cycloneDX struct {
@@ -147,6 +153,9 @@ func licenseFindings(comps []component, pol policy.Policy, selves []string) []st
 }
 
 func isSelf(purl string, selves []string) bool {
+	if strings.HasPrefix(purl, nugetPurl) {
+		purl = strings.ToLower(purl)
+	}
 	for _, own := range selves {
 		if purl == own || strings.HasPrefix(purl, own+"@") {
 			return true
@@ -172,6 +181,9 @@ func selfPurls(ctx context.Context, ws gate.Workspace) ([]string, error) {
 }
 
 func manifestPurls(base string, data []byte) []string {
+	if ext := path.Ext(base); slices.Contains(dotnetProjects, ext) {
+		return []string{nugetPurl + strings.ToLower(strings.TrimSuffix(base, ext))}
+	}
 	switch base {
 	case pyprojectManifest:
 		if m := pyprojectName.FindSubmatch(data); m != nil {
@@ -205,6 +217,9 @@ func judgeLicenses(c component, ok map[string]bool, declared map[string]string) 
 	if d, found := declared[purlName(c.Purl)]; found && len(exprs) == 0 {
 		exprs = append(exprs, d)
 	}
+	if nuspec := nugetLicense(c.Purl); nuspec != "" && len(exprs) == 0 {
+		exprs = append(exprs, nuspec)
+	}
 	if len(exprs) == 0 {
 		return []string{fmt.Sprintf(noLicenseFormat, c.Purl)}
 	}
@@ -215,6 +230,31 @@ func judgeLicenses(c component, ok map[string]bool, declared map[string]string) 
 		}
 	}
 	return out
+}
+
+func nugetLicense(purl string) string {
+	name, ok := strings.CutPrefix(purlName(purl), nugetPurl)
+	_, version, _ := strings.Cut(purl, "@")
+	if !ok || version == "" {
+		return ""
+	}
+	id := strings.ToLower(name)
+	data, err := os.ReadFile(filepath.Clean(filepath.Join(nugetRoot(), id, strings.ToLower(version), id+nuspecExt)))
+	if err != nil {
+		return ""
+	}
+	if m := nuspecLicense.FindSubmatch(data); m != nil {
+		return strings.TrimSpace(string(m[1]) + string(m[2]))
+	}
+	return ""
+}
+
+func nugetRoot() string {
+	if root := os.Getenv(nugetPackagesEnv); root != "" {
+		return root
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".nuget", "packages")
 }
 
 func purlName(purl string) string {

@@ -72,6 +72,19 @@ func TestLooseSourcesJoinARootProject(t *testing.T) {
 	testutil.Equal(t, nearestRoot([]string{webRoot}, webRoot), webRoot)
 }
 
+func TestOutermostRootsAbsorbNestedManifests(t *testing.T) {
+	packs := testPacks(nil)
+	packs[1].Outermost = true
+	layout := Discover([]string{"app.proj", "src/a/a.proj", "src/a/x.cs", "tests/t/t.proj", "tests/t/y.cs"}, packs)
+	testutil.Equal(t, len(layout.Projects), 1)
+	testutil.Equal(t, layout.Projects[0].Root, rootDir)
+	split := Discover([]string{"svc/a.proj", "svc/x.cs", "web/b.proj", "web/sub/c.proj", "web/y.cs"}, packs)
+	testutil.Equal(t, len(split.Projects), 2)
+	testutil.Equal(t, outermost([]string{".", "a"}), []string{"."})
+	nested := "ab"
+	testutil.Equal(t, outermost([]string{"a", "a/b", nested}), []string{"a", nested})
+}
+
 func TestProjectWorkspace(t *testing.T) {
 	ws := gate.Workspace{Src: "/src", Out: t.TempDir()}
 	p := Project{Pack: &Pack{Stack: stackB}, Root: "web/api"}

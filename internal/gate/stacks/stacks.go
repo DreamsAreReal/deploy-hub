@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/dotnet"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/golang"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/mutation"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/node"
@@ -21,7 +22,30 @@ const (
 )
 
 func All() []pack.Pack {
-	return []pack.Pack{goPack(), pythonPack(), nodePack()}
+	return []pack.Pack{goPack(), pythonPack(), nodePack(), dotnetPack()}
+}
+
+func dotnetPack() pack.Pack {
+	return pack.Pack{
+		Stack:     dotnet.Stack,
+		Manifests: dotnet.Manifests,
+		Sources:   dotnet.Sources,
+		Outermost: true,
+		Checks: map[string]pack.Run{
+			pack.CheckModules:      dotnet.Integrity,
+			pack.CheckDependencies: dotnet.Dependencies,
+			pack.CheckLint:         dotnet.Lint,
+			pack.CheckComplexity:   dotnet.Complexity,
+			pack.CheckDeadCode:     dotnet.DeadCode,
+			pack.CheckTests:        dotnet.Tests,
+			pack.CheckLineCoverage: dotnet.LineCoverage,
+			pack.CheckBranches:     dotnet.Branches,
+			pack.CheckFuzz:         dotnet.Fuzz,
+			pack.CheckMutation:     dotnet.Mutation,
+			pack.CheckVulns:        scan.DependencyVulnerabilities,
+		},
+		Passed: dotnet.Passed,
+	}
 }
 
 func nodePack() pack.Pack {

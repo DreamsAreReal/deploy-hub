@@ -49,6 +49,7 @@ type Pack struct {
 	Manifests []string
 	Sources   []string
 	Loose     bool
+	Outermost bool
 	Checks    map[string]Run
 	Passed    func(ctx context.Context, ws gate.Workspace) (map[string]bool, error)
 }
@@ -90,6 +91,9 @@ func Discover(files []string, packs []Pack) Layout {
 
 func discoverPack(p *Pack, files []string) ([]Project, []string) {
 	roots := manifestRoots(files, p.Manifests)
+	if p.Outermost {
+		roots = outermost(roots)
+	}
 	homeless := homelessSources(p, files, roots)
 	var orphans []string
 	switch {
@@ -105,6 +109,16 @@ func discoverPack(p *Pack, files []string) ([]Project, []string) {
 		projects = append(projects, Project{Pack: p, Root: r})
 	}
 	return projects, orphans
+}
+
+func outermost(roots []string) []string {
+	var out []string
+	for _, r := range roots {
+		if nearestRoot(out, r) == "" {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func homelessSources(p *Pack, files, roots []string) []string {
