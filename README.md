@@ -94,7 +94,8 @@ and the results merged: the worst status wins, values and findings carry the
 project label (`go`, `node:web`). Each project writes its reports to its own
 subdirectory of `--out`. Code of a language without a pack, or outside any
 project, fails the `stacks` check. Files under a `testdata` directory are
-fixtures, not code: no pack claims, lints, covers or mutates them.
+fixtures, not code: no pack claims, lints, covers or mutates them, and the
+duplication check does not count them.
 
 | Stack | Project manifest | Tools |
 |---|---|---|

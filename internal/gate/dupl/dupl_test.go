@@ -88,6 +88,13 @@ func TestCheckCoversEveryCodeFile(t *testing.T) {
 	testutil.Equal(t, out.Values[ValueCodeLines], float64(12))
 }
 
+func TestFixturesAreNotCountedAsClones(t *testing.T) {
+	files := map[string][]byte{filePy: []byte(pyBody), "testdata/" + filePy2: []byte(pyBody)}
+	out := Check(context.Background(), workspace(t, files, nil))
+	testutil.Equal(t, out.Status, gate.StatusPass)
+	testutil.Equal(t, out.Values[ValueCodeLines], float64(6))
+}
+
 func TestUnreadableSourcesFailTheCheck(t *testing.T) {
 	saved := lex
 	t.Cleanup(func() { lex = saved })
