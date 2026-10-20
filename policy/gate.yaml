@@ -35,9 +35,39 @@ reviewed_license_texts:
   "sha256:8438c9c89b849131ead81d5435cb97fcf052df5b0b286dda8a2d4c29e6cb3fd0": blessing
   "sha256:b4366b9c27a9364633e015011a231913ed19bf1228f335bf617e50a6f7b168a6": BSD-3-Clause AND MIT AND MPL-2.0 AND Apache-2.0 AND blessing
 dependencies:
+  - github.com/VictoriaMetrics/metrics
   - github.com/alecthomas/chroma/v2
+  - github.com/coder/websocket
   - github.com/dlclark/regexp2/v2
+  - github.com/dustin/go-humanize
+  - github.com/fxamacker/cbor/v2
+  - github.com/getsentry/sentry-go
+  - github.com/go-viper/mapstructure/v2
+  - github.com/go-webauthn/webauthn
+  - github.com/go-webauthn/x
+  - github.com/golang-jwt/jwt/v5
+  - github.com/google/go-tpm
+  - github.com/google/uuid
+  - github.com/jmoiron/sqlx
+  - github.com/mattn/go-isatty
+  - github.com/ncruces/go-strftime
+  - github.com/philhofer/fwd
+  - github.com/remyoudompheng/bigfft
+  - github.com/rivo/uniseg
+  - github.com/tinylib/msgp
+  - github.com/valyala/fastrand
+  - github.com/valyala/histogram
+  - github.com/x448/float16
+  - github.com/yuin/goldmark
   - go.yaml.in/yaml/v3
+  - golang.org/x/crypto
+  - golang.org/x/image
+  - golang.org/x/sys
+  - golang.org/x/text
+  - modernc.org/libc
+  - modernc.org/mathutil
+  - modernc.org/memory
+  - modernc.org/sqlite
   - mvdan.cc/sh/v3
   - "npm:@types/node"
   - "npm:@types/whatwg-mimetype"
@@ -218,3 +248,113 @@ apps:
         tests:
           - internal/gate.TestRunnerCollectsResults
           - internal/gate.TestUnfinishedCheckFails
+  tasks:
+    repo: DreamsAreReal/tasks
+    kind: service
+    port: 8787
+    health: /api/health
+    cpus: "1"
+    memory: 128m
+    dast: {target: /, spider: 1m, max_time: 10m}
+    load: {rate: 20, duration: 30s, p95: 300ms, max_error_percent: 0, concurrency: 10, paths: [/api/health, /]}
+    scenarios:
+      - id: unknown-or-retired-token-is-refused
+        category: security
+        tests:
+          - internal/server.TestUnknownTokenIsRefusedAndOnlyItsHashIsStored
+          - internal/domain.TestRetiredTokensAreRefused
+      - id: app-api-is-closed-without-a-session
+        category: security
+        tests:
+          - internal/server.TestAppAPIIsClosedWithoutASession
+          - internal/server.TestHumanAPIStaysClosedWithoutDevLogin
+          - internal/server.TestLiveSocketRefusesAStranger
+      - id: agent-acts-only-within-its-scope
+        category: security
+        tests:
+          - internal/server.TestOwnResourceWithoutTheScopeIsForbidden
+          - internal/server.TestAgentEditsOnlyItsEpics
+          - internal/server.TestAgentMayNotCloseOrCancelAnyTask
+          - internal/runner/mcp.TestSetStageRefusesClosingStagesAndPointsToReview
+      - id: login-codes-are-single-use-and-rate-limited
+        category: security
+        tests:
+          - internal/domain.TestLoginCodeWorksOnceInAnyCase
+          - internal/domain.TestLoginCodeExpires
+          - internal/domain.TestLoginCodeLocksAfterMisses
+          - internal/server.TestWrongCodeCreatesNobody
+      - id: passkeys-belong-to-their-user
+        category: security
+        tests:
+          - internal/domain.TestPasskeysBelongToTheirUser
+      - id: signed-file-links-expire
+        category: security
+        tests:
+          - internal/domain.TestSignedLinksExpireAndDieWithTheSecret
+      - id: uploads-are-size-checked
+        category: security
+        tests:
+          - internal/domain.TestEmptyAndOversizeFilesAreRefusedByName
+      - id: user-markdown-cannot-inject-html
+        category: security
+        tests:
+          - internal/server.TestFeedRendersMarkdownWithoutRawHTML
+      - id: runner-paths-stay-inside-their-base
+        category: security
+        tests:
+          - internal/runner.TestContextFileOutsideTheFolderIsRefused
+          - internal/runner.TestWorkdirOutsideTheBaseIsRefused
+      - id: agent-notes-do-not-leak-secrets
+        category: security
+        tests:
+          - internal/runner/mcp.TestNoteMasksSecretsFromTheEnvironment
+      - id: malformed-input-is-refused
+        category: security
+        tests:
+          - internal/server.TestAlertIntakeRejectsGarbage
+          - internal/server.TestTaskCreationRefusesBadInput
+          - internal/server.TestIdempotencyKeyReplaysTheAnswerAndRefusesAnotherBody
+      - id: backups-never-destroy-data
+        category: security
+        tests:
+          - internal/sqlitebackup.TestACorruptFileIsNeverRestored
+          - internal/sqlitebackup.TestRestoreNeverOverwritesADatabase
+      - id: task-lifecycle
+        category: business
+        tests:
+          - internal/server.TestTaskIsCreatedTrimmedInTheBacklog
+          - internal/server.TestPatchChangesFieldsAndWritesTheFeed
+          - internal/server.TestReopenReturnsAClosedTaskToWork
+          - internal/server.TestTaskIsDeletedAndRestored
+      - id: agent-claims-works-and-reports
+        category: business
+        tests:
+          - internal/server.TestClaimedTaskIsNotHandedOutTwice
+          - internal/server.TestAgentReportsLandInTheFeed
+          - internal/server.TestAgentCreatesFollowUpTasksAndEpics
+      - id: question-and-answer
+        category: business
+        tests:
+          - internal/server.TestAnswerClosesTheQuestion
+      - id: comments-and-files
+        category: business
+        tests:
+          - internal/server.TestCommentIsAddedEditedAndRemoved
+          - internal/server.TestFileIsAttachedAndRemoved
+      - id: alerts-open-tasks
+        category: business
+        tests:
+          - internal/server.TestVmalertFiringOpensOneTaskInAlertsEpic
+      - id: device-enrollment
+        category: business
+        tests:
+          - internal/server.TestCodeFromTheAppEnrollsAnotherDevice
+      - id: live-updates
+        category: business
+        tests:
+          - internal/server.TestLiveSocketTellsAboutEveryWrite
+      - id: health-and-backup
+        category: business
+        tests:
+          - internal/server.TestHealthReportsCountsWithoutAToken
+          - internal/store.TestBackupThenRestoreKeepsData
