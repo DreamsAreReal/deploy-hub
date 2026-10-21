@@ -211,7 +211,7 @@ func TestTestsCheck(t *testing.T) {
 	testutil.Equal(t, out.Values[ValuePackages], float64(len(samplePackages())))
 	testutil.Equal(t, testutil.Read(t, w.Report(TestsReport)), events)
 	calls := procexectest.LinesOf(w.Exec)
-	testutil.Contains(t, calls[1], "-coverpkg="+module+","+module+"/lib,"+module+"/orphan", "-race", "-coverprofile="+w.Report(CoverReport))
+	testutil.Contains(t, calls[1], "-coverpkg="+module+","+module+"/lib,"+module+"/orphan", "-race", "-timeout="+w.Policy.Limits.Check.String(), "-coverprofile="+w.Report(CoverReport))
 	green := `{"Action":"pass","Package":"example.com/app/lib","Test":"TestA"}` + "\n"
 	pass := Tests(context.Background(), ws(t, script{cmdListJSON: ok(""), cmdTest: ok(green)}))
 	testutil.Equal(t, pass.Status, gate.StatusPass)

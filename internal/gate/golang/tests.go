@@ -55,7 +55,7 @@ func Tests(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	if err != nil {
 		return gate.Fail(err.Error())
 	}
-	args := []string{"test", flagJSON, "-race", "-count=1", "-covermode=atomic", coverPkgPrefix + strings.Join(pkgs.Production().Paths(), ","), "-coverprofile=" + ws.Report(CoverReport), allPkgs}
+	args := []string{"test", flagJSON, "-race", "-count=1", "-timeout=" + ws.Policy.Limits.Check.String(), "-covermode=atomic", coverPkgPrefix + strings.Join(pkgs.Production().Paths(), ","), "-coverprofile=" + ws.Report(CoverReport), allPkgs}
 	res, runErr := ws.Run(ctx, GoBinary, args...)
 	if werr := os.WriteFile(ws.Report(TestsReport), []byte(res.Stdout), reportPerm); werr != nil {
 		return gate.Fail("cannot keep the test report: " + werr.Error())
