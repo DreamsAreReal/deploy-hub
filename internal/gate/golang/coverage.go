@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
+	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
 )
 
 const (
@@ -202,7 +203,7 @@ func Branches(ctx context.Context, ws gate.Workspace) gate.Outcome {
 func runGobco(ctx context.Context, ws gate.Workspace, rel string) (branchCount, []string, error) {
 	res, err := ws.Run(ctx, GobcoBinary, "-branch", "./"+filepath.ToSlash(rel))
 	if err != nil {
-		return branchCount{}, nil, fmt.Errorf(gobcoFailed, rel, err, gobcoCause(res.Combined()))
+		return branchCount{}, nil, fmt.Errorf(gobcoFailed, rel, err, gobcoCause(procexec.Output(err)))
 	}
 	bc, err := parseGobco(res.Stdout)
 	if err != nil {
