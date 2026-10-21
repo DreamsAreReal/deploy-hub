@@ -117,7 +117,9 @@ func TestPrepareStagesAndInstalls(t *testing.T) {
 	testutil.Equal(t, testutil.Read(t, filepath.Join(stage(w.WS), fileCart)), cartSource)
 	testutil.Equal(t, testutil.Read(t, filepath.Join(tools(w.WS), Manifest)), `{"name":"tools"}`)
 	testutil.Equal(t, testutil.Read(t, filepath.Join(tools(w.WS), Lockfile)), `{"lockfileVersion":3}`)
-	testutil.Contains(t, testutil.Read(t, filepath.Join(tools(w.WS), eslintConfigFile)), `"sonarjs/cognitive-complexity": ["error", 9]`)
+	testutil.Contains(t, testutil.Read(t, filepath.Join(tools(w.WS), eslintConfigFile)), `"sonarjs/cognitive-complexity": ["error", 9]`,
+		"...globals.browser, ...globals.serviceworker, ...globals.node", `"**/testdata/**"`)
+	testutil.Contains(t, testutil.Read(t, filepath.Join(tools(w.WS), knipConfigFile)), `"ignore": ["**/testdata/**"]`)
 	testutil.Contains(t, testutil.Read(t, filepath.Join(tools(w.WS), complexityConfigFile)), `["error", 9]`)
 	testutil.Equal(t, testutil.Read(t, w.WS.Report(readyStamp)), readyStamp)
 	staged(t, w)
@@ -253,7 +255,8 @@ func TestComplexityAndDeadCode(t *testing.T) {
 
 func vitestWorld(t *testing.T) *world {
 	t.Helper()
-	w := newWorld(t, map[string]string{Manifest: manifestVite, Lockfile: lockGood, fileCart: cartSource, fileSpec: "import fc from \"fast-check\";\n", viteConfig: "", readme: ""})
+	w := newWorld(t, map[string]string{Manifest: manifestVite, Lockfile: lockGood, fileCart: cartSource, fileSpec: "import fc from \"fast-check\";\n", viteConfig: "", readme: "",
+		"test/testdata/old.test.ts": fastCheck})
 	w.Produce(flagOutputFile, junitGreen)
 	w.Produce("--coverage.reportsDirectory=", "")
 	return w
@@ -308,7 +311,7 @@ func TestTestFailures(t *testing.T) {
 }
 
 func TestNodeTestRunnerWithLcov(t *testing.T) {
-	w := newWorld(t, map[string]string{Manifest: plainManifest, Lockfile: lockGood, "src/grade.js": "export const a = 1;\nexport const b = 2;\n", "src/extra.js": "export const c = 3;\n// note\n"})
+	w := newWorld(t, map[string]string{Manifest: plainManifest, Lockfile: lockGood, "src/grade.js": "export const a = 1;\nexport const b = 2;\n", "src/extra.js": "export const c = 3;\n// note\n", "src/testdata/old.js": "var d = 4;\n"})
 	staged(t, w)
 	w.Produce("--test-reporter-destination=", "")
 	w.Clear()
@@ -321,6 +324,7 @@ func TestNodeTestRunnerWithLcov(t *testing.T) {
 	testutil.NoErr(t, err)
 	testutil.Equal(t, cov["src/grade.js"], &linecov.File{Lines: map[int]int{1: 1, 2: 0}, Branches: 3, CoveredBranches: 1})
 	testutil.Equal(t, cov["src/extra.js"], &linecov.File{Lines: map[int]int{1: 0}})
+	testutil.True(t, cov["src/testdata/old.js"] == nil, "fixtures are not production code")
 	passed, err := Passed(context.Background(), w.WS)
 	testutil.NoErr(t, err)
 	testutil.Equal(t, len(passed), 1)

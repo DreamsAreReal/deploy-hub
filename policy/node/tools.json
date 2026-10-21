@@ -7,6 +7,7 @@
     "esbuild": "0.25.12",
     "eslint": "9.39.1",
     "eslint-plugin-sonarjs": "3.0.5",
+    "globals": "17.13.0",
     "html-validate": "11.16.4",
     "knip": "5.66.4",
     "stylelint": "17.16.0",

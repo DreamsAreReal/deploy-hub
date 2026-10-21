@@ -183,6 +183,15 @@ func TestSelectFiltersTrackedFiles(t *testing.T) {
 	testutil.Contains(t, err.Error(), "git ls-files")
 }
 
+func TestFixture(t *testing.T) {
+	for _, rel := range []string{"testdata/a.js", "internal/store/testdata/old.sql", "a/testdata/b/c.go"} {
+		testutil.True(t, Fixture(rel), rel)
+	}
+	for _, rel := range []string{"testdata.js", "internal/mytestdata/a.js", "a/testdata_x/b.go"} {
+		testutil.True(t, !Fixture(rel), rel)
+	}
+}
+
 func TestCopyTrackedFailures(t *testing.T) {
 	ws := repo(t, map[string]string{fileNested: pkgA})
 	blocker := filepath.Join(t.TempDir(), "file")

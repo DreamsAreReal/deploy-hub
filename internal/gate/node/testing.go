@@ -263,7 +263,11 @@ func countPositive(values []int) int {
 }
 
 func readLcov(ws gate.Workspace, cov linecov.Report) error {
-	f, err := os.Open(ws.Report(lcovFile))
+	return readLcovFile(ws, ws.Report(lcovFile), cov)
+}
+
+func readLcovFile(ws gate.Workspace, path string, cov linecov.Report) error {
+	f, err := os.Open(filepath.Clean(path))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -340,7 +344,9 @@ func isConfig(rel string) bool {
 }
 
 func productionFiles(ctx context.Context, ws gate.Workspace) ([]string, error) {
-	return source.Select(ctx, ws, func(f string) bool { return slices.Contains(Sources, path.Ext(f)) && !isTest(f) && !isConfig(f) })
+	return source.Select(ctx, ws, func(f string) bool {
+		return slices.Contains(Sources, path.Ext(f)) && !isTest(f) && !isConfig(f) && !source.Fixture(f)
+	})
 }
 
 func runFuzz(ctx context.Context, ws gate.Workspace) gate.Outcome {
@@ -370,7 +376,7 @@ func runFuzz(ctx context.Context, ws gate.Workspace) gate.Outcome {
 }
 
 func fuzzFiles(ctx context.Context, ws gate.Workspace) ([]string, error) {
-	files, err := source.Select(ctx, ws, func(f string) bool { return isTest(f) && slices.Contains(Sources, path.Ext(f)) })
+	files, err := source.Select(ctx, ws, func(f string) bool { return isTest(f) && slices.Contains(Sources, path.Ext(f)) && !source.Fixture(f) })
 	var out []string
 	for _, f := range files {
 		data, rerr := os.ReadFile(filepath.Join(ws.Src, filepath.FromSlash(f)))

@@ -11,6 +11,7 @@
         "esbuild": "0.25.12",
         "eslint": "9.39.1",
         "eslint-plugin-sonarjs": "3.0.5",
+        "globals": "17.13.0",
         "html-validate": "11.16.4",
         "knip": "5.66.4",
         "stylelint": "17.16.0",
@@ -858,6 +859,19 @@
       },
       "funding": {
         "url": "https://opencollective.com/eslint"
+      }
+    },
+    "node_modules/@eslint/eslintrc/node_modules/globals": {
+      "version": "14.0.0",
+      "resolved": "https://registry.npmjs.org/globals/-/globals-14.0.0.tgz",
+      "integrity": "sha512-oahGvuMGQlPw/ivIYBjVSrWAfWLBeku5tpPE2fOPLi+WHffIWbuh2tCjhyQhTBPMf5E9jDEH4FOmTYgYwbKwtQ==",
+      "dev": true,
+      "license": "MIT",
+      "engines": {
+        "node": ">=18"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/sindresorhus"
       }
     },
     "node_modules/@eslint/js": {
@@ -2822,9 +2836,9 @@
       }
     },
     "node_modules/globals": {
-      "version": "14.0.0",
-      "resolved": "https://registry.npmjs.org/globals/-/globals-14.0.0.tgz",
-      "integrity": "sha512-oahGvuMGQlPw/ivIYBjVSrWAfWLBeku5tpPE2fOPLi+WHffIWbuh2tCjhyQhTBPMf5E9jDEH4FOmTYgYwbKwtQ==",
+      "version": "17.13.0",
+      "resolved": "https://registry.npmjs.org/globals/-/globals-17.13.0.tgz",
+      "integrity": "sha512-RwMTC61u7hrG3ZJMkZQOK4JLJrKS8QtoTii63EmWvFXHqycY9FObBJQCbsLxSO8kjKhWE5kV1GC+Vb1g3RI0Zg==",
       "dev": true,
       "license": "MIT",
       "engines": {

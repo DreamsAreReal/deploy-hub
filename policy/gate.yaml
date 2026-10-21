@@ -32,6 +32,21 @@ dependencies:
   - github.com/dlclark/regexp2/v2
   - go.yaml.in/yaml/v3
   - mvdan.cc/sh/v3
+  - "npm:@types/node"
+  - "npm:@types/whatwg-mimetype"
+  - "npm:@types/ws"
+  - "npm:@vue/reactivity"
+  - "npm:@vue/shared"
+  - "npm:alpinejs"
+  - "npm:buffer-image-size"
+  - "npm:entities"
+  - "npm:fast-check"
+  - "npm:happy-dom"
+  - "npm:htmx.org"
+  - "npm:pure-rand"
+  - "npm:undici-types"
+  - "npm:whatwg-mimetype"
+  - "npm:ws"
 forbidden_files:
   - "*state*.md"
   - "*.bak"

@@ -93,7 +93,9 @@ several projects (an API and a web front end, say) gets every project checked
 and the results merged: the worst status wins, values and findings carry the
 project label (`go`, `node:web`). Each project writes its reports to its own
 subdirectory of `--out`. Code of a language without a pack, or outside any
-project, fails the `stacks` check.
+project, fails the `stacks` check. Files under a `testdata` directory are
+fixtures, not code: no pack claims, lints, covers or mutates them, and the
+duplication check does not count them.
 
 | Stack | Project manifest | Tools |
 |---|---|---|
@@ -103,6 +105,7 @@ project, fails the `stacks` check.
 | .NET | `*.sln`, `*.slnx`, `*.csproj`, `*.fsproj`, `*.vbproj` (the outermost one) | dotnet (`restore --locked-mode`, build with the recommended analyzers and SonarAnalyzer as errors, `format whitespace`, `test` with coverlet), CsCheck / FsCheck, trivy, the token mutation engine |
 | Shell | none; `.sh` and `.bash` files form a root project | shellcheck (every optional check), shfmt, bats with bash xtrace coverage, the token mutation engine |
 | Static site | none; `.html`, `.htm` and `.css` files form a root project | html-validate (recommended rules, SRI on cross-origin resources), stylelint standard |
+| SQL | none; `.sql` files form a root project | sqlfluff (parse only) |
 
 What each stack expects from an app repo:
 
@@ -115,8 +118,12 @@ What each stack expects from an app repo:
 - **Node / TypeScript.** `package-lock.json` next to every `package.json`; the
   test runner is the one the project depends on (vitest, jest, mocha, or
   `node --test` when none is installed). Fuzz targets are fast-check property
-  tests. A scenario names a test as `path/to/file.test.ts > test name`.
-  Linters, `tsc` and knip come from the hub's lock in `policy/node`.
+  tests. eslint knows the browser, service worker and Node globals; anything
+  else (an embedding runtime's API, say) is reached through `globalThis`. A scenario names a test as `path/to/file.test.ts > test name`.
+  Linters, `tsc` and knip come from the hub's lock in `policy/node`. With
+  `node --test`, each test file first runs alone with coverage; a mutant then
+  runs only the test files that executed its line (the whole suite when none
+  did), so the time per mutant follows the tests that matter to it.
 - **.NET.** `RestorePackagesWithLockFile` with a `packages.lock.json` next to
   every project; test projects reference `coverlet.collector`. Analyzer
   severities, `TreatWarningsAsErrors` and `.editorconfig` are injected
@@ -131,6 +138,12 @@ What each stack expects from an app repo:
   dead code, tests, coverage, fuzzing and mutation are `n/a`. Every
   cross-origin script or stylesheet needs an `integrity` hash. JavaScript
   belongs to a Node project with its own `package.json`.
+- **SQL.** Schema and migration scripts are data for the program that runs
+  them, and that program's tests cover them: only `lint` applies, every other
+  check is `n/a`. A file passes when it parses in one of the sqlite,
+  postgres, mysql, tsql or ansi dialects; otherwise the parse errors of the
+  sqlite dialect are the findings. sqlfluff comes from the hub's hashed lock in
+  `policy/sql`.
 
 Approved dependencies in the policy use the Go module path for Go and a stack
 prefix for the rest: `pypi:requests`, `npm:express`, `nuget:Serilog`. When a

@@ -28,13 +28,22 @@ func mutationSuite(ctx context.Context, ws gate.Workspace) (tokmut.Suite, error)
 	if err != nil {
 		return tokmut.Suite{}, err
 	}
+	index := testIndex{}
+	if r == runnerNode {
+		if index, err = buildIndex(ctx, ws); err != nil {
+			return tokmut.Suite{}, err
+		}
+	}
 	files, err := productionFiles(ctx, ws)
 	files = slices.DeleteFunc(files, func(f string) bool { return !slices.Contains(scripts, path.Ext(f)) })
 	return tokmut.Suite{
 		Family:  tokmut.JavaScript,
 		Files:   files,
 		Seconds: junit.Seconds(cases),
-		Covered: cov.Covered,
+		Covered: func(rel string, line int) (bool, []string) {
+			hit, _ := cov.Covered(rel, line)
+			return hit, index.tests(rel, line)
+		},
 		Prepare: func(_ context.Context, _ int, dir string) error {
 			return os.Symlink(filepath.Join(stage(ws), modulesDir), filepath.Join(dir, modulesDir))
 		},
@@ -42,8 +51,12 @@ func mutationSuite(ctx context.Context, ws gate.Workspace) (tokmut.Suite, error)
 			_, cerr := run(ctx, ws, dir, nil, NodeBinary, filepath.Join(tools(ws), syntaxCheckFile), filepath.Join(dir, filepath.FromSlash(rel)))
 			return cerr
 		},
-		Test: func(ctx context.Context, _ int, dir string, _ []string) error {
-			_, terr := run(ctx, ws, dir, nil, NodeBinary, adapters[r].mutant(ws)...)
+		Test: func(ctx context.Context, _ int, dir string, tests []string) error {
+			args := adapters[r].mutant(ws)
+			if r == runnerNode && len(tests) > 0 {
+				args = append([]string{flagTest}, tests...)
+			}
+			_, terr := run(ctx, ws, dir, nil, NodeBinary, args...)
 			return terr
 		},
 	}, err

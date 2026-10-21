@@ -79,6 +79,7 @@ type Layout struct {
 }
 
 func Discover(files []string, packs []Pack) Layout {
+	files = slices.DeleteFunc(slices.Clone(files), source.Fixture)
 	var layout Layout
 	for i := range packs {
 		projects, orphans := discoverPack(&packs[i], files)
