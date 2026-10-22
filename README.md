@@ -191,7 +191,7 @@ take the CI runner down. The language packs mutate with the same engine and the
 same budget. "The memory the gate may use" is `MemTotal` capped by the tightest
 `memory.max` along the gate's cgroup v2 chain, and the workers are half the
 CPUs, at least two, where the CPUs are `NumCPU` capped by the tightest
-`cpu.max` quota. On the self-hosted runner the CI slice (13G, 6 CPUs) sets
+`cpu.max` quota. On the self-hosted runner the repo's slice (9G, 6 CPUs) sets
 both, not the host.
 
 **Load test, done for a 1-CPU VPS.** The image runs in an isolated docker
