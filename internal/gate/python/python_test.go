@@ -35,7 +35,7 @@ const (
 	cmdLock    = "lock --check"
 	cmdExport  = "export"
 	cmdSync    = "sync --quiet --locked"
-	cmdVenv    = "venv --quiet"
+	cmdVenv    = "venv --quiet --clear"
 	cmdInstall = "pip install"
 	cmdRuffChk = "ruff check"
 	cmdRuffFmt = "ruff format"
@@ -109,7 +109,7 @@ func TestPrepareUVProjectOnce(t *testing.T) {
 	testutil.Equal(t, len(lines), 4)
 	testutil.Contains(t, lines[0], "uv sync --quiet --locked --all-groups --all-extras")
 	testutil.Contains(t, lines[1], "uv run --quiet --no-project --python "+venvPython(w.WS.Report(venvDir))+" -- python "+cmdImport)
-	testutil.Equal(t, lines[2], "uv venv --quiet "+w.WS.Report(toolsDir))
+	testutil.Equal(t, lines[2], "uv "+cmdVenv+" "+w.WS.Report(toolsDir))
 	testutil.Equal(t, lines[3], "uv pip install --quiet --python "+venvPython(w.WS.Report(toolsDir))+" --require-hashes -r /policy/python/tools-lock.txt")
 	sync := w.Fake.Calls()[0]
 	testutil.Equal(t, sync.Env, []string{envCache + w.WS.Report(cacheDir), envNoProg, envProject + w.WS.Report(venvDir)})
@@ -124,14 +124,14 @@ func TestPrepareRequirementsProject(t *testing.T) {
 	w.On(cmdImport, "", errSim)
 	testutil.NoErr(t, prepare(context.Background(), w.WS))
 	lines := w.Fake.Lines()
-	testutil.Equal(t, lines[0], "uv venv --quiet "+w.WS.Report(venvDir))
+	testutil.Equal(t, lines[0], "uv "+cmdVenv+" "+w.WS.Report(venvDir))
 	testutil.Contains(t, lines[1], "--require-hashes -r "+filepath.Join(w.WS.Src, "requirements-dev.txt"))
 	testutil.Contains(t, lines[2], "--require-hashes -r "+filepath.Join(w.WS.Src, reqsFile))
 	testutil.Contains(t, lines[4], "-r /policy/python/test-lock.txt")
 }
 
 func TestPrepareFailures(t *testing.T) {
-	for _, step := range []string{cmdSync, "venv --quiet", cmdInstall} {
+	for _, step := range []string{cmdSync, cmdVenv, cmdInstall} {
 		w := newWorld(t, map[string]string{lockFile: ""})
 		w.On(step, "", errSim)
 		err := prepare(context.Background(), w.WS)

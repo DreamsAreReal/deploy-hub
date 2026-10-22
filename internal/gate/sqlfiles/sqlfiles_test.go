@@ -75,7 +75,7 @@ func TestLintTriesDialectsUntilEveryFileParses(t *testing.T) {
 		"mysql:" + migration, "tsql:" + migration, "ansi:" + migration,
 	})
 	calls := procexectest.CallsOf(ws.Exec)
-	testutil.Equal(t, calls[1].Args, []string{"venv", flagQuiet, ws.Report(venvDir)})
+	testutil.Equal(t, calls[1].Args, []string{"venv", flagQuiet, flagClear, ws.Report(venvDir)})
 	testutil.Equal(t, calls[2].Args[len(calls[2].Args)-1], filepath.Join(ws.PolicyDir, policySub, toolsLock))
 	testutil.Equal(t, calls[2].Env, []string{envCache + ws.Report(cacheDir), envNoProgress})
 	testutil.Equal(t, calls[3].Args[:6], []string{"run", flagQuiet, "--no-project", flagPython, python(ws), "--"})

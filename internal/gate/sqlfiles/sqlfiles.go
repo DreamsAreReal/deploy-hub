@@ -29,6 +29,7 @@ const (
 	envCache      = "UV_CACHE_DIR="
 	envNoProgress = "UV_NO_PROGRESS=1"
 	flagQuiet     = "--quiet"
+	flagClear     = "--clear"
 	cmdRun        = "run"
 	flagPython    = "--python"
 	reasonLint    = "SQL files do not parse in any supported dialect"
@@ -60,7 +61,7 @@ func python(ws gate.Workspace) string {
 }
 
 func install(ctx context.Context, ws gate.Workspace) error {
-	if _, err := uv(ctx, ws, "venv", flagQuiet, ws.Report(venvDir)); err != nil {
+	if _, err := uv(ctx, ws, "venv", flagQuiet, flagClear, ws.Report(venvDir)); err != nil {
 		return err
 	}
 	_, err := uv(ctx, ws, "pip", "install", flagQuiet, flagPython, python(ws), "--require-hashes", "-r",

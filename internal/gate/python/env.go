@@ -32,6 +32,7 @@ const (
 	interpreter  = "python"
 	stampPerm    = 0o600
 	flagQuiet    = "--quiet"
+	flagClear    = "--clear"
 	flagModule   = "-m"
 	flagPlugin   = "-p"
 	cmdRun       = "run"
@@ -137,7 +138,7 @@ func (e env) create(ctx context.Context) error {
 		_, err = e.uv(ctx, []string{envProject + e.venv}, "sync", flagQuiet, "--locked", "--all-groups", "--all-extras")
 		return err
 	}
-	if _, err = e.uv(ctx, nil, "venv", flagQuiet, e.venv); err != nil {
+	if _, err = e.uv(ctx, nil, "venv", flagQuiet, flagClear, e.venv); err != nil {
 		return err
 	}
 	for _, r := range reqs {
@@ -174,7 +175,7 @@ func prepare(ctx context.Context, ws gate.Workspace) error {
 		project.create,
 		project.withTestTools,
 		func(ctx context.Context) error {
-			_, err := tools.uv(ctx, nil, "venv", flagQuiet, tools.venv)
+			_, err := tools.uv(ctx, nil, "venv", flagQuiet, flagClear, tools.venv)
 			return err
 		},
 		func(ctx context.Context) error {
