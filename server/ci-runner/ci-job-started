@@ -1,5 +1,6 @@
 #!/bin/sh
 set +e
+/usr/local/lib/ci-runner/ci-runner-reap
 case "${GITHUB_EVENT_NAME:-}" in
   push | workflow_dispatch | schedule) ;;
   *)

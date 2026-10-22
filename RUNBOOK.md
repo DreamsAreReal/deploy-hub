@@ -131,7 +131,7 @@ gh api repos/DreamsAreReal/<app>/actions/runners --jq '.runners[] | "\(.name) \(
 ```
 
 A runner deleted on GitHub (or offline for 14 days) loops on "not configured":
-remove `/var/lib/ci/runners/<app>` and register it again (README, Self-hosted
+remove `/var/lib/ci/<app>/runner` and register it again (README, Self-hosted
 CI runner).
 
 ## Routes / HTTPS

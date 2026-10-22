@@ -19,6 +19,7 @@ used_percent() {
   df --output=pcent /var/lib/ci | tail -1 | tr -dc '0-9'
 }
 
+/usr/local/lib/ci-runner/ci-runner-reap
 log "disk before: $(used_percent)%"
 docker ps -aq | xargs -r docker rm -f >/dev/null
 docker network prune -f >/dev/null

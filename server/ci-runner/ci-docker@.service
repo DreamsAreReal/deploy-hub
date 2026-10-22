@@ -7,17 +7,17 @@ PartOf=ci-runner@%i.service
 [Service]
 Type=notify
 NotifyAccess=all
-User=ci
-Group=ci
+User=ci-%i
+Group=ci-%i
 Delegate=yes
-Environment=HOME=/var/lib/ci
+Environment=HOME=/var/lib/ci/%i
 Environment=XDG_RUNTIME_DIR=/run/ci/%i
 Environment=PATH=/usr/bin:/usr/sbin:/bin:/sbin
 NetworkNamespacePath=/run/netns/ci
 BindReadOnlyPaths=/etc/netns/ci/resolv.conf:/etc/resolv.conf
 RuntimeDirectory=ci/%i
 RuntimeDirectoryMode=0700
-ExecStart=/usr/bin/dockerd-rootless.sh --data-root /var/lib/ci/docker/%i --log-driver local
+ExecStart=/usr/bin/dockerd-rootless.sh --data-root /var/lib/ci/%i/docker --log-driver local
 Restart=always
 RestartSec=10
 TimeoutStartSec=120
@@ -27,7 +27,7 @@ LimitNOFILE=1048576
 UMask=0077
 PrivateTmp=yes
 ProtectSystem=strict
-ReadWritePaths=/var/lib/ci
+ReadWritePaths=/var/lib/ci/%i
 InaccessiblePaths=/home /opt /root /etc/srv-backup /etc/wireguard /etc/deploy-hub /var/backups /var/lib/docker /var/lib/containerd -/var/lib/app-backup
 InaccessiblePaths=-/run/docker.sock -/var/run/docker.sock -/run/containerd
 ProtectKernelModules=yes

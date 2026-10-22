@@ -3,37 +3,56 @@ set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 LIB=/usr/local/lib/ci-runner
 UNITS=/etc/systemd/system
+WANTS=$UNITS/multi-user.target.wants
 OWNER=DreamsAreReal
 RUNNER_VERSION=2.338.1
 RUNNER_SHA256=08e9ccb3604d2462c24b5e33604dc30810296ca15cc65f23cffd4317eb144c37
 CACHE=/var/cache/ci-runner
+CI_ROOT=/var/lib/ci
+LEGACY_USER=ci
 DISK_IMAGE=/srv/ci.img
 DISK_SIZE=${CI_DISK_SIZE:-120G}
 SUBID_COUNT=65536
+HIDDEN="/opt /root /home /etc/srv-backup /etc/wireguard /etc/deploy-hub /var/backups /var/lib/docker /var/lib/containerd -/var/lib/app-backup -/run/docker.sock -/var/run/docker.sock -/run/containerd"
 
 next_subid() {
   awk -F: 'BEGIN {n = 100000} {if ($2 + $3 > n) n = $2 + $3} END {print n}' "$1"
 }
 
-user_ci() {
-  id ci >/dev/null 2>&1 ||
-    useradd --system --user-group --home-dir /var/lib/ci --no-create-home --shell /usr/sbin/nologin ci
-  if ! grep -q '^ci:' /etc/subuid; then
+check_repo() {
+  printf '%s' "$1" | grep -Eq '^[a-z0-9][a-z0-9_-]{0,28}$' || {
+    echo "bad repository name: $1 (lowercase letters, digits, - and _, at most 29)" >&2
+    exit 2
+  }
+}
+
+repo_user() {
+  user=ci-$1
+  id "$user" >/dev/null 2>&1 ||
+    useradd --system --user-group --home-dir "$CI_ROOT/$1" --no-create-home --shell /usr/sbin/nologin "$user"
+  if ! grep -q "^$user:" /etc/subuid; then
     start=$(next_subid /etc/subuid)
-    usermod --add-subuids "$start-$((start + SUBID_COUNT - 1))" ci
+    usermod --add-subuids "$start-$((start + SUBID_COUNT - 1))" "$user"
   fi
-  if ! grep -q '^ci:' /etc/subgid; then
+  if ! grep -q "^$user:" /etc/subgid; then
     start=$(next_subid /etc/subgid)
-    usermod --add-subgids "$start-$((start + SUBID_COUNT - 1))" ci
+    usermod --add-subgids "$start-$((start + SUBID_COUNT - 1))" "$user"
   fi
 }
 
+repo_home() {
+  user=ci-$1
+  home=$CI_ROOT/$1
+  [ -d "$home" ] || install -d -m 700 -o "$user" -g "$user" "$home"
+  runuser -u "$user" -- mkdir -p -m 700 "$home/runner" "$home/tmp" "$home/docker"
+}
+
 jail() {
-  uid=$1
-  hidden="/opt /root /home /etc/srv-backup /etc/wireguard /etc/deploy-hub /var/backups /var/lib/docker /var/lib/containerd -/var/lib/app-backup -/run/docker.sock -/var/run/docker.sock -/run/containerd"
-  install -d -m 755 "$UNITS/user-$uid.slice.d" "$UNITS/user@$uid.service.d" \
-    "$UNITS/ci-docker@.service.d" "$UNITS/ci-runner@.service.d"
-  install -m 644 "$HERE/ci-limits.conf" "$UNITS/user-$uid.slice.d/50-ci-limits.conf"
+  repo=$1
+  uid=$2
+  slice=user-$uid.slice
+  install -d -m 755 "$UNITS/$slice.d" "$UNITS/user@$uid.service.d" "$UNITS/ci-docker@$repo.service.d" "$UNITS/ci-runner@$repo.service.d"
+  install -m 644 "$HERE/ci-limits.conf" "$UNITS/$slice.d/50-ci-limits.conf"
   cat >"$UNITS/user@$uid.service.d/50-ci-jail.conf" <<UNIT
 [Unit]
 Requires=ci-netns.service var-lib-ci.mount
@@ -45,22 +64,49 @@ NetworkNamespacePath=/run/netns/ci
 BindReadOnlyPaths=/etc/netns/ci/resolv.conf:/etc/resolv.conf
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/var/lib/ci /run/user/$uid
-InaccessiblePaths=$hidden
+ReadWritePaths=$CI_ROOT/$repo /run/user/$uid
+InaccessiblePaths=$HIDDEN
 UNIT
-  cat >"$UNITS/ci-docker@.service.d/50-ci-user.conf" <<UNIT
+  cat >"$UNITS/ci-docker@$repo.service.d/50-ci-user.conf" <<UNIT
 [Unit]
 Requires=user@$uid.service
 After=user@$uid.service
 
 [Service]
-Slice=user-$uid.slice
+Slice=$slice
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus
 UNIT
-  cat >"$UNITS/ci-runner@.service.d/50-ci-user.conf" <<UNIT
+  cat >"$UNITS/ci-runner@$repo.service.d/50-ci-user.conf" <<UNIT
 [Service]
-Slice=user-$uid.slice
+Slice=$slice
 UNIT
+}
+
+prepare() {
+  repo_user "$1"
+  repo_home "$1"
+  jail "$1" "$(id -u "ci-$1")"
+  systemctl daemon-reload
+  loginctl enable-linger "ci-$1"
+}
+
+legacy() {
+  id "$LEGACY_USER" >/dev/null 2>&1 || return 0
+  uid=$(id -u "$LEGACY_USER")
+  echo "removing the shared runner user $LEGACY_USER: register every repository again" >&2
+  for link in "$WANTS"/ci-runner@*.service; do
+    [ -L "$link" ] || continue
+    systemctl disable --now "$(basename "$link")"
+  done
+  systemctl stop 'ci-runner@*.service' 'ci-docker@*.service'
+  loginctl disable-linger "$LEGACY_USER"
+  systemctl stop "user@$uid.service"
+  pkill -KILL -U "$uid" || true
+  rm -rf "$UNITS/user-$uid.slice.d" "$UNITS/user@$uid.service.d"
+  if mountpoint -q "$CI_ROOT"; then
+    find "$CI_ROOT" -mindepth 1 -maxdepth 1 -user "$LEGACY_USER" -exec rm -rf {} +
+  fi
+  userdel "$LEGACY_USER"
 }
 
 disk() {
@@ -69,11 +115,18 @@ disk() {
     mkfs.ext4 -q -m 0 -L ci "$DISK_IMAGE"
   fi
   chmod 600 "$DISK_IMAGE"
-  install -d -m 700 /var/lib/ci
+  install -d -m 755 "$CI_ROOT"
   systemctl enable --now var-lib-ci.mount
-  chown ci:ci /var/lib/ci
-  chmod 700 /var/lib/ci
-  runuser -u ci -- mkdir -p -m 700 /var/lib/ci/runners /var/lib/ci/tmp /var/lib/ci/docker
+  chown root:root "$CI_ROOT"
+  chmod 755 "$CI_ROOT"
+}
+
+registered() {
+  for runner in "$CI_ROOT"/*/runner/.runner; do
+    [ -f "$runner" ] || continue
+    repo=${runner%/runner/.runner}
+    basename "$repo"
+  done
 }
 
 host() {
@@ -81,10 +134,11 @@ host() {
     libicu74 libkrb5-3 liblttng-ust1t64 libssl3t64 zlib1g >/dev/null
   install -m 644 "$HERE/rootlesskit.apparmor" /etc/apparmor.d/rootlesskit
   apparmor_parser -r /etc/apparmor.d/rootlesskit
-  user_ci
+  legacy
   install -d -m 755 "$LIB"
   install -m 755 "$HERE/ci-netns" "$LIB/ci-netns"
   install -m 755 "$HERE/ci-runner-status" "$LIB/ci-runner-status"
+  install -m 755 "$HERE/ci-runner-reap" "$LIB/ci-runner-reap"
   install -m 755 "$HERE/ci-job-started" "$LIB/ci-job-started.sh"
   install -m 755 "$HERE/ci-runner-clean" "$LIB/ci-runner-clean.sh"
   rm -f "$LIB/ci-runner-clean"
@@ -92,24 +146,24 @@ host() {
     ci-runner-status.service ci-runner-status.timer; do
     install -m 644 "$HERE/$f" "$UNITS/$f"
   done
+  rm -f "$UNITS/ci-docker@.service.d/50-ci-user.conf" "$UNITS/ci-runner@.service.d/50-ci-user.conf"
   install -d -m 755 /etc/netns/ci
   printf 'nameserver 1.1.1.1\nnameserver 9.9.9.9\n' >/etc/netns/ci/resolv.conf
-  jail "$(id -u ci)"
   systemctl daemon-reload
   disk
-  loginctl enable-linger ci
   systemctl enable --now ci-netns.service ci-runner-status.timer
+  for repo in $(registered); do
+    prepare "$repo"
+  done
   systemctl try-restart 'ci-docker@*.service' 'ci-runner@*.service'
 }
 
 register() {
   repo=$1
-  printf '%s' "$repo" | grep -Eq '^[A-Za-z0-9._-]{1,100}$' || {
-    echo "bad repository name: $repo" >&2
-    exit 2
-  }
+  check_repo "$repo"
   read -r token
-  dir=/var/lib/ci/runners/$repo
+  user=ci-$repo
+  dir=$CI_ROOT/$repo/runner
   tarball=$CACHE/actions-runner-$RUNNER_VERSION.tar.gz
   install -d -m 700 "$CACHE"
   if [ ! -f "$tarball" ]; then
@@ -118,10 +172,10 @@ register() {
     mv "$tarball.part" "$tarball"
   fi
   echo "$RUNNER_SHA256  $tarball" | sha256sum -c --quiet
+  prepare "$repo"
   if [ ! -f "$dir/.runner" ]; then
-    runuser -u ci -- mkdir -p -m 700 "$dir"
-    runuser -u ci -- tar -xzf - -C "$dir" <"$tarball"
-    ip netns exec ci runuser -u ci -- env HOME=/var/lib/ci "$dir/config.sh" --unattended \
+    runuser -u "$user" -- tar -xzf - -C "$dir" <"$tarball"
+    ip netns exec ci runuser -u "$user" -- env HOME="$CI_ROOT/$repo" "$dir/config.sh" --unattended \
       --url "https://github.com/$OWNER/$repo" --token "$token" \
       --name "eu-$repo" --labels eu --work _work --replace
   fi

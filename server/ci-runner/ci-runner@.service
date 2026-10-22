@@ -1,25 +1,25 @@
 [Unit]
-Description=GitHub Actions runner for DreamsAreReal/%i (isolated, user ci)
+Description=GitHub Actions runner for DreamsAreReal/%i (isolated, user ci-%i)
 Requires=ci-docker@%i.service ci-netns.service var-lib-ci.mount
 After=ci-docker@%i.service ci-netns.service var-lib-ci.mount
 
 [Service]
-User=ci
-Group=ci
-WorkingDirectory=/var/lib/ci/runners/%i
-ExecStart=/var/lib/ci/runners/%i/bin/runsvc.sh
-Environment=HOME=/var/lib/ci
-Environment=TMPDIR=/var/lib/ci/tmp/%i
+User=ci-%i
+Group=ci-%i
+WorkingDirectory=/var/lib/ci/%i/runner
+ExecStart=/var/lib/ci/%i/runner/bin/runsvc.sh
+Environment=HOME=/var/lib/ci/%i
+Environment=TMPDIR=/var/lib/ci/%i/tmp
 Environment=DOCKER_HOST=unix:///run/ci/%i/docker.sock
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/lib/ci-runner/ci-job-started.sh
 Environment=ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/usr/local/lib/ci-runner/ci-runner-clean.sh
 NetworkNamespacePath=/run/netns/ci
 BindReadOnlyPaths=/etc/netns/ci/resolv.conf:/etc/resolv.conf
-ExecStartPre=/usr/bin/mkdir -p -m 700 /var/lib/ci/tmp/%i
+ExecStartPre=/usr/bin/mkdir -p -m 700 /var/lib/ci/%i/tmp
 Restart=always
 RestartSec=30
-KillMode=mixed
+KillMode=control-group
 KillSignal=SIGTERM
 TimeoutStopSec=5min
 
@@ -28,7 +28,7 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectSystem=strict
-ReadWritePaths=/var/lib/ci
+ReadWritePaths=/var/lib/ci/%i
 ProtectHome=yes
 InaccessiblePaths=/opt /root /etc/srv-backup /etc/wireguard /etc/deploy-hub /var/backups /var/lib/docker /var/lib/containerd -/var/lib/app-backup
 InaccessiblePaths=-/run/docker.sock -/var/run/docker.sock -/run/containerd /run/user
