@@ -26,7 +26,27 @@ func (s *Service) blueGreen(ctx context.Context, op *operation, conf registry.Ap
 		s.Log.Info("in-place recreate", "app", op.app, "reason", "no live instance or no port")
 		return s.recreate(ctx, op, conf, ref, t), false
 	}
+	if !s.standbySafe(ctx, conf, old) {
+		s.Out.Printf(msgStatefulRecreate, old)
+		s.Log.Info("in-place recreate", "app", op.app, "reason", "writable mount")
+		return s.recreate(ctx, op, conf, ref, t), false
+	}
 	return s.swap(ctx, op, conf, ref, t, old)
+}
+
+func (s *Service) standbySafe(ctx context.Context, conf registry.AppConf, old string) bool {
+	switch conf.BlueGreen {
+	case registry.BlueGreenOn:
+		return true
+	case registry.BlueGreenOff:
+		return false
+	}
+	mounts, err := s.Docker.WritableMounts(ctx, old)
+	if err != nil {
+		s.Log.Warn("mounts unknown, treating the app as stateful", "container", old, "error", err.Error())
+		return false
+	}
+	return len(mounts) == 0
 }
 
 func (s *Service) recreate(ctx context.Context, op *operation, conf registry.AppConf, ref string, t health.Target) bool {

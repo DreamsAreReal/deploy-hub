@@ -25,6 +25,7 @@ const (
 	formatState        = "{{.State.Status}}"
 	formatHealth       = "{{if .State.Health}}{{.State.Health.Status}}{{else}}-{{end}}"
 	formatNetworks     = "{{range $k,$v := .NetworkSettings.Networks}}{{$k}}\n{{end}}"
+	formatRWMounts     = "{{range .Mounts}}{{if .RW}}{{.Destination}}\n{{end}}{{end}}"
 	formatPorts        = "{{range $p,$c := .NetworkSettings.Ports}}{{range $c}}{{$p}} {{.HostPort}}\n{{end}}{{end}}"
 	standbyRestartMode = "no"
 	flagDetach         = "-d"
@@ -141,6 +142,14 @@ func (c Client) ContainerPort(ctx context.Context, container, hostPort string) s
 		}
 	}
 	return ""
+}
+
+func (c Client) WritableMounts(ctx context.Context, container string) ([]string, error) {
+	v, err := c.inspect(ctx, container, formatRWMounts)
+	if err != nil {
+		return nil, err
+	}
+	return strings.Fields(v), nil
 }
 
 func (c Client) Running(ctx context.Context, container string) bool {

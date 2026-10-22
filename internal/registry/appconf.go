@@ -13,6 +13,9 @@ const (
 
 	ModeBYOC = "byoc"
 
+	BlueGreenOn  = "on"
+	BlueGreenOff = "off"
+
 	ProfileStatic  = "static"
 	ProfileService = "service"
 	ProfileBot     = "bot"
@@ -36,6 +39,7 @@ type AppConf struct {
 	HMode      string
 	Image      string
 	Repo       string
+	BlueGreen  string
 }
 
 func LoadAppConf(dir string) (AppConf, error) {
@@ -52,6 +56,7 @@ func LoadAppConf(dir string) (AppConf, error) {
 		HMode:      kv["hmode"],
 		Image:      kv["image"],
 		Repo:       kv["repo"],
+		BlueGreen:  kv["bluegreen"],
 	}, nil
 }
 
@@ -65,6 +70,7 @@ func (c AppConf) Encode() string {
 		{"hmode", c.HMode},
 		{"image", c.Image},
 		{"repo", c.Repo},
+		{"bluegreen", c.BlueGreen},
 	})
 }
 

@@ -27,19 +27,23 @@ import (
 )
 
 const (
-	goodTag  = "sha-aaaaaaa1111"
-	good2Tag = "sha-bbbbbbb2222"
-	badTag   = "sha-dead0001111"
-	bad2Tag  = "sha-dead0002222"
-	image    = "ghcr.io/owner/web"
-	appName  = "web"
-	mainName = "web-app-1"
-	appRepo  = "Owner/web"
-	hubRef   = "Owner/deploy-hub/.github/workflows/deploy.yml@refs/heads/main"
-	goodOIDC = "signed-by-github"
-	digest   = "sha256:" + "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
-	appPort  = "9001"
-	psVerb   = "ps"
+	goodTag    = "sha-aaaaaaa1111"
+	good2Tag   = "sha-bbbbbbb2222"
+	badTag     = "sha-dead0001111"
+	bad2Tag    = "sha-dead0002222"
+	image      = "ghcr.io/owner/web"
+	appName    = "web"
+	mainName   = "web-app-1"
+	appRepo    = "Owner/web"
+	hubRef     = "Owner/deploy-hub/.github/workflows/deploy.yml@refs/heads/main"
+	goodOIDC   = "signed-by-github"
+	digest     = "sha256:" + "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+	appPort    = "9001"
+	psVerb     = "ps"
+	healthPath = "/health"
+	rwData     = "/data\n"
+
+	formatRWMounts = "{{range .Mounts}}{{if .RW}}{{.Destination}}\n{{end}}{{end}}"
 )
 
 var (
@@ -64,6 +68,8 @@ type sim struct {
 	brokenOnMain map[string]bool
 	crashOnUp    bool
 	upErr        error
+	rwMounts     string
+	mountsErr    error
 }
 
 func newSim() *sim {
@@ -108,6 +114,9 @@ func (s *sim) handle(c procexec.Command) (procexec.Result, error) {
 			return procexec.Result{Stdout: "id123\n"}, nil
 		}
 	case "inspect":
+		if a[2] == formatRWMounts {
+			return procexec.Result{Stdout: s.rwMounts}, s.mountsErr
+		}
 		return s.inspect(a[2], a[3]), nil
 	case "run":
 		return s.run(a)
@@ -305,7 +314,7 @@ func newEnv(t *testing.T) *env {
 	e.router = &fakeRouter{}
 	e.write(filepath.Join(e.hubDir, "apps.list"), appName+" "+e.appDir+"\n")
 	e.write(filepath.Join(e.appDir, "docker-compose.yml"), "services: {}\n")
-	e.conf(registry.AppConf{Profile: registry.ProfileService, Port: appPort, HealthPath: "/health", Image: image, Repo: appRepo})
+	e.conf(registry.AppConf{Profile: registry.ProfileService, Port: appPort, HealthPath: healthPath, Image: image, Repo: appRepo})
 	e.ident = &fakeVerifier{}
 	e.exec = &procexectest.Fake{Handler: e.sim.handle}
 	d := docker.Client{Exec: e.exec}

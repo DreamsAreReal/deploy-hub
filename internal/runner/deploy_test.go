@@ -88,6 +88,63 @@ func TestBlueGreenSwapIsZeroDowntime(t *testing.T) {
 	e.expectLog("health gate finished", "standby cleaned up")
 }
 
+func TestStatefulAppIsRecreatedInPlace(t *testing.T) {
+	cases := []struct {
+		name, mounts, override string
+		mountsErr              error
+		standby                bool
+	}{
+		{name: "writable mount", mounts: rwData},
+		{name: "mounts unknown", mountsErr: errSim},
+		{name: "override off", override: registry.BlueGreenOff},
+		{name: "override on", mounts: rwData, override: registry.BlueGreenOn, standby: true},
+		{name: "stateless", standby: true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			e := newEnv(t)
+			e.conf(registry.AppConf{Profile: registry.ProfileService, Port: appPort, HealthPath: healthPath, Image: image, Repo: appRepo, BlueGreen: c.override})
+			e.sim.startOld(goodTag)
+			e.state(registry.DeployState{Current: goodTag})
+			e.sim.rwMounts, e.sim.mountsErr = c.mounts, c.mountsErr
+			if code := e.dispatch("deploy web "+good2Tag, meta()); code != ExitOK {
+				t.Fatalf("exit %d\n%s", code, e.err)
+			}
+			_, ran := e.exec.Find("docker run")
+			testutil.Equal(t, ran, c.standby)
+			testutil.Equal(t, e.sim.images[mainName], image+":"+good2Tag)
+			testutil.Equal(t, registry.LoadState(e.appDir), registry.DeployState{Current: good2Tag, Previous: goodTag})
+			if !c.standby {
+				e.expectOut(e.out, "blue-green: "+mainName+" keeps state on a writable mount — recreating in place")
+			}
+		})
+	}
+}
+
+func TestStatefulBrokenReleaseRollsBack(t *testing.T) {
+	e := newEnv(t)
+	e.sim.startOld(goodTag)
+	e.state(registry.DeployState{Current: goodTag})
+	e.sim.rwMounts = rwData
+	if code := e.dispatch("deploy web "+badTag, meta()); code != ExitFail {
+		t.Fatalf("exit %d", code)
+	}
+	testutil.Equal(t, e.sim.images[mainName], image+":"+goodTag)
+	testutil.True(t, e.sim.running[mainName], "previous release serves again")
+	e.expectJournal("web@dead000 deploy fail", "web@aaaaaaa rollback ok")
+}
+
+func TestBYOCDeployKeepsBlueGreenOverride(t *testing.T) {
+	e := newEnv(t)
+	e.sim.mainName = appName
+	e.conf(registry.AppConf{Port: appPort, Image: image, Repo: appRepo, BlueGreen: registry.BlueGreenOn})
+	stdin := meta("compose="+byocCompose(), "main="+byocMain, "hport=9001", "hmode=http")
+	testutil.Equal(t, e.dispatch("deploy web "+goodTag, stdin), ExitOK)
+	conf, err := registry.LoadAppConf(e.appDir)
+	testutil.NoErr(t, err)
+	testutil.Equal(t, conf.BlueGreen, registry.BlueGreenOn)
+}
+
 func TestTakenStandbyPortFallsBackToInPlaceRecreate(t *testing.T) {
 	e := newEnv(t)
 	e.sim.startOld(goodTag)
