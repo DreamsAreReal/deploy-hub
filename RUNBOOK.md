@@ -79,7 +79,9 @@ trust `status` / `history <app>`, not the last line your terminal printed.
 ## Confirm a deploy did not break anything
 
 A broken release is discarded on the standby and never reaches the live
-container. Check the apps from the operator machine (external is the real
+container. Apps with a writable data mount (tasks, codeapp, router-bot) skip the
+standby and are recreated in place: a broken release there is rolled back to the
+previous sha after the gate fails. Check the apps from the operator machine (external is the real
 test):
 
     for a in tasks codeapp; do

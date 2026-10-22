@@ -35,6 +35,7 @@ push to default branch
               lock → docker login (ephemeral job token) → pull <image>@<digest> → logout
               → blue-green: start a standby, health gate (90s), recreate the main
                 service (Caddy fails over to the standby), gate it, drop the standby
+                (apps with a writable data mount are recreated in place instead)
               → ok:   state advanced, journal line, metrics pushed
               → fail: standby discarded, the current version keeps serving
 ```
@@ -448,7 +449,7 @@ If the repo ships `docker-compose.yml` (or `.yaml`, or `compose.yml`), CI runs
 | `/opt/deploy-hub/last-error.log` | recent pull errors (when CI logs are unreachable) |
 | `/home/deploy/.cache/deploy-hub/jwks.json` | last GitHub OIDC signing keys, used when GitHub is unreachable |
 | `/opt/<app>/docker-compose.yml` | app stack: 127.0.0.1 ports, mem limit, log rotation |
-| `/opt/<app>/app.conf` | `profile=`, `port=`, `health_path=`, `image=`, `repo=` (BYOC: `mode=byoc`, `main=`, `hmode=`) |
+| `/opt/<app>/app.conf` | `profile=`, `port=`, `health_path=`, `image=`, `repo=`, optional `bluegreen=on\|off` (BYOC: `mode=byoc`, `main=`, `hmode=`) |
 | `/opt/<app>/.env` | app secrets (600), referenced by compose, never in git |
 | `/opt/<app>/.deploy-state` | `current=`/`previous=` sha tags — rollback source of truth |
 
@@ -511,7 +512,13 @@ until Caddy is back on the permanent port, and is removed on every exit path,
 including SIGINT/SIGTERM/SIGHUP. A broken release never touches the live
 container. The deploy recreates in place instead when the app has no standby
 port: `port+10000` is past 65535, is another app's port, or something already
-listens on it. When the old instance was not running, a failed gate redeploys
+listens on it, or the live container has a writable mount. The standby gets
+none of the main container's mounts, so an app that keeps state there (tasks:
+SQLite in `/data`) would serve from an empty database and lose every write taken
+during the cutover; such apps take a few seconds of 502 and a failed gate rolls
+back to the previous sha. `bluegreen=on` in `app.conf` keeps blue-green for an
+app whose mount is only a cache; `bluegreen=off` turns it off. When the old
+instance was not running, a failed gate redeploys
 the previous sha; on a first deploy the app is stopped.
 
 ## Observability
