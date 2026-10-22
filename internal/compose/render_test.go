@@ -62,6 +62,7 @@ services:
     image: redis:7
     mem_limit: 64m
     restart: always
+    stop_grace_period: 5s
 `)
 	testutil.Equal(t, r.Metadata(), "main=api\nport=9005\npublic=true\nhealth=http\ncontext=./api\ndockerfile=api/Dockerfile\n")
 	api := svc(t, doc, "api")
@@ -74,6 +75,24 @@ services:
 	testutil.Equal(t, asMap(t, logging["options"])["max-file"], "3")
 	redis := svc(t, doc, "redis")
 	testutil.Equal(t, []any{redis["mem_limit"], redis["restart"], redis["image"]}, []any{"64m", restartAlways, "redis:7"})
+	testutil.Equal(t, []any{api["stop_grace_period"], redis["stop_grace_period"]}, []any{DefaultStopGrace, "5s"})
+}
+
+func TestOverlapLabel(t *testing.T) {
+	src := []byte("services:\n  bot:\n    labels:\n      deploy-hub.overlap: \"false\"\n  web:\n    labels: [deploy-hub.overlap=0]\n  api:\n    labels: {deploy-hub.overlap: \"true\"}\n  plain: {}\n")
+	type label struct {
+		value string
+		set   bool
+	}
+	for service, want := range map[string]label{"bot": {boolFalse, true}, "web": {"0", true}, "api": {boolTrue, true}, "plain": {}, "missing": {}} {
+		v, ok := OverlapLabel(src, service)
+		testutil.Equal(t, label{v, ok}, want)
+	}
+	_, ok := OverlapLabel([]byte("not: [valid"), "bot")
+	testutil.True(t, !ok, "unreadable compose has no label")
+	for label, want := range map[string]bool{"": true, boolTrue: true, "False": false, "No": false, "0": false, "maybe": true} {
+		testutil.Equal(t, AllowsOverlap(label), want)
+	}
 }
 
 func TestRenderLabelsAndHealth(t *testing.T) {

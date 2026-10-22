@@ -16,19 +16,20 @@ const (
 	MainService      = "app"
 	StateMissing     = "missing"
 	NoHealth         = "-"
-	StandbyMemory    = "256m"
 	PullNever        = "never"
 	PullMissing      = "missing"
 
-	formatName         = "{{.Name}}"
-	formatTag          = "{{.Tag}}"
-	formatState        = "{{.State.Status}}"
-	formatHealth       = "{{if .State.Health}}{{.State.Health.Status}}{{else}}-{{end}}"
-	formatNetworks     = "{{range $k,$v := .NetworkSettings.Networks}}{{$k}}\n{{end}}"
-	formatRWMounts     = "{{range .Mounts}}{{if .RW}}{{.Destination}}\n{{end}}{{end}}"
-	formatPorts        = "{{range $p,$c := .NetworkSettings.Ports}}{{range $c}}{{$p}} {{.HostPort}}\n{{end}}{{end}}"
-	standbyRestartMode = "no"
-	flagDetach         = "-d"
+	formatTag       = "{{.Tag}}"
+	formatState     = "{{.State.Status}}"
+	formatHealth    = "{{if .State.Health}}{{.State.Health.Status}}{{else}}-{{end}}"
+	formatComposePs = "{{.Name}}\t{{.Labels}}"
+	formatLabel     = "{{index .Config.Labels %q}}"
+	formatRWMounts  = "{{range .Mounts}}{{if .RW}}{{.Destination}}\n{{end}}{{end}}"
+	oneOffLabel     = "com.docker.compose.oneoff=True"
+	formatPorts     = "{{range $p,$c := .NetworkSettings.Ports}}{{range $c}}{{$p}} {{.HostPort}}\n{{end}}{{end}}"
+	flagDetach      = "-d"
+	flagFile        = "-f"
+	verbCompose     = "compose"
 )
 
 var leadingDigits = regexp.MustCompile(`^[0-9]+`)
@@ -74,7 +75,7 @@ type UpOptions struct {
 }
 
 func (c Client) ComposeUp(ctx context.Context, o UpOptions) error {
-	args := []string{"compose", "-f", o.File, "up", flagDetach, "--pull", o.Pull}
+	args := []string{verbCompose, flagFile, o.File, "up", flagDetach, "--pull", o.Pull}
 	if o.NoRecreate {
 		args = append(args, "--no-recreate")
 	}
@@ -94,11 +95,17 @@ func (c Client) ComposeValidate(ctx context.Context, dir, file, image string) er
 }
 
 func (c Client) ComposeContainer(ctx context.Context, file, service string) string {
-	res, err := c.run(ctx, imageEnv(PlaceholderImage), "", "", "compose", "-f", file, "ps", "-a", "--format", formatName, service)
+	res, err := c.run(ctx, imageEnv(PlaceholderImage), "", "", "compose", "-f", file, "ps", "-a", "--format", formatComposePs, service)
 	if err != nil {
 		return ""
 	}
-	return firstLine(res.Stdout)
+	for _, line := range strings.Split(strings.TrimSpace(res.Stdout), "\n") {
+		name, labels, _ := strings.Cut(strings.TrimSpace(line), "\t")
+		if name != "" && !strings.Contains(labels, oneOffLabel) {
+			return name
+		}
+	}
+	return ""
 }
 
 func (c Client) inspect(ctx context.Context, container, format string) (string, error) {
@@ -120,14 +127,6 @@ func (c Client) HealthStatus(ctx context.Context, container string) string {
 		return NoHealth
 	}
 	return v
-}
-
-func (c Client) Network(ctx context.Context, container string) string {
-	v, err := c.inspect(ctx, container, formatNetworks)
-	if err != nil {
-		return ""
-	}
-	return firstLine(v)
 }
 
 func (c Client) ContainerPort(ctx context.Context, container, hostPort string) string {
@@ -157,26 +156,34 @@ func (c Client) Running(ctx context.Context, container string) bool {
 	return err == nil && strings.TrimSpace(res.Stdout) != ""
 }
 
+func (c Client) ImageLabel(ctx context.Context, ref, key string) string {
+	res, err := c.run(ctx, nil, "", "", "image", "inspect", "--format", fmt.Sprintf(formatLabel, key), ref)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(res.Stdout)
+}
+
 type Standby struct {
 	Name     string
-	Network  string
-	EnvFile  string
+	File     string
+	Service  string
+	Image    string
 	HostPort string
 	Port     string
-	Image    string
 }
 
 func (c Client) RunStandby(ctx context.Context, s Standby) error {
-	args := []string{"run", flagDetach, "--name", s.Name, "--restart", standbyRestartMode}
-	if s.Network != "" {
-		args = append(args, "--network", s.Network)
+	args := []string{verbCompose, flagFile, s.File, "run", flagDetach, "--no-deps", "--name", s.Name}
+	if s.HostPort != "" {
+		args = append(args, "-p", fmt.Sprintf("127.0.0.1:%s:%s", s.HostPort, s.Port))
 	}
-	if s.EnvFile != "" {
-		args = append(args, "--env-file", s.EnvFile)
-	}
-	publish := fmt.Sprintf("127.0.0.1:%s:%s", s.HostPort, s.Port)
-	args = append(args, "--memory", StandbyMemory, "-p", publish, s.Image)
-	_, err := c.run(ctx, nil, "", "", args...)
+	_, err := c.run(ctx, imageEnv(s.Image), "", "", append(args, s.Service)...)
+	return err
+}
+
+func (c Client) Stop(ctx context.Context, container string) error {
+	_, err := c.run(ctx, nil, "", "", "stop", container)
 	return err
 }
 
@@ -201,9 +208,4 @@ func (c Client) RemoveImage(ctx context.Context, ref string) error {
 func (c Client) PruneDangling(ctx context.Context) error {
 	_, err := c.run(ctx, nil, "", "", "image", "prune", "-f")
 	return err
-}
-
-func firstLine(s string) string {
-	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
-	return strings.TrimSpace(line)
 }

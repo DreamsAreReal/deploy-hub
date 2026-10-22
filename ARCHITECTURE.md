@@ -39,6 +39,7 @@ programs that subcommand may execute.
 | **VPS**, user `deploy` | SSH forced command | `runner` | `deploy`, `report`, `rollback`, `status`, `history` |
 | **VPS**, root | sudo (narrow rule), systemd timers, `onboard` over root SSH | `caddy-sync`, `prune`, `provision`, `facts` | HTTPS routes, image cleanup, preparing `/opt/<app>/` |
 | **Operator laptop** | you | `onboard` | connect a new app repo end to end |
+| **Operator laptop**, under an MCP client | Claude Code, Claude Desktop or any MCP client | `mcp` | MCP server on stdio: `status`, `history`, `rollback` tools, each one SSH request to the runner with the deploy key |
 
 ```
  app repo (push)                         this repo
@@ -71,7 +72,7 @@ programs that subcommand may execute.
 | **app** | a deployable repo, listed in `/opt/deploy-hub/apps.list` and in `apps:` of `policy/gate.yaml`. |
 | **profile** | `static` or `service` (has a port, HTTP health check), or `bot` (no port, health from the container healthcheck). Stored in `/opt/<app>/app.conf`. |
 | **BYOC** | "bring your own compose": the app repo ships a compose file; `render` rewrites it for the server. |
-| **standby** | the temporary `<app>-bg` container used during a blue-green swap, on port `port+10000`. |
+| **standby** | the temporary `<app>-bg` container (`docker compose run` of the main service) used during a blue-green swap; for apps with a port it listens on `port+10000` or a spare port in 30000–32767. |
 | **journal** | `/opt/deploy-hub/deploys.log`, one line per operation; the source of truth for history, rollback eligibility and metrics. |
 | **state** | `/opt/<app>/.deploy-state` with `current=` and `previous=` tags. |
 | **pin** | the commit SHA in `uses: DreamsAreReal/deploy-hub/.github/actions/hub@<sha>` inside `deploy.yml`; decides which gate code and policy app CI runs. |
@@ -138,27 +139,52 @@ not, so search for the name.
    one-time token, `docker pull image@digest`, `docker tag` to the sha tag,
    then `docker logout` (deferred, runs even on failure). The running
    container is therefore byte-for-byte the image the gate tested.
-8. **Swap** (`bluegreen.go`, `blueGreen`) picks one of two strategies:
+8. **Swap** (`bluegreen.go`, `blueGreen`) picks one of three strategies:
 
    ```
-   no port, or no running old container ........ in-place recreate
+   no running old container ..................... in-place recreate
+   label deploy-hub.overlap: "false" on the main
+     service (compose wins over the image) ...... in-place recreate
    bluegreen=off in app.conf .................... in-place recreate
    old container has a writable mount ........... in-place recreate (stateful)
      (bluegreen=on overrides this check)
-   standby port unusable (>65535, another app's
-     port, or something already listens) ........ in-place recreate
+   no port (bots, workers, BYOC without one) .... overlap
+   port+10000 unusable and no spare port free
+     in 30000-32767 ............................. in-place recreate
    otherwise ..................................... blue-green swap
    ```
 
+   The standby is `<app>-bg`, started with `docker compose run -d --no-deps`
+   of the main service (`docker.RunStandby`), so it has the service's command,
+   env, volumes, networks, healthcheck and limits, but not its published ports
+   or restart policy.
+
    **Blue-green swap** (`swap`): run `caddy-sync` first so Caddy already
-   lists `port+10000` as a failover upstream; start `<app>-bg` on that port
-   with the new image; health-gate it. If the standby is unhealthy, remove it
-   and stop: production was never touched. If healthy, recreate the main
-   service with the new image (Caddy fails over to the standby while main is
-   down), gate main, wait `caddy.Settle` (6 s) and remove the standby.
+   lists the standby port as a failover upstream. That port is `port+10000`,
+   or, when that is past 65535, another app's port or busy, the first free
+   port in 30000–32767, just below the Linux ephemeral range
+   (`caddy.Routes`, `caddy.StandbyPort`). Spare ports are handed out only
+   after every app got its own `port+10000`, so one app's spare never takes
+   another app's usual standby port. Start the
+   standby on `127.0.0.1:<standby port>` with the new image and health-gate
+   it. If it is unhealthy, remove it and stop: production was never touched.
+   If healthy, recreate the main service with the new image (Caddy fails over
+   to the standby while main is down), gate main, wait `caddy.Settle` (6 s),
+   stop the standby gracefully (`docker stop`, its `stop_grace_period`, at
+   most 2 minutes) and remove it.
+
+   **Overlap** (`overlap`, no port): the same `handover` without a port and
+   without the settle wait. The standby runs next to the old instance and
+   must pass the gate (container healthcheck) before main is recreated, so
+   both instances run for about 5–90 s.
 
    **In-place recreate** (`recreate`): `docker compose up` with the new image,
-   then gate it. There are a few seconds of 502 for HTTP apps.
+   then gate it. There are a few seconds of 502 for HTTP apps and a gap for
+   workers.
+
+   Generated composes, and BYOC services that set none, get
+   `stop_grace_period: 30s` (`internal/compose/render.go`), so the old main
+   container drains in-flight work on SIGTERM during the recreate.
 
 9. **Health gate** (`internal/health`): poll every 5 s for up to 90 s. HTTP
    apps must answer 2xx/3xx on `127.0.0.1:<port><health_path>`; bots must
@@ -170,8 +196,8 @@ not, so search for the name.
     - standby unhealthy (blue-green): journal `deploy fail`, the old
       container never stopped, nothing else changes;
     - standby healthy but the recreated main is not: main is started again
-      on the old `current` tag (not health-gated), the standby is removed
-      after 6 s, journal `deploy fail`;
+      on the old `current` tag (not health-gated), the standby is stopped
+      (after 6 s for apps with a port) and removed, journal `deploy fail`;
     - unhealthy after an in-place recreate: redeploy the tag that was
       `current` before this deploy and gate it (journal `rollback`); on a
       first deploy there is none, so the app is stopped.
@@ -189,7 +215,8 @@ a tag that this hub already deployed successfully (`previouslyDeployed` in
 ### 4.3 HTTPS routing (`internal/caddy`)
 
 `caddy-sync` renders `/etc/caddy/Caddyfile` from `apps.list`: one vhost per
-app with a port, two upstreams (`port` and `port+10000`), `lb_policy first`,
+app with a port, two upstreams (`port` and its standby port, `port+10000` or
+a spare one in 30000–32767), `lb_policy first`,
 passive health (`max_fails 1`, `fail_duration 5s`) and retries. It validates
 the file with `caddy validate`, writes it only when it changed and reloads
 Caddy. The runner calls it through `sudo` (`internal/runner/router.go`); the
@@ -206,7 +233,8 @@ sudoers rule allows exactly that one command.
 | Policy lives only in this repo | App repos cannot lower thresholds or add ignore files (`forbidden_files` in `policy/gate.yaml` bans local scanner configs). Changing the rules is a reviewed commit here. |
 | The gate toolchain is pinned by SHA | A gate or policy change reaches app CI only when someone moves the pin on purpose, after it passed CI here. A broken gate commit on `main` cannot block every app at once. |
 | Caddy route never changes during a deploy | Caddy keeps the old config alive for HTTP/2 connections after a reload. Switching the route to the standby and back once caused 7 minutes of 502 (#407). Both upstreams are always listed and Caddy fails over passively. |
-| Stateful apps are recreated in place | The standby gets none of the main container's volumes. An app with SQLite in `/data` would serve from an empty database and lose writes. A few seconds of 502 are better than lost data. |
+| Stateful apps are recreated in place | The standby shares the main service's volumes, so an app with SQLite in `/data` would have two processes writing one database during the cutover. A few seconds of 502 are better than corrupted or lost data. |
+| Every stateless app overlaps, with or without a port | A worker or bot that is recreated in place stops working until the new one is up. Running the new one next to the old one and gating it first means a broken release never stops the working one; `deploy-hub.overlap: "false"` opts out for singletons. |
 | One global deploy lock | Two deploys at once on a 1-CPU box would fight for memory and Caddy reloads. Simplicity beats throughput here. |
 | Journal is an append-only text file | Readable with `grep` during an incident without any tool, and enough to rebuild all counters. |
 | No comments in code (the `comments` check) | Policy decision of the owner: the reasoning lives in README, this file and commit messages, and names must explain the code. It applies to this repo too. |
@@ -231,6 +259,7 @@ internal/smoke/     ports from smoke.conf that a deploy must not break
 internal/compose/   `render`: repo compose -> server compose (BYOC)
 internal/provision/ `provision` and `facts`: prepare /opt/<app>/ as root
 internal/onboard/   `onboard` on the operator laptop: stub, secrets, provision
+internal/mcp/       `mcp`: JSON-RPC over stdio, tool schemas, argument checks before SSH
 internal/prune/     keep running image + 2 previous per app
 internal/obs/       slog logger, metric names (names.go), pusher, journal-derived counters
 internal/delivery/  post deploy steps to the task tracker
@@ -394,15 +423,28 @@ the stub, or the commit does not match. See RUNBOOK "A deploy was rejected".
 
 **Stateful apps get downtime on purpose.** Any writable mount in the live
 container means in-place recreate. If the mount is only a cache, set
-`bluegreen=on` in `app.conf`. Without a port (bots, workers) a deploy is
-always an in-place recreate.
+`bluegreen=on` in `app.conf`. Turning it on for real state means two
+instances write it at once during the deploy.
 
-**A POST in flight can still get a 502** when the old main container stops:
-Caddy retries only GET once a request reached an instance.
+**Bots and workers run twice for a while.** Without a port the new instance
+overlaps the old one for about 5–90 s. A Telegram long-poll bot gets
+`409 Conflict` in one of them, and a job or update can reach both, so
+handlers should be idempotent. Apps that must never run twice (exclusive
+lock, singleton consumer) set the label `deploy-hub.overlap: "false"` on the
+main service and get an in-place recreate.
 
-**The standby port must be free.** `port+10000` must be at most 65535, not
-another app's port and not listening. Otherwise the deploy falls back to an
-in-place recreate with a few seconds of downtime; the CI log shows
+**A POST in flight can still get a 502** if the old main container does not
+drain on SIGTERM: Caddy retries only GET once a request reached an instance.
+Generated composes give it `stop_grace_period: 30s`; apps provisioned before
+that default keep Docker's 10 s until the line is added to
+`/opt/<app>/docker-compose.yml`, and the app itself must stop accepting and
+finish its requests on SIGTERM.
+
+**The standby port moves when `port+10000` is unusable.** Past 65535,
+another app's port or listening: the app gets the first free port in
+30000–32767, and the route for it is written before the standby starts. Do
+not run other services in that range. Only when it is full does the deploy
+recreate in place; the CI log shows
 `blue-green: no free standby port, falling back to in-place recreate`.
 
 **The lock is global.** A slow health gate of one app (up to 90 s, twice in a

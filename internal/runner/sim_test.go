@@ -40,6 +40,8 @@ const (
 	digest     = "sha256:" + "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
 	appPort    = "9001"
 	psVerb     = "ps"
+	verbStop   = "stop"
+	verbInsp   = "inspect"
 	healthPath = "/health"
 	rwData     = "/data\n"
 
@@ -70,6 +72,8 @@ type sim struct {
 	upErr        error
 	rwMounts     string
 	mountsErr    error
+	imageLabel   string
+	stopped      []string
 }
 
 func newSim() *sim {
@@ -113,13 +117,28 @@ func (s *sim) handle(c procexec.Command) (procexec.Result, error) {
 		if s.running[name] {
 			return procexec.Result{Stdout: "id123\n"}, nil
 		}
-	case "inspect":
-		if a[2] == formatRWMounts {
-			return procexec.Result{Stdout: s.rwMounts}, s.mountsErr
+	case verbInsp:
+		return s.inspectCall(a)
+	}
+	return s.lifecycle(a)
+}
+
+func (s *sim) inspectCall(a []string) (procexec.Result, error) {
+	if a[2] == formatRWMounts {
+		return procexec.Result{Stdout: s.rwMounts}, s.mountsErr
+	}
+	return s.inspect(a[2], a[3]), nil
+}
+
+func (s *sim) lifecycle(a []string) (procexec.Result, error) {
+	switch a[0] {
+	case "image":
+		if a[1] == verbInsp {
+			return procexec.Result{Stdout: s.imageLabel + "\n"}, nil
 		}
-		return s.inspect(a[2], a[3]), nil
-	case "run":
-		return s.run(a)
+	case verbStop:
+		s.stopped = append(s.stopped, a[1])
+		s.running[a[1]] = false
 	case "rm":
 		if s.rmErr != nil {
 			return procexec.Result{}, s.rmErr
@@ -140,11 +159,13 @@ func (s *sim) compose(c procexec.Command) (procexec.Result, error) {
 			s.images[s.mainName] = envImage(c)
 			s.ports[appPort] = s.mainName
 		}
-	case "stop":
+	case verbStop:
 		if s.stopErr != nil {
 			return procexec.Result{}, s.stopErr
 		}
 		s.running[s.mainName] = false
+	case "run":
+		return s.run(c)
 	case "config":
 		return procexec.Result{}, s.validateErr
 	case psVerb:
@@ -181,16 +202,17 @@ func (s *sim) inspect(format, container string) procexec.Result {
 	}
 }
 
-func (s *sim) run(a []string) (procexec.Result, error) {
+func (s *sim) run(c procexec.Command) (procexec.Result, error) {
 	if s.standbyErr != nil {
 		return procexec.Result{}, s.standbyErr
 	}
-	name := a[3]
-	publish := a[len(a)-2]
-	parts := strings.Split(publish, ":")
+	a := c.Args
+	name := a[slices.Index(a, "--name")+1]
 	s.running[name] = true
-	s.images[name] = a[len(a)-1]
-	s.ports[parts[1]] = name
+	s.images[name] = envImage(c)
+	if i := slices.Index(a, "-p"); i > 0 {
+		s.ports[strings.Split(a[i+1], ":")[1]] = name
+	}
 	return procexec.Result{}, nil
 }
 

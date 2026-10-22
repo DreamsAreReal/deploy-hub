@@ -19,13 +19,15 @@ const (
 	DefaultLogDriver  = "json-file"
 	DefaultLogSize    = "10m"
 	DefaultLogFiles   = "3"
+	DefaultStopGrace  = "30s"
 	DefaultContext    = "."
 	DefaultDockerfile = "Dockerfile"
 	EnvFile           = ".env"
 
-	LabelMain   = "deploy-hub.main"
-	LabelPublic = "deploy-hub.public"
-	LabelHost   = "deploy-hub.host"
+	LabelMain    = "deploy-hub.main"
+	LabelPublic  = "deploy-hub.public"
+	LabelHost    = "deploy-hub.host"
+	LabelOverlap = "deploy-hub.overlap"
 
 	HealthCompose = "compose"
 	HealthHTTP    = "http"
@@ -38,6 +40,7 @@ const (
 	keyEnvFile       = "env_file"
 	keyRestart       = "restart"
 	keyMemLimit      = "mem_limit"
+	keyStopGrace     = "stop_grace_period"
 	keyDeploy        = "deploy"
 	keyLogging       = "logging"
 	keyLabels        = "labels"
@@ -289,6 +292,7 @@ func applyDefaults(svc *yaml.Node) {
 		setDefault(svc, keyMemLimit, str(DefaultMemLimit))
 	}
 	setDefault(svc, keyLogging, defaultLogging())
+	setDefault(svc, keyStopGrace, str(DefaultStopGrace))
 }
 
 func hostService(svcs []service, main service) service {
@@ -363,6 +367,29 @@ func fieldErr(err, kind error) error {
 		return kind
 	}
 	return nil
+}
+
+func OverlapLabel(data []byte, service string) (string, bool) {
+	doc, err := parse(data)
+	if err != nil {
+		return "", false
+	}
+	for _, s := range doc.services {
+		if s.name == service {
+			v, ok := labels(s.node)[LabelOverlap]
+			return v, ok
+		}
+	}
+	return "", false
+}
+
+func AllowsOverlap(label string) bool {
+	switch strings.ToLower(strings.TrimSpace(label)) {
+	case boolFalse, "0", "no":
+		return false
+	default:
+		return true
+	}
 }
 
 func isPublic(l map[string]string) bool {

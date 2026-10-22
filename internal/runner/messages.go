@@ -24,6 +24,8 @@ const (
 	msgTargetUnhealthy  = "error: %s target is not healthy\n"
 	msgZeroDowntime     = "zero-downtime: prod never changed"
 	msgStandbyStart     = "blue-green: starting standby %s on 127.0.0.1:%s -> %s\n"
+	msgOverlapStart     = "blue-green: starting standby %s next to the live instance (no port)\n"
+	msgOverlapOff       = "blue-green: deploy-hub.overlap is false — in-place recreate"
 	msgStandbyFallback  = "blue-green: standby did not start, falling back to in-place recreate"
 	msgNoStandbyPort    = "blue-green: no free standby port, falling back to in-place recreate"
 	msgStandbyUnhealthy = "blue-green: standby unhealthy — discarding it, old stays live"

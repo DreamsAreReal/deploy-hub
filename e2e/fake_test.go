@@ -29,6 +29,7 @@ const (
 	filePerm      = 0o600
 	exitFail      = 1
 	verbPs        = "ps"
+	verbStop      = "stop"
 	binDocker     = "docker"
 	binSudo       = "sudo"
 	binCaddy      = "caddy"
@@ -91,7 +92,7 @@ func (f fake) start(name, image, port string) error {
 	f.kill(name)
 	c := container{Image: image, Port: port}
 	if !strings.Contains(image, brokenMark) {
-		pid, err := spawnServer(port, image)
+		pid, err := spawnApp(port, image)
 		if err != nil {
 			return err
 		}
@@ -100,12 +101,16 @@ func (f fake) start(name, image, port string) error {
 	return f.save(name, c)
 }
 
-func spawnServer(port, version string) (int, error) {
+func spawnApp(port, version string) (int, error) {
 	cmd := exec.CommandContext(context.Background(), "dh-fake-app")
 	cmd.Env = append(os.Environ(), envPort+"="+port, envVersion+"="+version)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		return 0, err
+	}
+	if port == "" {
+		pid := cmd.Process.Pid
+		return pid, cmd.Process.Release()
 	}
 	deadline := time.Now().Add(bootWait)
 	for time.Now().Before(deadline) {
@@ -147,7 +152,7 @@ func (f fake) docker(args []string) int {
 		return exitFail
 	}
 	handlers := map[string]func([]string) int{
-		"compose": f.compose, verbPs: f.ps, "inspect": f.inspect, "run": f.run, "rm": f.rm, "pull": f.pull,
+		"compose": f.compose, verbPs: f.ps, "inspect": f.inspect, "rm": f.rm, verbStop: f.stop, "pull": f.pull,
 	}
 	if h, ok := handlers[args[0]]; ok {
 		return h(args)
@@ -168,16 +173,25 @@ func mainName(composeFile string) string {
 	return filepath.Base(filepath.Dir(composeFile)) + "-app-1"
 }
 
+func standbyName(composeFile string) string {
+	return filepath.Base(filepath.Dir(composeFile)) + "-bg"
+}
+
 func (f fake) compose(args []string) int {
 	file, verb := args[2], args[3]
 	name := mainName(file)
 	switch verb {
 	case "up":
 		conf, err := registry.LoadAppConf(filepath.Dir(file))
+		if c, ok := f.load(standbyName(file)); ok && alive(c.PID) {
+			f.logCall([]string{"up while standby is alive"})
+		}
 		if err != nil || f.start(name, os.Getenv("DEPLOY_IMAGE"), conf.Port) != nil {
 			return exitFail
 		}
-	case "stop":
+	case "run":
+		return f.run(args)
+	case verbStop:
 		f.kill(name)
 	case verbPs:
 		if _, ok := f.load(name); ok {
@@ -202,6 +216,8 @@ func (f fake) inspect(args []string) int {
 		return exitFail
 	}
 	switch {
+	case strings.Contains(format, ".State.Health") && c.Port == "":
+		fmt.Println(map[bool]string{true: "healthy", false: "unhealthy"}[alive(c.PID)])
 	case strings.Contains(format, ".State.Health"):
 		fmt.Println("-")
 	case strings.Contains(format, ".State.Status"):
@@ -217,7 +233,7 @@ func (f fake) inspect(args []string) int {
 
 func (f fake) run(args []string) int {
 	name, publish := "", ""
-	for i := 1; i+1 < len(args); i++ {
+	for i := 4; i+1 < len(args); i++ {
 		switch args[i] {
 		case "--name":
 			name = args[i+1]
@@ -225,10 +241,18 @@ func (f fake) run(args []string) int {
 			publish = args[i+1]
 		}
 	}
-	parts := strings.Split(publish, ":")
-	if name == "" || len(parts) != 3 || f.start(name, args[len(args)-1], parts[1]) != nil {
+	port := ""
+	if parts := strings.Split(publish, ":"); len(parts) == 3 {
+		port = parts[1]
+	}
+	if name == "" || f.start(name, os.Getenv("DEPLOY_IMAGE"), port) != nil {
 		return exitFail
 	}
+	return 0
+}
+
+func (f fake) stop(args []string) int {
+	f.kill(args[len(args)-1])
 	return 0
 }
 
