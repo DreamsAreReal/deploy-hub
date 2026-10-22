@@ -2,7 +2,7 @@ name: mutation-trial
 
 on:
   push:
-    branches: [mutation-trial-6]
+    branches: [mutation-trial-7]
 
 permissions: {}
 
@@ -27,7 +27,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: DreamsAreReal/tasks
-          ref: 686bb1e2462d33f22ad7fe2f3e9595058c098a60
+          ref: ae291076e14abfdb0bc7d2099e571166bad0529b
           path: app
           fetch-depth: 0
           persist-credentials: false
