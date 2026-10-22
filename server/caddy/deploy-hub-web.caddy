@@ -1,0 +1,7 @@
+hub.<host-slug>.sslip.io {
+	log
+	basic_auth {
+		admin <bcrypt-hash>
+	}
+	reverse_proxy 127.0.0.1:8970
+}

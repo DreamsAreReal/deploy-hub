@@ -1,0 +1,14 @@
+[Unit]
+Description=deploy-hub: dashboard with rollback and redeploy buttons (127.0.0.1:8970)
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+User=deploy
+ExecStart=/opt/deploy-hub/bin/deploy-hub web --port 8970
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15min
+
+[Install]
+WantedBy=multi-user.target

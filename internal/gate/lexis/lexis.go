@@ -98,13 +98,13 @@ var goDirectives = []string{"//go:", "//line ", "//export ", "//extern "}
 
 func unmarkDirectives(toks []Token) {
 	for i := range toks {
-		if toks[i].Note && isDirective(toks[i].Text) {
+		if toks[i].Note && IsDirective(toks[i].Text) {
 			toks[i].Note = false
 		}
 	}
 }
 
-func isDirective(text string) bool {
+func IsDirective(text string) bool {
 	for _, prefix := range goDirectives {
 		if strings.HasPrefix(text, prefix) {
 			return true
