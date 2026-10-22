@@ -20,11 +20,20 @@ import (
 const (
 	indexDir      = "test-index"
 	profileExt    = ".out"
+	binaryExt     = ".test"
 	runPattern    = "-run=^(%s)$"
+	binRun        = "-test.run=^(%s)$"
+	binCount      = "-test.count=1"
+	binProfile    = "-test.coverprofile="
+	binTimeout    = "-test.timeout="
+	compileFlag   = "-c"
+	outputFlag    = "-o"
+	goTool        = "tool"
+	test2json     = "test2json"
+	test2jsonExit = "-t"
 	runSeparator  = "|"
 	coverModeSet  = "-covermode=set"
 	coverPkgFlag  = "-coverpkg="
-	coverProfile  = "-coverprofile="
 	listFailed    = "go test -list %s: %w: %s"
 	profileFailed = "test index profile %s: %w"
 )
@@ -110,16 +119,23 @@ func (e *engine) buildIndex(ctx context.Context, pkgs golang.Packages) (*testInd
 		return nil, err
 	}
 	dir := e.ws.Report(indexDir)
-	if err := os.MkdirAll(dir, dirPerm); err != nil {
+	if err = os.MkdirAll(dir, dirPerm); err != nil {
 		return nil, err
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 	ix := newIndex()
-	coverPkg := coverPkgFlag + strings.Join(pkgs.Production().Paths(), ",")
+	bins, err := e.compileTests(ctx, ix, pkgs, refs, dir)
+	if err != nil {
+		return nil, err
+	}
 	jobs := make([]Job, 0, len(refs))
 	for i, ref := range refs {
+		bin, ok := bins[ref.pkg]
+		if !ok {
+			continue
+		}
 		profile := filepath.Join(dir, strconv.Itoa(i)+profileExt)
-		jobs = append(jobs, Job{Run: func(ctx context.Context, _ int) Status { return e.indexTest(ctx, ix, ref, coverPkg, profile) }})
+		jobs = append(jobs, Job{Run: func(ctx context.Context, _ int) Status { return e.indexTest(ctx, ix, ref, bin, profile) }})
 	}
 	if err := runAll(ctx, jobs, Workers()); err != nil {
 		return nil, err
@@ -153,9 +169,42 @@ func listed(pkg, out string) []testRef {
 	return refs
 }
 
-func (e *engine) indexTest(ctx context.Context, ix *testIndex, ref testRef, coverPkg, profile string) Status {
-	args := []string{goTest, countOnce, coverModeSet, coverPkg, coverProfile + profile, fmt.Sprintf(runPattern, ref.name), ref.pkg}
-	if _, err := e.ws.RunEnv(ctx, []string{e.cache}, golang.GoBinary, args...); err != nil {
+type testBinary struct {
+	path string
+	dir  string
+}
+
+func (e *engine) compileTests(ctx context.Context, ix *testIndex, pkgs golang.Packages, refs []testRef, dir string) (map[string]testBinary, error) {
+	coverPkg := coverPkgFlag + strings.Join(pkgs.Production().Paths(), ",")
+	var mu sync.Mutex
+	bins := map[string]testBinary{}
+	var jobs []Job
+	for i, p := range pkgs {
+		if !slices.ContainsFunc(refs, func(r testRef) bool { return r.pkg == p.ImportPath }) {
+			continue
+		}
+		bin := testBinary{path: filepath.Join(dir, strconv.Itoa(i)+binaryExt), dir: p.Dir}
+		jobs = append(jobs, Job{Run: func(ctx context.Context, _ int) Status {
+			args := []string{goTest, compileFlag, outputFlag, bin.path, coverModeSet, coverPkg, p.ImportPath}
+			if _, err := e.ws.RunEnv(ctx, []string{e.cache}, golang.GoBinary, args...); err != nil {
+				e.ws.Log.Info("tests do not compile with coverage, the package runs whole", "package", p.ImportPath, "output", gate.Tail(procexec.Output(err)))
+				ix.isolate(p.ImportPath)
+				return StatusSurvived
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			bins[p.ImportPath] = bin
+			return StatusSurvived
+		}})
+	}
+	return bins, runAll(ctx, jobs, Workers())
+}
+
+func (e *engine) indexTest(ctx context.Context, ix *testIndex, ref testRef, bin testBinary, profile string) Status {
+	ws := e.ws
+	ws.Src = bin.dir
+	args := []string{goTool, test2json, test2jsonExit, bin.path, fmt.Sprintf(binRun, ref.name), binCount, binProfile + profile, binTimeout + e.timeout([]string{ref.pkg}).String()}
+	if _, err := ws.RunEnv(ctx, []string{e.cache}, golang.GoBinary, args...); err != nil {
 		e.ws.Log.Info("test does not pass alone, its package runs whole", "package", ref.pkg, "test", ref.name)
 		ix.isolate(ref.pkg)
 		return StatusSurvived

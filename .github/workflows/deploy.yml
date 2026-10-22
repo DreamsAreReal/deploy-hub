@@ -12,6 +12,11 @@ on:
         required: false
         type: string
         default: Dockerfile
+      mutation_shards:
+        description: Parallel mutation testing jobs, must match mutation_shards of the app in the central gate policy
+        required: false
+        type: number
+        default: 1
     secrets:
       VPS_SSH_KEY:
         required: true
@@ -23,8 +28,77 @@ on:
 permissions: {}
 
 jobs:
+  plan:
+    name: plan mutation shards
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      shards: ${{ steps.shards.outputs.list }}
+    steps:
+      - name: List mutation shards
+        id: shards
+        env:
+          SHARDS: ${{ inputs.mutation_shards }}
+        run: |
+          printf '%s' "$SHARDS" | grep -Eq '^[1-9][0-9]?$' \
+            || { echo "invalid mutation_shards: $SHARDS"; exit 1; }
+          echo "list=$(jq -cn --argjson n "$SHARDS" '[range($n)]')" >> "$GITHUB_OUTPUT"
+
+  mutation:
+    name: mutation shard ${{ matrix.shard }}
+    needs: plan
+    if: inputs.mutation_shards > 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 200
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
+    env:
+      APP: ${{ inputs.app }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Toolchain
+        id: hub
+        uses: DreamsAreReal/deploy-hub/.github/actions/hub@b72215c7bfaef83d61ea841549fdf66071808db6
+
+      - name: Mutation shard
+        env:
+          POLICY: ${{ steps.hub.outputs.policy }}
+          TOOLCHAIN: ${{ steps.hub.outputs.bin }}
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ inputs.mutation_shards }}
+          FORK: ${{ github.event.repository.fork }}
+        run: |
+          set -o pipefail
+          export PATH="$TOOLCHAIN:$PATH"
+          extra=()
+          if [ "$FORK" = "true" ]; then extra+=(--fork); fi
+          deploy-hub gate --app "$APP" --repo "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" \
+            --policy "$POLICY" --src "$GITHUB_WORKSPACE" --out "$RUNNER_TEMP/gate" \
+            --mutation-shard "$SHARD/$SHARDS" "${extra[@]}"
+
+      - name: Keep the shard report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: mutation-shard-${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/gate/verdict.json
+            ${{ runner.temp }}/gate/**/mutation-shard.json
+          if-no-files-found: ignore
+
   deploy:
     name: gate and deploy
+    needs: [plan, mutation]
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
     permissions:
@@ -103,6 +177,13 @@ jobs:
             -t "$IMAGE:$TAG" "$CONTEXT"
           { echo "image=$IMAGE"; echo "tag=$TAG"; } >> "$GITHUB_OUTPUT"
 
+      - name: Collect mutation shards
+        if: inputs.mutation_shards > 1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: mutation-shard-*
+          path: ${{ runner.temp }}/mutation-shards
+
       - name: Quality gate
         id: gate
         env:
@@ -110,11 +191,13 @@ jobs:
           IMAGE: ${{ steps.image.outputs.image }}:${{ steps.image.outputs.tag }}
           FORK: ${{ github.event.repository.fork }}
           TOOLCHAIN: ${{ steps.hub.outputs.bin }}
+          SHARDS: ${{ inputs.mutation_shards }}
         run: |
           set -o pipefail
           export PATH="$TOOLCHAIN:$PATH"
           extra=()
           if [ "$FORK" = "true" ]; then extra+=(--fork); fi
+          if [ "$SHARDS" -gt 1 ]; then extra+=(--mutation-shards "$RUNNER_TEMP/mutation-shards"); fi
           deploy-hub gate --app "$APP" --repo "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" \
             --policy "$POLICY" --src "$GITHUB_WORKSPACE" --out "$RUNNER_TEMP/gate" --image "$IMAGE" "${extra[@]}"
 

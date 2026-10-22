@@ -184,6 +184,32 @@ like a timeout, so a mutant that turns a loop into an endless allocation cannot
 take the CI runner down. The language packs mutate with the same engine and the
 same budget.
 
+The coverage index compiles each package's tests once (`go test -c` with
+coverage over all production packages) and runs every test from that binary
+through `go tool test2json`, so the index costs one link per package instead of
+one per test (tasks: 1195 tests in about 9 minutes instead of 50). A package
+whose tests do not compile that way runs whole for its mutants. Every worker
+builds mutants in its own copy of the build cache (hard links to the cache the
+baseline and the index filled), and everything a mutant adds to it is deleted
+right after the mutant ran, so the cache stays at its baseline size however
+many mutants run.
+
+**Mutation shards.** An app with many mutants sets `mutation_shards: N` (2 to
+64) in its policy entry and passes the same number as `mutation_shards` to the
+reusable workflow. The workflow then runs N `mutation shard K` jobs next to each
+other before the gate job; each runs `deploy-hub gate --mutation-shard K/N`,
+which runs only the mutation check and only mutants whose index modulo N is K,
+and keeps `mutation-shard.json` per project plus its `verdict.json` as the
+artifact `mutation-shard-K`. The gate job downloads them all and runs
+`deploy-hub gate --mutation-shards DIR`: the mutation check then measures
+nothing itself and joins the shards. It fails when a shard is missing or did
+not finish, ran on another app, repo or commit, holds another shard number,
+count or mutant total, reports a mutant of another shard or one twice, or when
+the shards together do not report every mutant. A gate run without the shard
+reports for an app with `mutation_shards` above 1 fails the mutation check
+instead of running every mutant in one job. A `--mutation-shard` whose N
+differs from the policy is a usage error.
+
 **Load test, done for a 1-CPU VPS.** The image runs in an isolated docker
 network on the CI runner with the production limits from the policy (`cpus`,
 `memory`, no swap, pid limit); a built-in generator sends the app's profile
@@ -421,6 +447,9 @@ jobs:
     with: {app: myapp}
     secrets: {VPS_SSH_KEY: "${{ secrets.VPS_SSH_KEY }}", VPS_HOST: "${{ secrets.VPS_HOST }}", VPS_HOST_KEY: "${{ secrets.VPS_HOST_KEY }}"}
 ```
+
+An app with `mutation_shards` in the policy adds the same number to `with`,
+for example `with: {app: tasks, mutation_shards: 16}`.
 
 Reusable workflows and actions of a private repo are shared only with other
 private repos of the same owner (repo settings → Actions → Access), so an app

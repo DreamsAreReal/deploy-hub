@@ -8,11 +8,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/golang"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/pack"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/policy"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
 	"github.com/DreamsAreReal/deploy-hub/internal/tools"
@@ -29,16 +32,21 @@ const (
 	verdictBlocked = "BLOCKED"
 	valueFormat    = "%s=%g"
 	ownerSeparator = "/"
+	shardSeparator = "/"
 	outDirPerm     = 0o700
 	toolsPrefix    = "tools: "
 	usageTools     = "usage: deploy-hub tools --manifest FILE --dir DIR"
 	msgToolsDone   = "tools: %d installed into %s\n"
 )
 
-var ErrGateArgs = errors.New("usage: deploy-hub gate --app NAME --repo OWNER/NAME --commit SHA --policy FILE --src DIR --out DIR [--image REF] [--fork]")
+var (
+	ErrGateArgs  = errors.New("usage: deploy-hub gate --app NAME --repo OWNER/NAME --commit SHA --policy FILE --src DIR --out DIR [--image REF] [--fork] [--mutation-shard K/N | --mutation-shards DIR]")
+	ErrShardSpec = errors.New("--mutation-shard must be K/N with 0 <= K < N and N equal to mutation_shards of the app")
+)
 
 type gateArgs struct {
 	app, repo, commit, src, out, policy, image string
+	shard, shards                              string
 	fork                                       bool
 }
 
@@ -54,6 +62,8 @@ func parseGateArgs(args []string) (gateArgs, error) {
 	fs.StringVar(&g.policy, "policy", "", "central gate policy file")
 	fs.StringVar(&g.image, "image", "", "locally built image reference")
 	fs.BoolVar(&g.fork, "fork", false, "the repository is a fork")
+	fs.StringVar(&g.shard, "mutation-shard", "", "run only shard K/N of mutation testing")
+	fs.StringVar(&g.shards, "mutation-shards", "", "directory with the reports of every mutation shard (absolute path)")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		return g, ErrGateArgs
 	}
@@ -63,6 +73,9 @@ func parseGateArgs(args []string) (gateArgs, error) {
 func (g *gateArgs) normalize() error {
 	if !filepath.IsAbs(g.src) || !filepath.IsAbs(g.out) {
 		return fmt.Errorf("%w: --src and --out must be absolute paths", ErrGateArgs)
+	}
+	if (g.shards != "" && !filepath.IsAbs(g.shards)) || (g.shard != "" && g.shards != "") {
+		return fmt.Errorf("%w: --mutation-shards must be an absolute path and excludes --mutation-shard", ErrGateArgs)
 	}
 	g.src, g.out = filepath.Clean(g.src), filepath.Clean(g.out)
 	if rel, _ := filepath.Rel(g.src, g.out); !strings.HasPrefix(rel, "..") {
@@ -103,12 +116,41 @@ func runGate(ctx context.Context, a *App, ex procexec.Runner, args []string) int
 	}
 	owner, _, _ := strings.Cut(g.repo, ownerSeparator)
 	subj := gate.Subject{App: g.app, Repo: g.repo, Commit: g.commit, Own: pol.Owns(owner) && !g.fork}
-	v := gate.Runner{Checks: a.Checks(), Now: a.Now, Log: a.Log}.Run(ctx, ws, subj)
+	if ws.Mutation, err = mutationPlan(&g, ws.App, subj); err != nil {
+		a.Err.Println(gatePrefix + err.Error())
+		return ExitUsage
+	}
+	v := gate.Runner{Checks: gateChecks(a.Checks(), ws.Mutation), Now: a.Now, Log: a.Log}.Run(ctx, ws, subj)
 	if err := v.Save(ws.Report(VerdictFile)); err != nil {
 		return a.failWith(gatePrefix, err)
 	}
 	a.printVerdict(v)
 	return exitCode(v.Passed)
+}
+
+func mutationPlan(g *gateArgs, app policy.App, subj gate.Subject) (gate.MutationPlan, error) {
+	plan := gate.MutationPlan{Shards: app.MutationShards(), Shard: -1, Merge: filepath.Clean(g.shards), Subject: subj}
+	if g.shards == "" {
+		plan.Merge = ""
+	}
+	if g.shard == "" {
+		return plan, nil
+	}
+	k, n, ok := strings.Cut(g.shard, shardSeparator)
+	shard, kerr := strconv.Atoi(k)
+	shards, nerr := strconv.Atoi(n)
+	if !ok || kerr != nil || nerr != nil || shards != plan.Shards || !plan.Sharded() || shard < 0 || shard >= shards {
+		return plan, fmt.Errorf("%w (%d)", ErrShardSpec, plan.Shards)
+	}
+	plan.Shard = shard
+	return plan, nil
+}
+
+func gateChecks(all []gate.Check, plan gate.MutationPlan) []gate.Check {
+	if !plan.ShardRun() {
+		return all
+	}
+	return slices.DeleteFunc(all, func(c gate.Check) bool { return c.Name != pack.CheckMutation })
 }
 
 func exitCode(passed bool) int {

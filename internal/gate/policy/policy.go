@@ -25,13 +25,15 @@ const (
 	exprAnd     = "AND"
 	exprOr      = "OR"
 
+	MaxMutationShards = 64
+
 	CategorySecurity = "security"
 	CategoryBusiness = "business"
 
 	percentCeiling = 100
 	purlScheme     = "pkg:"
 	policyChecks   = 7
-	appChecks      = 3
+	appChecks      = 4
 )
 
 var (
@@ -97,6 +99,7 @@ type App struct {
 	Env       []string    `yaml:"env"`
 	Scenarios []Scenario  `yaml:"scenarios"`
 	Load      LoadProfile `yaml:"load"`
+	Shards    int         `yaml:"mutation_shards"`
 }
 
 type Scenario struct {
@@ -265,12 +268,23 @@ func pinned(field, ref string) error {
 
 func (a App) validate(name string) error {
 	errs := make([]error, 0, len(a.Scenarios)+appChecks)
-	errs = append(errs, validate.AppName(name), validate.RepoSlug(a.Repo), a.validateKind(name))
+	errs = append(errs, validate.AppName(name), validate.RepoSlug(a.Repo), a.validateKind(name), a.validateShards(name))
 	seen := map[string]bool{}
 	for _, s := range a.Scenarios {
 		errs = append(errs, s.validate(name, seen))
 	}
 	return errors.Join(errs...)
+}
+
+func (a App) validateShards(name string) error {
+	if a.Shards < 0 || a.Shards > MaxMutationShards {
+		return fmt.Errorf("%w: apps.%s.mutation_shards must be between 1 and %d", ErrPolicy, name, MaxMutationShards)
+	}
+	return nil
+}
+
+func (a App) MutationShards() int {
+	return max(1, a.Shards)
 }
 
 func (a App) validateKind(name string) error {
