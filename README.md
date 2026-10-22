@@ -7,7 +7,9 @@ cutover and automatic rollback. A rejected commit never reaches the server: the
 verdict of every check lands in the deploy journal, structured logs and
 metrics. Connecting a new repo is one command (`deploy-hub onboard`). No PaaS,
 no daemons: one reusable GitHub Actions workflow, one Go binary on the server,
-SSH in between. When things break, see [RUNBOOK.md](RUNBOOK.md).
+SSH in between. New to the code? Start with [ARCHITECTURE.md](ARCHITECTURE.md):
+what runs where, the life of a deploy, why it is built this way and the
+pitfalls. When things break, see [RUNBOOK.md](RUNBOOK.md).
 
 The VPS address is configuration, not code: `VPS_ADDR` on the operator machine,
 the `VPS_HOST`/`VPS_HOST_KEY` secrets in each app repo and
