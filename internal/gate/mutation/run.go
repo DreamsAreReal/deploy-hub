@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -219,7 +218,7 @@ type Job struct {
 }
 
 func Workers() int {
-	return max(minWorkers, runtime.NumCPU()/cpuShare)
+	return max(minWorkers, procexec.CPUs()/cpuShare)
 }
 
 func MemoryBudget() int64 {

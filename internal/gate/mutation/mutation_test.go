@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -599,7 +598,7 @@ func TestKilledMutantsAreNotRetriedAndProgressIsLogged(t *testing.T) {
 	for _, c := range calls {
 		testutil.Equal(t, c, []string{pkgLib})
 	}
-	testutil.Contains(t, logs.String(), fmt.Sprintf(`"msg":"mutation testing started","mutants":6,"workers":%d`, max(minWorkers, runtime.NumCPU()/cpuShare)))
+	testutil.Contains(t, logs.String(), fmt.Sprintf(`"msg":"mutation testing started","mutants":6,"workers":%d`, max(minWorkers, procexec.CPUs()/cpuShare)))
 	testutil.Equal(t, strings.Count(logs.String(), `"msg":"mutation progress"`), 6)
 }
 
@@ -625,7 +624,7 @@ func TestExecuteHandsWorkersTheirIndex(t *testing.T) {
 		testutil.True(t, w >= 0 && w < 3, "worker index in range")
 	}
 	testutil.Equal(t, rep.Entries[0], entry{File: "a.py", Line: 1, Operator: OpArithmetic, Original: "a + b", Mutated: "a - b", Status: StatusKilled})
-	testutil.Equal(t, Workers(), max(minWorkers, runtime.NumCPU()/cpuShare))
+	testutil.Equal(t, Workers(), max(minWorkers, procexec.CPUs()/cpuShare))
 	out := Judge(gate.Workspace{Out: t.TempDir(), Policy: policy.Policy{Thresholds: policy.Thresholds{MutationScore: 90}}}, rep, nil)
 	testutil.Equal(t, out.Status, gate.StatusPass)
 	testutil.Equal(t, Judge(ws, Report{}, ErrIncomplete).Reason, reasonIncomplet)
