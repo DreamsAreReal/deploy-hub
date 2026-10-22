@@ -1,0 +1,45 @@
+# Rootless Docker daemon of one runner (instance = repository name), user ci.
+# No access to the system daemon, /opt, the hub's config or other homes.
+# NoNewPrivileges stays off here only: rootlesskit maps the subordinate ids
+# through the setuid newuidmap/newgidmap. Container cgroups (--cpus, --memory)
+# need the systemd driver, i.e. the user manager of ci (user@<uid>.service,
+# jailed the same way); ci-runner-setup adds a drop-in with the slice and the
+# user bus address. /home is hidden by path, not ProtectHome: that would also
+# hide /run/user, where the bus lives. No ProtectKernelLogs or
+# ProtectKernelTunables: a user namespace may mount /proc for a container only
+# when nothing in /proc is covered.
+[Unit]
+Description=Rootless Docker for the CI runner of %i
+Requires=ci-netns.service var-lib-ci.mount
+After=ci-netns.service var-lib-ci.mount
+PartOf=ci-runner@%i.service
+
+[Service]
+Type=notify
+NotifyAccess=all
+User=ci
+Group=ci
+Delegate=yes
+Environment=HOME=/var/lib/ci
+Environment=XDG_RUNTIME_DIR=/run/ci/%i
+Environment=PATH=/usr/bin:/usr/sbin:/bin:/sbin
+NetworkNamespacePath=/run/netns/ci
+BindReadOnlyPaths=/etc/netns/ci/resolv.conf:/etc/resolv.conf
+RuntimeDirectory=ci/%i
+RuntimeDirectoryMode=0700
+ExecStart=/usr/bin/dockerd-rootless.sh --data-root /var/lib/ci/docker/%i --log-driver local
+Restart=always
+RestartSec=10
+TimeoutStartSec=120
+KillMode=mixed
+LimitNOFILE=1048576
+
+UMask=0077
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/ci
+InaccessiblePaths=/home /opt /root /etc/srv-backup /etc/wireguard /etc/deploy-hub /var/backups /var/lib/docker /var/lib/containerd -/var/lib/app-backup
+InaccessiblePaths=-/run/docker.sock -/var/run/docker.sock -/run/containerd
+ProtectKernelModules=yes
+ProtectClock=yes
+LockPersonality=yes

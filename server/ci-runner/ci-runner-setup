@@ -1,0 +1,145 @@
+#!/bin/sh
+# Host setup of the isolated self-hosted GitHub runners, as root on the VPS,
+# from a copy of server/ci-runner:
+#   ci-runner-setup host                     user ci, rootless Docker prerequisites,
+#                                            CI disk, network namespace, units
+#   ci-runner-setup register <repo> < token  runner for DreamsAreReal/<repo>
+# Idempotent: rerun after changing any file here.
+set -eu
+HERE=$(cd "$(dirname "$0")" && pwd)
+LIB=/usr/local/lib/ci-runner
+UNITS=/etc/systemd/system
+OWNER=DreamsAreReal
+RUNNER_VERSION=2.338.1
+RUNNER_SHA256=08e9ccb3604d2462c24b5e33604dc30810296ca15cc65f23cffd4317eb144c37
+DISK_IMAGE=/srv/ci.img
+DISK_SIZE=${CI_DISK_SIZE:-120G}
+SUBID_COUNT=65536
+
+# next_subid FILE prints the first id after every range in FILE.
+next_subid() {
+  awk -F: 'BEGIN {n = 100000} {if ($2 + $3 > n) n = $2 + $3} END {print n}' "$1"
+}
+
+user_ci() {
+  id ci >/dev/null 2>&1 ||
+    useradd --system --user-group --home-dir /var/lib/ci --no-create-home --shell /usr/sbin/nologin ci
+  if ! grep -q '^ci:' /etc/subuid; then
+    start=$(next_subid /etc/subuid)
+    usermod --add-subuids "$start-$((start + SUBID_COUNT - 1))" ci
+  fi
+  if ! grep -q '^ci:' /etc/subgid; then
+    start=$(next_subid /etc/subgid)
+    usermod --add-subgids "$start-$((start + SUBID_COUNT - 1))" ci
+  fi
+}
+
+# jail UID writes the drop-ins that put every CI process into user-UID.slice
+# under ci-limits.conf, and jail the user manager of ci (it starts the
+# container scopes of rootless Docker) like the runner: network namespace ci,
+# read-only system, no /opt, hub config, backups or system Docker.
+jail() {
+  uid=$1
+  hidden="/opt /root /home /etc/srv-backup /etc/wireguard /etc/deploy-hub /var/backups /var/lib/docker /var/lib/containerd -/var/lib/app-backup -/run/docker.sock -/var/run/docker.sock -/run/containerd"
+  install -d -m 755 "$UNITS/user-$uid.slice.d" "$UNITS/user@$uid.service.d" \
+    "$UNITS/ci-docker@.service.d" "$UNITS/ci-runner@.service.d"
+  install -m 644 "$HERE/ci-limits.conf" "$UNITS/user-$uid.slice.d/50-ci-limits.conf"
+  cat >"$UNITS/user@$uid.service.d/50-ci-jail.conf" <<UNIT
+[Unit]
+Requires=ci-netns.service var-lib-ci.mount
+After=ci-netns.service var-lib-ci.mount
+
+[Service]
+Delegate=cpu cpuset io memory pids
+NetworkNamespacePath=/run/netns/ci
+BindReadOnlyPaths=/etc/netns/ci/resolv.conf:/etc/resolv.conf
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/ci /run/user/$uid
+InaccessiblePaths=$hidden
+UNIT
+  cat >"$UNITS/ci-docker@.service.d/50-ci-user.conf" <<UNIT
+[Unit]
+Requires=user@$uid.service
+After=user@$uid.service
+
+[Service]
+Slice=user-$uid.slice
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus
+UNIT
+  cat >"$UNITS/ci-runner@.service.d/50-ci-user.conf" <<UNIT
+[Service]
+Slice=user-$uid.slice
+UNIT
+}
+
+disk() {
+  if [ ! -f "$DISK_IMAGE" ]; then
+    truncate -s "$DISK_SIZE" "$DISK_IMAGE"
+    mkfs.ext4 -q -m 0 -L ci "$DISK_IMAGE"
+  fi
+  chmod 600 "$DISK_IMAGE"
+  install -d -m 700 /var/lib/ci
+  systemctl enable --now var-lib-ci.mount
+  chown ci:ci /var/lib/ci
+  chmod 700 /var/lib/ci
+  install -d -o ci -g ci -m 700 /var/lib/ci/runners /var/lib/ci/tmp /var/lib/ci/docker
+}
+
+host() {
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -q uidmap slirp4netns >/dev/null
+  install -m 644 "$HERE/rootlesskit.apparmor" /etc/apparmor.d/rootlesskit
+  apparmor_parser -r /etc/apparmor.d/rootlesskit
+  user_ci
+  install -d -m 755 "$LIB"
+  for f in ci-netns ci-runner-clean ci-runner-status; do
+    install -m 755 "$HERE/$f" "$LIB/$f"
+  done
+  for f in var-lib-ci.mount ci-netns.service ci-docker@.service ci-runner@.service \
+    ci-runner-status.service ci-runner-status.timer; do
+    install -m 644 "$HERE/$f" "$UNITS/$f"
+  done
+  install -d -m 755 /etc/netns/ci
+  printf 'nameserver 1.1.1.1\nnameserver 9.9.9.9\n' >/etc/netns/ci/resolv.conf
+  jail "$(id -u ci)"
+  systemctl daemon-reload
+  disk
+  loginctl enable-linger ci
+  systemctl enable --now ci-netns.service ci-runner-status.timer
+  systemctl try-restart 'ci-docker@*.service' 'ci-runner@*.service'
+}
+
+register() {
+  repo=$1
+  printf '%s' "$repo" | grep -Eq '^[A-Za-z0-9._-]{1,100}$' || {
+    echo "bad repository name: $repo" >&2
+    exit 2
+  }
+  read -r token
+  dir=/var/lib/ci/runners/$repo
+  tarball=/var/lib/ci/actions-runner-$RUNNER_VERSION.tar.gz
+  if [ ! -f "$tarball" ]; then
+    curl -fsSL -o "$tarball.part" \
+      "https://github.com/actions/runner/releases/download/v$RUNNER_VERSION/actions-runner-linux-x64-$RUNNER_VERSION.tar.gz"
+    echo "$RUNNER_SHA256  $tarball.part" | sha256sum -c --quiet
+    mv "$tarball.part" "$tarball"
+  fi
+  if [ ! -f "$dir/.runner" ]; then
+    install -d -o ci -g ci -m 700 "$dir"
+    runuser -u ci -- tar -xzf "$tarball" -C "$dir"
+    "$dir/bin/installdependencies.sh" >/dev/null
+    ip netns exec ci runuser -u ci -- env HOME=/var/lib/ci "$dir/config.sh" --unattended \
+      --url "https://github.com/$OWNER/$repo" --token "$token" \
+      --name "eu-$repo" --labels eu --work _work --replace
+  fi
+  systemctl enable --now "ci-runner@$repo.service"
+}
+
+case "${1:-}" in
+  host) host ;;
+  register) register "${2:?repository}" ;;
+  *)
+    echo "usage: $0 host | register <repo> < registration-token" >&2
+    exit 2
+    ;;
+esac

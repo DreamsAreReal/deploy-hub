@@ -1,0 +1,35 @@
+#!/bin/sh
+# Every minute (ci-runner-status.timer, root): pushes to VictoriaMetrics
+#   deploy_hub_ci_runner_up{runner}   1 when the runner of that repository holds
+#                                     a connection to GitHub, 0 when it is down,
+#                                     restarting or cut off
+#   deploy_hub_ci_disk_used_ratio     fill of the CI disk image (0..1)
+# A runner counts as configured when /var/lib/ci/runners/<repo>/.runner exists.
+set -eu
+URL=${DEPLOY_HUB_METRICS_URL-http://127.0.0.1:8428/api/v1/import/prometheus}
+RUNNERS=/var/lib/ci/runners
+
+# connected UNIT: a process of the unit has an established HTTPS connection.
+connected() {
+  cg=$(systemctl show -p ControlGroup --value "$1")
+  [ -n "$cg" ] || return 1
+  pids=$(tr '\n' '|' <"/sys/fs/cgroup$cg/cgroup.procs" 2>/dev/null) || return 1
+  [ -n "$pids" ] || return 1
+  ip netns exec ci ss -Htnp state established '( dport = :443 )' | grep -Eq "pid=(${pids%|}),"
+}
+
+metrics() {
+  for conf in "$RUNNERS"/*/.runner; do
+    [ -f "$conf" ] || continue
+    repo=$(basename "$(dirname "$conf")")
+    unit="ci-runner@$repo.service"
+    up=0
+    if systemctl -q is-active "$unit" && connected "$unit"; then up=1; fi
+    printf 'deploy_hub_ci_runner_up{runner="%s"} %s\n' "$repo" "$up"
+  done
+  df -B1 --output=used,size /var/lib/ci | awk 'NR == 2 {printf "deploy_hub_ci_disk_used_ratio %.4f\n", $1 / $2}'
+}
+
+body=$(metrics)
+printf '%s\n' "$body"
+[ -z "$URL" ] || printf '%s\n' "$body" | curl -fsS --max-time 10 --data-binary @- "$URL"

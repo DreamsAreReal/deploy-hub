@@ -1,0 +1,52 @@
+# GitHub Actions self-hosted runner of one repository (instance = repository
+# name under DreamsAreReal), user ci, labels self-hosted,linux,eu. Its Docker is
+# ci-docker@%i; the system Docker socket, /opt, the hub's config and the homes
+# of deploy and runner are not visible.
+[Unit]
+Description=GitHub Actions runner for DreamsAreReal/%i (isolated, user ci)
+Requires=ci-docker@%i.service ci-netns.service var-lib-ci.mount
+After=ci-docker@%i.service ci-netns.service var-lib-ci.mount
+
+[Service]
+User=ci
+Group=ci
+WorkingDirectory=/var/lib/ci/runners/%i
+ExecStart=/var/lib/ci/runners/%i/run.sh
+Environment=HOME=/var/lib/ci
+Environment=TMPDIR=/var/lib/ci/tmp/%i
+Environment=DOCKER_HOST=unix:///run/ci/%i/docker.sock
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/usr/local/lib/ci-runner/ci-runner-clean
+NetworkNamespacePath=/run/netns/ci
+BindReadOnlyPaths=/etc/netns/ci/resolv.conf:/etc/resolv.conf
+ExecStartPre=+/usr/bin/install -d -o ci -g ci -m 700 /var/lib/ci/tmp/%i
+Restart=always
+RestartSec=30
+KillMode=process
+KillSignal=SIGTERM
+TimeoutStopSec=5min
+
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/ci
+ProtectHome=yes
+InaccessiblePaths=/opt /root /etc/srv-backup /etc/wireguard /etc/deploy-hub /var/backups /var/lib/docker /var/lib/containerd -/var/lib/app-backup
+InaccessiblePaths=-/run/docker.sock -/var/run/docker.sock -/run/containerd
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

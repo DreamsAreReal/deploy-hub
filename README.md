@@ -43,9 +43,11 @@ push to default branch
               → fail: standby discarded, the current version keeps serving
 ```
 
-Images are built only in CI — never on the VPS (1 CPU, <1 GiB RAM: a build
-there would starve the running apps). For the same reason load tests never
-touch the VPS (see below).
+Images are built only in CI, never by the hub on the VPS. For private app
+repos CI runs on an isolated self-hosted runner on the same host (user `ci`,
+rootless Docker, its own network namespace, CPU/memory/disk caps; see
+[Self-hosted CI runner](#self-hosted-ci-runner)); public repos and forks use a
+GitHub-hosted runner. Load tests never touch the production apps (see below).
 
 ## The quality gate
 
@@ -384,6 +386,9 @@ root SSH to. `<vps>` is the server address.
    own repo, [DreamsAreReal/observability](https://github.com/DreamsAreReal/observability).
    Load the hub's alert rules into it (see "Alerts" under Observability).
 
+10. **Self-hosted CI runner** (optional, private app repos): see
+    [Self-hosted CI runner](#self-hosted-ci-runner).
+
 Verify the hub answers: `VPS_ADDR=<vps> go run ./cmd/deploy-hub onboard status`
 prints a header (an empty app list is fine on a fresh hub).
 
@@ -466,6 +471,75 @@ If the repo ships `docker-compose.yml` (or `.yaml`, or `compose.yml`), CI runs
   is attached to the main service.
 - `deploy-hub.overlap: "false"` on the main service turns off the zero-downtime
   overlap of old and new instance (see Health gate and rollback).
+
+## Self-hosted CI runner
+
+`deploy.yml` runs its job on `[self-hosted, linux, eu]`: a GitHub Actions runner
+on the hub host, one per private app repo. It falls back to `ubuntu-latest`
+when the calling repo is public or a fork, when the event is a pull request
+from a fork, or when the app repo sets the variable
+`DEPLOY_HUB_RUNNER=github-hosted` — the switch back for one repo:
+
+```
+gh variable set DEPLOY_HUB_RUNNER -R DreamsAreReal/<app> -b github-hosted   # GitHub-hosted
+gh variable delete DEPLOY_HUB_RUNNER -R DreamsAreReal/<app>                 # self-hosted again
+```
+
+A runner is registered on one repository (personal accounts have no runner
+groups), so only that repo's jobs reach it. Keep "Run workflows from fork pull
+requests" off in the repo's Actions settings (the default for private repos).
+
+Isolation, all in [`server/ci-runner`](server/ci-runner):
+
+| What | How |
+|---|---|
+| user | `ci`, system user, no sudo, no login shell, home `/var/lib/ci`, not in the `docker` group |
+| Docker | rootless `dockerd` per runner (`ci-docker@<repo>`), socket `/run/ci/<repo>/docker.sock`; the system socket is hidden and not accessible |
+| files | `ci-runner@<repo>`: `ProtectSystem=strict`, `ProtectHome`, `NoNewPrivileges`, empty capability set; `/opt`, `/etc/deploy-hub`, `/etc/srv-backup`, `/etc/wireguard`, `/var/lib/docker`, backups are inaccessible. The rootless daemon and the user manager of `ci` (it holds the container scopes) are jailed the same way, minus `NoNewPrivileges` for `dockerd` (rootlesskit needs the setuid `newuidmap`) |
+| network | namespace `ci` (`ci-netns`): NAT to the internet only. The host loopback (Caddy admin, VictoriaMetrics/Logs, Bugsink), the `shared` and other Docker networks, private ranges and the metadata address are dropped; of the host only SSH/HTTP/HTTPS on the public address answer. Ports published by gate containers live on the namespace's own loopback |
+| CPU, memory | slice `user-<uid of ci>.slice` (`ci-limits.conf`): 6 of 8 CPUs, CPU and IO weight 20 (production keeps priority), `MemoryHigh` 11G, `MemoryMax` 13G, no swap |
+| disk | `/var/lib/ci` is the ext4 image `/srv/ci.img` (120G): CI can never fill `/` |
+| cleanup | job-completed hook `ci-runner-clean`: removes the job's containers, networks, volumes and pushed images, trims the build cache to 15 GB, empties the workspace, `RUNNER_TEMP` and `TMPDIR`; above 70% disk it drops all images and the language caches |
+
+The deploy key is written to `RUNNER_TEMP` (emptied after the job), and the
+registry login uses a job-local `DOCKER_CONFIG`. The production path does not
+change: the job reaches the hub only as `deploy@<vps>` through the forced
+command, with the OIDC token and the image digest.
+
+Install or update (root on the VPS, from a copy of `server/ci-runner`):
+
+```
+scp -r server/ci-runner vpn:/root/ci-runner-src
+ssh vpn /root/ci-runner-src/ci-runner-setup host
+gh api -X POST repos/DreamsAreReal/<app>/actions/runners/registration-token --jq .token \
+  | ssh vpn /root/ci-runner-src/ci-runner-setup register <app>
+```
+
+`host` is idempotent: user and subordinate ids, `uidmap`/`slirp4netns`, the
+AppArmor profile that lets `rootlesskit` create user namespaces on Ubuntu 24.04,
+the disk image, the network namespace, the units and their per-uid drop-ins,
+linger for `ci`. `register` downloads the pinned runner (sha256-checked),
+configures it as `eu-<app>` with the label `eu` and starts
+`ci-runner@<app>`. The runner updates itself. To remove one:
+`systemctl disable --now ci-runner@<app> ci-docker@<app>`, delete the runner in
+the repo settings and `/var/lib/ci/runners/<app>`.
+
+Check it:
+
+```
+gh api repos/DreamsAreReal/<app>/actions/runners --jq '.runners[] | "\(.name) \(.status)"'   # eu-<app> online
+ssh vpn 'systemctl status ci-runner@<app> ci-docker@<app> ci-netns'
+ssh vpn 'runuser -u ci -- cat /opt/tasks/.env'          # Permission denied
+ssh vpn 'runuser -u ci -- docker ps'                    # permission denied on /var/run/docker.sock
+```
+
+Logs: the runner and the job hook write to the journal, so they are in
+VictoriaLogs as `unit:"ci-runner@<app>.service"` (the rootless daemon:
+`unit:"ci-docker@<app>.service"`). State: `ci-runner-status.timer` pushes
+`deploy_hub_ci_runner_up{runner}` (1 while the runner holds its connection to
+GitHub) and `deploy_hub_ci_disk_used_ratio` every minute; the alerts
+`DeployHubCIRunnerOffline`, `DeployHubCIRunnerSilent` and `DeployHubCIDiskFull`
+watch them.
 
 ## Server layout
 
@@ -729,7 +803,8 @@ panic, error log records, a failed server command, a failed deploy, redeploy or
 rollback, a gate rejection (per check, `ci-<step>` included), a crashed gate
 check, any refused request, an app unhealthy for 5 minutes, a failed Caddy
 sync, a deploy waiting over 120 s for the lock, a failed tracker post and an
-unreadable journal. `go test ./internal/obs` fails when a rule uses a metric
+unreadable journal, a self-hosted CI runner offline for 10 minutes, its
+state not pushed, and the CI disk over 85%. `go test ./internal/obs` fails when a rule uses a metric
 that the code does not declare, or when a problem metric has no rule.
 
 To load them, copy the file into the observability stack's `rules/` directory
@@ -826,6 +901,11 @@ hand-managed vhosts that are not deploy-hub apps.
   stdin, logout guaranteed).
 - App secrets live in `/opt/<app>/.env` (600), never in git; files written by
   the binary are 600.
+- The self-hosted CI runner shares the host with production but not its
+  privileges: user `ci` without sudo or the system Docker socket, rootless
+  Docker, a network namespace that reaches only the internet, sandboxed units
+  and CPU/memory/disk caps (see [Self-hosted CI runner](#self-hosted-ci-runner)).
+  Public repos and forks never get it.
 - Workflow actions are pinned by commit SHA; the gate toolchain is pinned by
   version and sha256.
 

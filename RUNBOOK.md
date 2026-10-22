@@ -116,6 +116,24 @@ already deployed; the runner's checks do not apply here):
 
 (bring-your-own-compose apps: `docker compose up -d` without the service name).
 
+## The self-hosted CI runner is offline or a job hangs in "Waiting for a runner"
+
+Alert `DeployHubCIRunnerOffline` / `DeployHubCIDiskFull`. Deploy meanwhile
+from a GitHub-hosted runner:
+`gh variable set DEPLOY_HUB_RUNNER -R DreamsAreReal/<app> -b github-hosted`
+(delete the variable to switch back).
+
+```
+ssh vpn 'systemctl status ci-netns ci-docker@<app> ci-runner@<app>'
+ssh vpn 'journalctl -u ci-runner@<app> -u ci-docker@<app> -n 100'
+ssh vpn 'df -h /var/lib/ci; systemctl restart ci-runner@<app>'
+gh api repos/DreamsAreReal/<app>/actions/runners --jq '.runners[] | "\(.name) \(.status)"'
+```
+
+A runner deleted on GitHub (or offline for 14 days) loops on "not configured":
+remove `/var/lib/ci/runners/<app>` and register it again (README, Self-hosted
+CI runner).
+
 ## Routes / HTTPS
 
     ssh vpn 'sudo /opt/deploy-hub/bin/deploy-hub caddy-sync'   # regenerate + reload if changed

@@ -25,7 +25,14 @@ permissions: {}
 jobs:
   deploy:
     name: gate and deploy
-    runs-on: ubuntu-latest
+    # The isolated self-hosted runner on the hub host (user ci, rootless Docker,
+    # see server/ci-runner). Public repositories, forks and pull requests from
+    # forks always get a GitHub-hosted runner; an app repo goes back to
+    # GitHub-hosted with the repository variable DEPLOY_HUB_RUNNER=github-hosted.
+    runs-on: >-
+      ${{ (vars.DEPLOY_HUB_RUNNER == 'github-hosted' || !github.event.repository.private || github.event.repository.fork
+      || (github.event.pull_request && github.event.pull_request.head.repo.full_name != github.repository))
+      && 'ubuntu-latest' || fromJSON('["self-hosted", "linux", "eu"]') }}
     timeout-minutes: 330
     permissions:
       contents: read
@@ -54,6 +61,7 @@ jobs:
         run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
 
       - name: Free disk space
+        if: runner.environment == 'github-hosted'
         run: |
           df -m / "$RUNNER_TEMP"
           # Preinstalled SDKs the gate never uses; its own toolchain is pinned in policy/tools.yaml.
@@ -147,10 +155,12 @@ jobs:
           SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
           HOST_KEY: ${{ secrets.VPS_HOST_KEY }}
         run: |
-          install -d -m 700 ~/.ssh
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          printf '%s\n' "$HOST_KEY" >> ~/.ssh/known_hosts
+          # In RUNNER_TEMP, not ~/.ssh: a self-hosted runner keeps its home between
+          # jobs, RUNNER_TEMP is emptied after every job.
+          install -d -m 700 "$RUNNER_TEMP/ssh"
+          install -m 600 /dev/null "$RUNNER_TEMP/ssh/deploy_key"
+          printf '%s\n' "$SSH_KEY" > "$RUNNER_TEMP/ssh/deploy_key"
+          printf '%s\n' "$HOST_KEY" > "$RUNNER_TEMP/ssh/known_hosts"
 
       - name: Report the verdict to the hub
         if: always() && steps.inputs.outcome == 'success'
@@ -180,7 +190,7 @@ jobs:
           {
             printf 'oidc=%s\n' "$oidc"
             printf 'verdict=%s\n' "$(base64 -w0 "$verdict")"
-          } | ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes \
+          } | ssh -i "$RUNNER_TEMP/ssh/deploy_key" -o IdentitiesOnly=yes -o UserKnownHostsFile="$RUNNER_TEMP/ssh/known_hosts" \
                 "$VPS_USER@$VPS_HOST" "report $APP sha-${GITHUB_SHA}"
 
       - name: Push the gated image
@@ -192,6 +202,7 @@ jobs:
           ACTOR: ${{ github.actor }}
         run: |
           set -euo pipefail
+          export DOCKER_CONFIG="$RUNNER_TEMP/docker-config"
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
           docker push "$IMAGE:$TAG"
           docker logout ghcr.io
@@ -227,5 +238,5 @@ jobs:
               printf 'hport=%s\n' "$BYOC_PORT"
               printf 'hmode=%s\n' "$BYOC_HEALTH"
             fi
-          } | ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes \
+          } | ssh -i "$RUNNER_TEMP/ssh/deploy_key" -o IdentitiesOnly=yes -o UserKnownHostsFile="$RUNNER_TEMP/ssh/known_hosts" \
                 "$VPS_USER@$VPS_HOST" "deploy $APP sha-${GITHUB_SHA}"

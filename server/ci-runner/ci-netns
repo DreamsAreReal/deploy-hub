@@ -1,0 +1,99 @@
+#!/bin/sh
+# Network namespace "ci" for the self-hosted GitHub runners and their rootless
+# Docker daemons. Its only way out is NAT to the internet: the host loopback
+# (Caddy admin, VictoriaMetrics/Logs, Bugsink), the Docker networks of the
+# production containers, private ranges and the cloud metadata address are
+# unreachable. On the host itself only SSH, HTTP and HTTPS of the public
+# address answer, the same as for anyone on the internet.
+#   ci-netns up | down
+set -eu
+NS=ci
+HOST_IF=ci-host
+NS_IF=ci-ns
+HOST_IP=10.79.0.1
+NS_IP=10.79.0.2
+NET=10.79.0.0/30
+CHAIN_FWD=CI-FORWARD
+CHAIN_IN=CI-INPUT
+
+ext_if() {
+  ip -4 route get 1.1.1.1 | grep -o 'dev [^ ]*' | awk '{print $2}'
+}
+
+ext_ip() {
+  ip -4 route get 1.1.1.1 | grep -o 'src [^ ]*' | awk '{print $2}'
+}
+
+# rule TABLE CHAIN ARGS... appends the rule unless it is already there.
+rule() {
+  table=$1
+  chain=$2
+  shift 2
+  iptables -t "$table" -C "$chain" "$@" 2>/dev/null || iptables -t "$table" -A "$chain" "$@"
+}
+
+firewall_down() {
+  iptables -D FORWARD -j "$CHAIN_FWD" 2>/dev/null || true
+  iptables -D INPUT -i "$HOST_IF" -j "$CHAIN_IN" 2>/dev/null || true
+  iptables -t nat -D POSTROUTING -s "$NET" -j MASQUERADE -o "$(ext_if)" 2>/dev/null || true
+  for c in "$CHAIN_FWD" "$CHAIN_IN"; do
+    iptables -F "$c" 2>/dev/null || true
+    iptables -X "$c" 2>/dev/null || true
+  done
+}
+
+firewall_up() {
+  out=$(ext_if)
+  pub=$(ext_ip)
+  iptables -N "$CHAIN_FWD"
+  iptables -N "$CHAIN_IN"
+  # Forwarded traffic of the namespace: replies back in, new connections only
+  # to public addresses through the uplink.
+  iptables -A "$CHAIN_FWD" -o "$HOST_IF" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  iptables -A "$CHAIN_FWD" -o "$HOST_IF" -j DROP
+  for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16 127.0.0.0/8; do
+    iptables -A "$CHAIN_FWD" -i "$HOST_IF" -d "$net" -j DROP
+  done
+  iptables -A "$CHAIN_FWD" -i "$HOST_IF" -o "$out" -j ACCEPT
+  iptables -A "$CHAIN_FWD" -i "$HOST_IF" -j DROP
+  # Traffic to the host itself: only what the host serves to the internet.
+  iptables -A "$CHAIN_IN" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  iptables -A "$CHAIN_IN" -d "$pub" -p tcp -m multiport --dports 22,80,443 -j ACCEPT
+  iptables -A "$CHAIN_IN" -p icmp -j ACCEPT
+  iptables -A "$CHAIN_IN" -j DROP
+  iptables -I FORWARD 1 -j "$CHAIN_FWD"
+  iptables -I INPUT 1 -i "$HOST_IF" -j "$CHAIN_IN"
+  rule nat POSTROUTING -s "$NET" -o "$out" -j MASQUERADE
+}
+
+down() {
+  firewall_down
+  ip link del "$HOST_IF" 2>/dev/null || true
+  ip netns del "$NS" 2>/dev/null || true
+}
+
+up() {
+  down
+  ip netns add "$NS"
+  ip -n "$NS" link set lo up
+  ip link add "$HOST_IF" type veth peer name "$NS_IF"
+  ip link set "$NS_IF" netns "$NS"
+  ip addr add "$HOST_IP/30" dev "$HOST_IF"
+  ip link set "$HOST_IF" up
+  ip -n "$NS" addr add "$NS_IP/30" dev "$NS_IF"
+  ip -n "$NS" link set "$NS_IF" up
+  ip -n "$NS" route add default via "$HOST_IP"
+  # IPv6 is not routed out of the namespace: keep it off so nothing tries it.
+  ip netns exec "$NS" sysctl -qw net.ipv6.conf.all.disable_ipv6=1
+  sysctl -qw net.ipv4.ip_forward=1
+  firewall_up
+}
+
+case "${1:-}" in
+  up) up ;;
+  down) down ;;
+  *)
+    echo "usage: $0 up|down" >&2
+    exit 2
+    ;;
+esac

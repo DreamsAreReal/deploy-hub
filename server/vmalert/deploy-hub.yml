@@ -80,3 +80,21 @@ groups:
         annotations:
           summary: "deploy-hub cannot read its journal"
           description: "/opt/deploy-hub/deploys.log is unreadable: rollbacks lose their targets and the journal counters are not pushed. Check its owner (deploy) and mode on the VPS."
+
+      - alert: DeployHubCIRunnerOffline
+        expr: max by (runner) (max_over_time(deploy_hub_ci_runner_up[10m])) == 0
+        annotations:
+          summary: "Self-hosted CI runner of {{ $labels.runner }} is offline"
+          description: "For 10 minutes the runner held no connection to GitHub, so deploys of {{ $labels.runner }} wait in the queue. On the VPS: systemctl status ci-runner@{{ $labels.runner }} ci-docker@{{ $labels.runner }} ci-netns, journalctl -u ci-runner@{{ $labels.runner }}. To deploy meanwhile, set the repository variable DEPLOY_HUB_RUNNER=github-hosted."
+
+      - alert: DeployHubCIRunnerSilent
+        expr: absent_over_time(deploy_hub_ci_disk_used_ratio[10m])
+        annotations:
+          summary: "No CI runner state for 10 minutes"
+          description: "ci-runner-status.timer pushes the runner state every minute. On the VPS: systemctl status ci-runner-status.timer ci-runner-status.service."
+
+      - alert: DeployHubCIDiskFull
+        expr: max(max_over_time(deploy_hub_ci_disk_used_ratio[15m])) > 0.85
+        annotations:
+          summary: "CI disk is {{ $value | humanizePercentage }} full"
+          description: "Builds fail when /var/lib/ci (the image /srv/ci.img) fills up. The job hook prunes Docker and the caches above 70%; on the VPS check du -sh /var/lib/ci/* and run docker system prune -af with DOCKER_HOST=unix:///run/ci/<repo>/docker.sock as ci."
