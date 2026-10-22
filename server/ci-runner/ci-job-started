@@ -1,6 +1,9 @@
 #!/bin/sh
 set +e
-/usr/local/lib/ci-runner/ci-runner-reap
+/usr/local/lib/ci-runner/ci-runner-reap || {
+  echo "ci-job-started: a process of an earlier job survived, refusing the job"
+  exit 1
+}
 case "${GITHUB_EVENT_NAME:-}" in
   push | workflow_dispatch | schedule) ;;
   *)

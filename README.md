@@ -537,9 +537,12 @@ Why the units look the way they do (the gate forbids comments in them):
 - `ci-runner-reap` runs as the repo user inside the hook and reads the tree
   from `/proc`: the root of the runner is the topmost ancestor of the hook in
   the same cgroup. Killing the whole cgroup instead would also kill the
-  listener and drop the job's result. It keeps no state, so a job cannot
-  exclude a process from it; a process cannot leave the cgroup
-  (`ProtectControlGroups`, no delegation to the runner).
+  listener and drop the job's result. It first stops (SIGSTOP) every stray
+  until all of them are stopped, so a fork loop cannot outrun it, and only
+  then kills them. If anything is left after 50 rounds, the job-started hook
+  refuses the job. Processes stay in the runner's cgroup
+  (`ProtectControlGroups`, no delegation to the runner), with one exception
+  listed under "What is not isolated".
 - The hooks are installed as `/usr/local/lib/ci-runner/*.sh`: the runner runs a
   hook only with a `.sh`, `.ps1` or `.js` name, through `bash -e -o pipefail`,
   so `ci-runner-clean` turns both off and always exits 0.
@@ -557,7 +560,12 @@ What is not isolated: a runner is not ephemeral. Its user owns the runner
 directory (the runner updates itself), so code a job runs (the app's tests,
 its dependencies) can change the runner's own `bin/`, `.env` or hooks
 environment and so reach later jobs **of the same repo** (it cannot reach the
-other repo). Both repos have one owner, the job-started hook admits only
+other repo). The same holds for its home (for example units in
+`~/.config/systemd/user`) and for a container that mounts the user
+manager's bus and starts a process in `user@<uid>.service`, outside the
+runner's cgroup. All runners also share the network namespace `ci`: while two
+jobs run at once, one can reach ports the other's gate containers publish on
+the namespace's loopback. Both repos have one owner, the job-started hook admits only
 workflows of `main`, and the tool cache and actions are fetched again
 for every job. Ephemeral runners (a just-in-time config per job, which needs a
 token with Administration: write on the repo kept on the host) would close

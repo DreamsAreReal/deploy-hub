@@ -44,6 +44,10 @@ repo_home() {
   user=ci-$1
   home=$CI_ROOT/$1
   [ -d "$home" ] || install -d -m 700 -o "$user" -g "$user" "$home"
+  [ "$(stat -c %U "$home")" = "$user" ] || {
+    echo "$home exists but is not owned by $user: remove it first" >&2
+    exit 1
+  }
   runuser -u "$user" -- mkdir -p -m 700 "$home/runner" "$home/tmp" "$home/docker"
 }
 
@@ -93,6 +97,10 @@ prepare() {
 legacy() {
   id "$LEGACY_USER" >/dev/null 2>&1 || return 0
   uid=$(id -u "$LEGACY_USER")
+  mountpoint -q "$CI_ROOT" || {
+    echo "$CI_ROOT is not mounted: mount it before removing the user $LEGACY_USER" >&2
+    exit 1
+  }
   echo "removing the shared runner user $LEGACY_USER: register every repository again" >&2
   for link in "$WANTS"/ci-runner@*.service; do
     [ -L "$link" ] || continue
@@ -103,9 +111,7 @@ legacy() {
   systemctl stop "user@$uid.service"
   pkill -KILL -U "$uid" || true
   rm -rf "$UNITS/user-$uid.slice.d" "$UNITS/user@$uid.service.d"
-  if mountpoint -q "$CI_ROOT"; then
-    find "$CI_ROOT" -mindepth 1 -maxdepth 1 -user "$LEGACY_USER" -exec rm -rf {} +
-  fi
+  find "$CI_ROOT" -mindepth 1 -maxdepth 1 -user "$LEGACY_USER" -exec rm -rf {} +
   userdel "$LEGACY_USER"
 }
 

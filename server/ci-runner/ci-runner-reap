@@ -1,6 +1,7 @@
 #!/bin/sh
 set -u
-ROUNDS=${CI_REAP_ROUNDS:-20}
+PATH=/usr/bin:/bin
+ROUNDS=50
 
 log() {
   echo "ci-runner-reap: $*" >&2
@@ -25,17 +26,20 @@ top_of() {
 }
 
 strays() {
-  while read -r pid; do
-    ppid=$(proc_ppid "$pid") && [ -n "$ppid" ] && printf '%s %s\n' "$pid" "$ppid"
-  done <"/sys/fs/cgroup$1/cgroup.procs" | awk -v top="$2" '
-    { parent[$1] = $2 }
+  sed 's|.*|/proc/&/stat|' "/sys/fs/cgroup$1/cgroup.procs" | xargs -r cat 2>/dev/null | awk -v top="$2" '
+    {
+      pid = $1
+      sub(/.*\) /, "")
+      parent[pid] = $2
+      state[pid] = $1
+    }
     END {
       keep[top] = 1
       do {
         grown = 0
         for (p in parent) if (!(p in keep) && (parent[p] in keep)) { keep[p] = 1; grown = 1 }
       } while (grown)
-      for (p in parent) if (!(p in keep)) print p
+      for (p in parent) if (!(p in keep) && state[p] != "Z") print p, state[p]
     }'
 }
 
@@ -45,15 +49,20 @@ if [ -z "$cg" ] || [ ! -r "/sys/fs/cgroup$cg/cgroup.procs" ]; then
   log "no cgroup v2 to reap"
   exit 0
 fi
-killed=0
 round=0
 while [ "$round" -lt "$ROUNDS" ]; do
-  pids=$(strays "$cg" "$top")
-  [ -n "$pids" ] || break
-  echo "$pids" | xargs -r kill -KILL 2>/dev/null
-  killed=$((killed + $(echo "$pids" | wc -l)))
+  list=$(strays "$cg" "$top")
+  [ -n "$list" ] || break
+  if echo "$list" | awk '$2 != "T" && $2 != "t" {found = 1} END {exit !found}'; then
+    echo "$list" | awk '{print $1}' | xargs -r kill -STOP 2>/dev/null
+  else
+    log "killing $(echo "$list" | wc -l) leftover processes in $cg"
+    echo "$list" | awk '{print $1}' | xargs -r kill -KILL 2>/dev/null
+  fi
   round=$((round + 1))
 done
-[ "$killed" -eq 0 ] || log "killed $killed leftover processes in $cg"
-[ -z "$(strays "$cg" "$top")" ] || log "processes still left in $cg after $ROUNDS rounds"
+if [ -n "$(strays "$cg" "$top")" ]; then
+  log "processes still left in $cg after $ROUNDS rounds"
+  exit 1
+fi
 exit 0
