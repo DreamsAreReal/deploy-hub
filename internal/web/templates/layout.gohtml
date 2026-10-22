@@ -1,0 +1,155 @@
+{{define "head"}}<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{{if .Refresh}}<meta http-equiv="refresh" content="{{.Refresh}}">{{end}}
+<title>{{.Title}} · deploy-hub</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="blobs" aria-hidden="true"><span></span><span></span><span></span></div>
+<header class="top">
+  <a class="brand" href="/"><span class="logo" aria-hidden="true">🚀</span><span><span class="brand-name">deploy-hub</span><span class="sub">My apps on the server</span></span></a>
+  {{- if .Clock}}<p class="live"><span class="dot" aria-hidden="true"></span>updated at {{.Clock}}, refreshes itself every {{.Refresh}} s</p>{{end}}
+</header>
+{{- end}}
+
+{{- define "foot"}}
+</body>
+</html>
+{{- end}}
+
+{{- define "dashboard"}}{{template "head" .}}
+{{- with .Body}}
+<main>
+  <section class="hero" aria-label="Summary">
+    <div class="tile ring-tile">
+      <svg viewBox="0 0 120 120" class="ring" aria-hidden="true">
+        <circle cx="60" cy="60" r="50" class="ring-bg"/>
+        <circle cx="60" cy="60" r="50" class="ring-fg {{.Ring.Tone}}" stroke-dashoffset="{{.Ring.Offset}}"/>
+      </svg>
+      <div class="ring-label">{{if .Ring.Total}}<strong>{{.Ring.Fine}} of {{.Ring.Total}}</strong><span>apps are fine</span>{{else}}<strong>0</strong><span>no apps yet</span>{{end}}</div>
+    </div>
+    <div class="tile"><span class="tile-icon" aria-hidden="true">📦</span><strong>{{.Ops}}</strong><span>operations in 30 days</span></div>
+    <div class="tile"><span class="tile-icon" aria-hidden="true">🎯</span><strong>{{.Rate}}</strong><span>went fine</span></div>
+    <div class="tile"><span class="tile-icon" aria-hidden="true">⏱️</span><strong>{{.Avg}}</strong><span>average per operation</span></div>
+    <div class="tile"><span class="tile-icon" aria-hidden="true">🕒</span><strong>{{.Last}}</strong><span>last deploy</span></div>
+  </section>
+
+  <section aria-labelledby="apps-title">
+    <h2 id="apps-title">Apps</h2>
+    <div class="apps">
+{{- range .Apps}}
+      <article class="app {{.Tone}}">
+        <div class="app-top">
+          <div class="face" aria-hidden="true">{{.Face}}</div>
+          <div>
+            <h3 class="app-name">{{if .URL}}<a href="{{.URL}}" target="_blank" rel="noopener">{{.Name}} ↗</a>{{else}}{{.Name}}{{end}}</h3>
+            <span class="mood">{{.Text}}</span>
+          </div>
+        </div>
+        <dl class="facts">
+          <dt>Version</dt><dd>{{if eq .Version "none"}}—{{else}}<span class="chip">{{.Version}}</span>{{end}}</dd>
+          <dt>Updated</dt><dd>{{.Updated}}</dd>
+          <dt>Container</dt><dd>{{.Container}}</dd>
+        </dl>
+        <div class="beads">
+          {{- range .Beads}}<span class="bead {{.Tone}}{{if .Gate}} gate{{end}}" title="{{.Title}}" role="img" aria-label="{{.Title}}"></span>{{else}}<span class="beads-empty">no operations yet</span>{{end}}
+        </div>
+        <div class="app-actions">
+          {{- if .Job}}<a class="btn primary" href="/actions/{{.Job}}">👀 Watch it run</a>{{else}}
+          {{- if .Previous}}<a class="btn" href="/confirm/rollback/{{.Name}}" title="Bring back version {{.Previous}}">↩️ Roll back</a>{{else}}<span class="btn disabled" title="No previous version">↩️ Roll back</span>{{end}}
+          {{- if .Current}}<a class="btn" href="/confirm/redeploy/{{.Name}}" title="Recreate the current version">🔁 Redeploy</a>{{else}}<span class="btn disabled" title="Nothing to redeploy">🔁 Redeploy</span>{{end}}
+{{- end}}
+        </div>
+      </article>
+{{- else}}
+      <div class="empty"><b aria-hidden="true">🫥</b>No apps yet. Connect a repo with the onboard command.</div>
+{{- end}}
+    </div>
+  </section>
+
+  <div class="split">
+    <section class="card" aria-labelledby="chart-title">
+      <div class="card-head">
+        <h2 id="chart-title">Operations per day</h2>
+        <div class="legend"><span class="key ok">✓ ok</span><span class="key fail">✗ failed</span></div>
+      </div>
+{{- with .Chart}}{{$c := .}}
+      {{- if .Empty}}<p class="chart-empty">📭 No operations in 30 days</p>{{else}}
+      <svg class="chart" viewBox="{{.ViewBox}}" role="img" aria-label="Operations per day over 30 days">
+        {{- range .Ticks}}<line class="grid" x1="{{$c.Left}}" x2="{{$c.Right}}" y1="{{.Y}}" y2="{{.Y}}"/><text x="{{.X}}" y="{{.Y}}" dy="4" text-anchor="end">{{.Text}}</text>{{end}}
+        {{- range .Bars}}<g class="col"><title>{{.Title}}</title><rect class="hit" x="{{.HitX}}" y="0" width="{{.HitW}}" height="{{.HitH}}" rx="6"/>{{if .OK}}<path class="bar-ok" d="{{.OK}}"/>{{end}}{{if .Fail}}<path class="bar-fail" d="{{.Fail}}"/>{{end}}{{if .Label}}<text x="{{.LabelX}}" y="{{.LabelY}}" text-anchor="middle">{{.Label}}</text>{{end}}</g>{{end}}
+        <line class="baseline" x1="{{.Left}}" x2="{{.Right}}" y1="{{.Base}}" y2="{{.Base}}"/>
+      </svg>
+      <details class="table-view"><summary>Show as a table</summary>
+        <table><thead><tr><th>Day</th><th>✓ ok</th><th>✗ failed</th></tr></thead>
+        <tbody>{{range .Rows}}<tr><td>{{.Date}}</td><td>{{.OK}}</td><td>{{.Fail}}</td></tr>{{end}}</tbody></table>
+      </details>
+{{- end}}
+{{- end}}
+    </section>
+
+    <section class="card" aria-labelledby="feed-title">
+      <div class="card-head"><h2 id="feed-title">What happened</h2></div>
+      <ol class="feed">
+{{- range .Events}}
+        <li class="{{.Tone}}"><span class="ico" aria-hidden="true">{{.Icon}}</span><span class="what"><b>{{.Action}}</b>{{if .App}} {{.App}}{{end}} <span class="badge">{{.Result}}</span><small>{{.Detail}}</small></span><span class="when" title="{{.Stamp}}">{{.When}}</span></li>
+{{- else}}
+        <li class="idle"><span class="ico" aria-hidden="true">🌱</span><span class="what">The journal is empty</span><span></span></li>
+{{- end}}
+      </ol>
+    </section>
+  </div>
+</main>
+{{- end}}
+{{- template "foot"}}{{end}}
+
+{{- define "confirm"}}{{template "head" .}}
+{{- with .Body}}
+<main class="center">
+  <section class="dialog">
+    <div class="dlg-face" aria-hidden="true">🤔</div>
+    <h1>{{.Question}}</h1>
+    <p>{{.Explain}}</p>
+    <form method="post" action="/actions" class="dlg-actions">
+      <input type="hidden" name="app" value="{{.App}}">
+      <input type="hidden" name="action" value="{{.Action}}">
+      <input type="hidden" name="tag" value="{{.Tag}}">
+      <a class="btn ghost" href="/">Cancel</a>
+      <button type="submit" class="btn primary">{{.Button}}</button>
+    </form>
+  </section>
+</main>
+{{- end}}
+{{- template "foot"}}{{end}}
+
+{{- define "job"}}{{template "head" .}}
+{{- with .Body}}
+<main class="center">
+  <section class="dialog {{.Tone}}">
+    <div class="dlg-face {{.Tone}}" aria-hidden="true">{{.Face}}</div>
+    <h1>{{.Title}}</h1>
+    <p>{{.Text}}</p>
+    <pre class="log">{{if .Output}}{{.Output}}{{else}}starting…{{end}}</pre>
+    <div class="dlg-actions"><a class="btn primary" href="/">← Back to apps</a></div>
+  </section>
+  {{- if .Party}}<div class="confetti" aria-hidden="true"><i>🎉</i><i>✨</i><i>🎊</i><i>💚</i><i>⭐</i><i>🎉</i><i>✨</i><i>🎊</i><i>💚</i><i>⭐</i><i>🎉</i><i>🎊</i></div>{{end}}
+</main>
+{{- end}}
+{{- template "foot"}}{{end}}
+
+{{- define "error"}}{{template "head" .}}
+{{- with .Body}}
+<main class="center">
+  <section class="dialog critical">
+    <div class="dlg-face critical" aria-hidden="true">🙈</div>
+    <h1>That will not work</h1>
+    <p>{{.}}</p>
+    <div class="dlg-actions"><a class="btn primary" href="/">← Back to apps</a></div>
+  </section>
+</main>
+{{- end}}
+{{- template "foot"}}{{end}}

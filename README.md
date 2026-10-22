@@ -291,6 +291,7 @@ commands:
 | `facts <app>` | root (from `onboard`) | reports what already exists on the server |
 | `onboard <repo> …` | operator machine | connects a GitHub repo end-to-end |
 | `mcp` | operator machine | MCP server for AI agents: `status`, `history`, `rollback` over the deploy channel |
+| `web [--port 8970]` | `deploy` (systemd) | the dashboard on `127.0.0.1`, with rollback/redeploy buttons |
 
 Build it with `make build` (linux/amd64 by default, output outside the repo in
 `$TMPDIR/deploy-hub-build/`); `make build GOOS=darwin GOARCH=arm64` gives a
@@ -380,7 +381,21 @@ root SSH to. `<vps>` is the server address.
    shows a fresh `workflow_dispatch` run. When the PAT expires, rewrite the
    header file the same way.
 
-9. **Observability** (recommended): the shared logs/metrics stack lives in its
+9. **Dashboard** (recommended) — `deploy-hub web` behind Caddy with a password,
+   at `https://hub.<host-slug>.sslip.io` (so no app may be called `hub`):
+
+   ```
+   scp server/systemd/deploy-hub-web.service vpn:/etc/systemd/system/
+   ssh vpn 'systemctl daemon-reload && systemctl enable --now deploy-hub-web.service'
+   HASH=$(ssh vpn 'caddy hash-password --plaintext "<password>"')
+   sed -e 's/<host-slug>/<your-host-slug>/' -e "s|<bcrypt-hash>|$HASH|" server/caddy/deploy-hub-web.caddy \
+     | ssh vpn 'install -d /etc/caddy/extra && cat > /etc/caddy/extra/deploy-hub-web.caddy && systemctl reload caddy'
+   ```
+
+   Check: `curl -s -o /dev/null -w '%{http_code}' https://hub.<host-slug>.sslip.io/`
+   prints `401` without the password and `200` with `-u admin:<password>`.
+
+10. **Observability** (recommended): the shared logs/metrics stack lives in its
    own repo, [DreamsAreReal/observability](https://github.com/DreamsAreReal/observability).
    Load the hub's alert rules into it (see "Alerts" under Observability).
 
@@ -584,6 +599,36 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"s
 
 Agents that should only watch can be denied the `rollback` tool in the client
 (in Claude Code: `"permissions": {"deny": ["mcp__deploy-hub__rollback"]}`).
+## Dashboard
+
+`deploy-hub web` serves one page for people rather than scripts, with no
+JavaScript: a card per app with a face for its state (😊 healthy, 🙂 running
+without a health check, 🤒 failing its probe, 😴 not running, 🥚 never
+deployed, 🛠️ an action in progress), its version, when it last changed and its
+last 14 operations as coloured dots; a ring with how many apps are fine; tiles
+with the operations of the last 30 days, their success rate, average duration
+and the last deploy; a stacked bar chart of successful and failed operations
+per day (with a table view); and the journal as a feed. The page refreshes
+itself every 30 s.
+
+**↩️ Roll back** and **🔁 Redeploy** open a confirmation page; confirming
+runs exactly `rollback <app>` or `rollback <app> <current tag>` through the same
+runner code as the SSH command, so the lock, the blue-green health gate, the
+journal, metrics and tracker delivery all behave the same, and only versions
+that already passed a deploy can be started. The action page streams the
+runner output (refreshing every 2 s) and ends with 🥳 or 😿. One action per
+app runs at a time; a second click on a busy app opens the running one. An
+action keeps running if the page is closed; on `systemctl stop` the service
+waits for it to finish.
+
+The server listens on `127.0.0.1` only (`--port`, default `8970`) and has no
+login of its own: Caddy's `basic_auth` in front of it is the access control
+(Bootstrap step 9). Every page is sent with a strict CSP (no scripts) and
+`frame-ancestors 'none'`; a POST is accepted only as a same-origin form
+(`Origin`/`Sec-Fetch-Site` checked), so another site cannot press the buttons
+in a logged-in browser. `GET /api/overview` returns the same data as JSON.
+Logs go to `/opt/deploy-hub/logs/web.log`; actions log to the same file and
+journal like any runner request.
 
 ## Health gate and rollback
 

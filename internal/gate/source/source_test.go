@@ -60,6 +60,7 @@ func TestCommentsFoundInEveryLanguage(t *testing.T) {
 	ws := repo(t, map[string]string{
 		fileMain:               "package main\n\n// note\nfunc main() { /* inline */ }\n",
 		"clean.go":             "package main\n\nvar s = \"// not a comment\"\n",
+		"embed.go":             "//go:build linux\n\npackage main\n\nimport _ \"embed\"\n\n//go:embed x.txt\nvar x string\n\n// go: spaced\n",
 		fileCI:                 "on: push # trailing\njobs: {}\n",
 		"compose.yaml":         "# head\nservices: {}\n",
 		"Dockerfile":           "FROM scratch\n# comment\n",
@@ -80,7 +81,7 @@ func TestCommentsFoundInEveryLanguage(t *testing.T) {
 	testutil.Equal(t, out.Status, gate.StatusFail)
 	want := []string{
 		".gitignore:1", "Dockerfile:2", "Makefile:2", "app.service:2", "bad.go:2: string literal not terminated", fileBadYAML, "ci.yml:1",
-		"compose.yaml:2", "main.go:3", "main.go:4", "run.sh:2",
+		"compose.yaml:2", "embed.go:10", "main.go:3", "main.go:4", "run.sh:2",
 	}
 	testutil.Equal(t, len(out.Findings), len(want))
 	for i, w := range want {

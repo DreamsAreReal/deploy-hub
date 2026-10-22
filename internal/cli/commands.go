@@ -11,6 +11,7 @@ import (
 
 	"github.com/DreamsAreReal/deploy-hub/internal/caddy"
 	"github.com/DreamsAreReal/deploy-hub/internal/compose"
+	"github.com/DreamsAreReal/deploy-hub/internal/console"
 	"github.com/DreamsAreReal/deploy-hub/internal/docker"
 	"github.com/DreamsAreReal/deploy-hub/internal/health"
 	"github.com/DreamsAreReal/deploy-hub/internal/journal"
@@ -51,9 +52,13 @@ func runRunner(ctx context.Context, a *App, ex procexec.Runner, args []string) i
 	if raw == "" {
 		raw = strings.Join(args, " ")
 	}
+	return a.runnerService(ex, a.Out, a.Err).Dispatch(ctx, raw, a.IO.Stdin)
+}
+
+func (a *App) runnerService(ex procexec.Runner, out, errOut *console.Printer) *runner.Service {
 	d := docker.Client{Exec: ex}
 	prober := netprobe.NewProber()
-	svc := &runner.Service{
+	return &runner.Service{
 		Paths:     a.Config.Paths,
 		Apps:      a.apps(),
 		Journal:   a.journal(),
@@ -66,8 +71,8 @@ func runRunner(ctx context.Context, a *App, ex procexec.Runner, args []string) i
 		Listening: netprobe.Listening,
 		Now:       a.Now,
 		Sleep:     health.Sleep,
-		Out:       a.Out,
-		Err:       a.Err,
+		Out:       out,
+		Err:       errOut,
 		Log:       a.Log,
 		Metrics:   a.metrics(),
 		Delivery:  a.delivery(),
@@ -77,7 +82,6 @@ func runRunner(ctx context.Context, a *App, ex procexec.Runner, args []string) i
 		Audience:    a.Config.Audience,
 		WorkflowRef: a.Config.WorkflowRef(),
 	}
-	return svc.Dispatch(ctx, raw, a.IO.Stdin)
 }
 
 func runRender(_ context.Context, a *App, _ procexec.Runner, args []string) int {
