@@ -407,28 +407,29 @@ apps:
       - id: report-token-is-required
         category: security
         tests:
-          - internal/api.TestRejectsWrongToken
+          - internal/core.TestRejectsWrongToken
+          - internal/api.TestReportAuthorization
       - id: pages-need-sign-in
         category: security
         tests:
-          - internal/api.TestPagesNeedSignIn
+          - internal/core.TestPagesNeedSignIn
       - id: cross-site-form-is-refused
         category: security
         tests:
-          - internal/api.TestCrossSiteFormIsRefused
+          - internal/core.TestCrossSiteFormIsRefused
           - internal/web.TestLocalPathRejectsOtherSites
       - id: malformed-or-oversized-report-is-refused
         category: security
         tests:
-          - internal/api.TestBadReportLogsReason
+          - internal/core.TestBadReportLogsReason
           - internal/router.TestCheckupCleanCapsSize
           - internal/router.TestCleanDropsBadMACs
       - id: router-commands-are-allowlisted
         category: security
         tests:
           - internal/router.TestValidCommand
-          - internal/api.TestRejectsUnknownCommand
-          - internal/api.TestDeviceButtonQueuesCommand
+          - internal/core.TestRejectsUnknownCommand
+          - internal/core.TestDeviceButtonQueuesCommand
       - id: rendered-html-keeps-only-safe-tags
         category: security
         tests:
@@ -436,16 +437,16 @@ apps:
       - id: alerts-hide-secrets
         category: security
         tests:
-          - internal/api.TestSettingsAlertHidesSecretsAndSkipsOwn
+          - internal/core.TestSettingsAlertHidesSecretsAndSkipsOwn
       - id: report-is-stored-and-shown
         category: business
         tests:
-          - internal/api.TestEveryScreenRenders
-          - internal/api.TestNewDeviceAlertHasButtons
+          - internal/core.TestEveryScreenRenders
+          - internal/core.TestNewDeviceAlertHasButtons
       - id: router-command-round-trip
         category: business
         tests:
-          - internal/api.TestBlockCommandRoundTrip
+          - internal/core.TestBlockCommandRoundTrip
       - id: alerts-open-tracker-tasks
         category: business
         tests:
@@ -454,4 +455,34 @@ apps:
       - id: router-metrics-are-exposed
         category: business
         tests:
-          - internal/api.TestMetricsExposeRouterStats
+          - internal/core.TestMetricsExposeRouterStats
+      - id: passkey-sign-in-only
+        category: security
+        tests:
+          - internal/web.TestEnrollWithCodeSignsIn
+          - internal/web.TestEnrollCodeIsSingleUse
+          - internal/web.TestEnrollRefusals
+          - internal/web.TestLoginRefusals
+          - internal/web.TestCrossSiteAuthIsRefused
+      - id: sessions-expire
+        category: security
+        tests:
+          - internal/web.TestSessionsExpireAndPrune
+          - internal/store.TestSessions
+      - id: untrusted-report-input-is-fuzzed
+        category: security
+        tests:
+          - internal/router.FuzzClean
+          - internal/router.FuzzParseBlock
+      - id: storage-failures-surface
+        category: security
+        tests:
+          - internal/core.TestEveryStoreFailureIsReturned
+          - internal/store.TestEveryFailureIsReturned
+          - internal/web.TestStoreFailuresGiveErrorPages
+          - internal/api.TestReportStoreFailures
+      - id: owner-signs-in-with-a-passkey
+        category: business
+        tests:
+          - internal/web.TestLoginWithPasskey
+          - internal/web.TestKeysPage
