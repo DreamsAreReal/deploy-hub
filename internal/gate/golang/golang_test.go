@@ -273,15 +273,12 @@ func TestCoverageCheck(t *testing.T) {
 	testutil.Equal(t, Coverage(context.Background(), w).Status, gate.StatusFail)
 	testutil.Write(t, w.Report(CoverReport), "garbage")
 	testutil.Contains(t, Coverage(context.Background(), w).Reason, "malformed")
-	lines, err := CoveredLines(w)
+	lines, err := ProfileLines("garbage")
 	testutil.Fails(t, err)
 	testutil.Equal(t, len(lines), 0)
-	testutil.Write(t, w.Report(CoverReport), profile)
-	lines, err = CoveredLines(w)
+	lines, err = ProfileLines(profile)
 	testutil.NoErr(t, err)
 	testutil.True(t, lines["example.com/app/lib/lib.go"][4] && !lines["example.com/app/lib/lib.go"][7], "line states")
-	_, err = CoveredLines(ws(t, nil))
-	testutil.Fails(t, err)
 }
 
 func TestBranches(t *testing.T) {

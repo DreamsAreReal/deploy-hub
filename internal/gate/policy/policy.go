@@ -77,6 +77,7 @@ type Thresholds struct {
 
 type Limits struct {
 	Check          time.Duration `yaml:"check_timeout"`
+	LongCheck      time.Duration `yaml:"long_check_timeout"`
 	FuzzTime       time.Duration `yaml:"fuzz_time"`
 	FuzzExamples   int           `yaml:"fuzz_examples"`
 	MutantFloor    time.Duration `yaml:"mutant_timeout_floor"`
@@ -241,6 +242,7 @@ func (t Thresholds) validate() error {
 func (l Limits) validate() error {
 	return errors.Join(
 		positive("check_timeout", int64(l.Check)),
+		positive("long_check_timeout", int64(l.LongCheck)),
 		positive("fuzz_time", int64(l.FuzzTime)),
 		positive("fuzz_examples", int64(l.FuzzExamples)),
 		positive("mutant_timeout_floor", int64(l.MutantFloor)),

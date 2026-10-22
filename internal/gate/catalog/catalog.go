@@ -21,7 +21,7 @@ const (
 func Checks() []gate.Check {
 	packs := stacks.All()
 	byPack := func(name string) gate.Check {
-		return gate.Check{Name: name, Kind: kinds[name], Run: pack.Dispatch(packs, name)}
+		return gate.Check{Name: name, Kind: kinds[name], Long: name == pack.CheckMutation, Run: pack.Dispatch(packs, name)}
 	}
 	return []gate.Check{
 		{Name: "registration", Kind: gate.KindSecurity, Run: Registration},
