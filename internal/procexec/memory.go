@@ -80,6 +80,14 @@ func statRSS(stat []byte, group string) int64 {
 }
 
 func TotalMemory() int64 {
+	total := memTotal()
+	if limit, ok := cgroupLimit(memoryMaxFile, parseMemoryMax); ok && (total == 0 || limit < total) {
+		return limit
+	}
+	return total
+}
+
+func memTotal() int64 {
 	data, err := os.ReadFile(filepath.Join(procDir, meminfoFile))
 	if err != nil {
 		return 0

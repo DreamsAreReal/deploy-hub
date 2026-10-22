@@ -184,11 +184,15 @@ package with a test that fails when run alone always runs whole. A smaller
 selection can only lower the score. Mutants on lines no test executes count as survivors;
 mutants that do not compile are not mutants and are not counted. There is no
 way to exclude a mutant. Every mutant's test run is its own process group with
-a memory budget (the machine's memory divided by the workers plus one); a run
+a memory budget (the memory the gate may use divided by the workers plus one); a run
 that exceeds it is killed and the mutant counts as detected (`out-of-memory`),
 like a timeout, so a mutant that turns a loop into an endless allocation cannot
 take the CI runner down. The language packs mutate with the same engine and the
-same budget.
+same budget. "The memory the gate may use" is `MemTotal` capped by the tightest
+`memory.max` along the gate's cgroup v2 chain, and the workers are half the
+CPUs, at least two, where the CPUs are `NumCPU` capped by the tightest
+`cpu.max` quota. On the self-hosted runner the CI slice (13G, 6 CPUs) sets
+both, not the host.
 
 **Load test, done for a 1-CPU VPS.** The image runs in an isolated docker
 network on the CI runner with the production limits from the policy (`cpus`,
