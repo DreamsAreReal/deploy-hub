@@ -23,6 +23,8 @@ const reviewedKey = `"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
 const declaredLine = `"pkg:pypi/legacy": MIT`
 
+const kindWorker = "kind: worker"
+
 const valid = `owners: [Owner]
 thresholds:
   line_coverage: 90
@@ -86,6 +88,11 @@ func TestParseValidPolicy(t *testing.T) {
 	testutil.True(t, !hub.HasImage() && !hub.HasHTTP(), "binary has neither")
 	bot, _ := p.App("bot")
 	testutil.True(t, bot.HasImage() && !bot.HasHTTP(), "worker has an image only")
+	testutil.Equal(t, bot.MutationShards(), 1)
+	sharded, err := Parse([]byte(strings.Replace(valid, kindWorker, kindWorker+"\n    mutation_shards: 64", 1)))
+	testutil.NoErr(t, err)
+	bot, _ = sharded.App("bot")
+	testutil.Equal(t, bot.MutationShards(), MaxMutationShards)
 	_, err = p.App("ghost")
 	testutil.Is(t, err, ErrUnknownApp)
 }
@@ -141,6 +148,8 @@ func TestParseRejects(t *testing.T) {
 		"app name":           {"  hub:\n", "  Hub!:\n"},
 		"repo":               {"repo: Owner/hub", "repo: hub"},
 		"kind":               {"kind: binary", "kind: daemon"},
+		"negative shards":    {kindWorker, kindWorker + "\n    mutation_shards: -1"},
+		"too many shards":    {kindWorker, kindWorker + "\n    mutation_shards: 65"},
 		"port":               {"port: 8080", "port: 0"},
 		"health":             {"health: /health", "health: health"},
 		"memory":             {"memory: 256m", "memory: lots"},

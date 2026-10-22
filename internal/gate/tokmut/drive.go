@@ -50,10 +50,10 @@ type driver struct {
 type Build func(context.Context, gate.Workspace) (Suite, error)
 
 func Check(build Build) func(context.Context, gate.Workspace) gate.Outcome {
-	return func(ctx context.Context, ws gate.Workspace) gate.Outcome {
+	return mutation.Sharded(func(ctx context.Context, ws gate.Workspace) gate.Outcome {
 		rep, err := Mutate(ctx, ws, build)
 		return mutation.Judge(ws, rep, err)
-	}
+	})
 }
 
 func Mutate(ctx context.Context, ws gate.Workspace, build Build) (mutation.Report, error) {

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -234,18 +235,20 @@ type outcome struct {
 }
 
 type fakeGo struct {
-	t        *testing.T
-	pkgs     string
-	baseErr  error
-	mu       sync.Mutex
-	decide   func(mutated string, pkgs []string) outcome
-	overlays []string
-	caches   []string
-	limit    int64
-	profiles map[string]string
-	alone    map[string]bool
-	listErr  error
-	badIndex bool
+	t         *testing.T
+	pkgs      string
+	baseErr   error
+	mu        sync.Mutex
+	decide    func(mutated string, pkgs []string) outcome
+	overlays  []string
+	caches    []string
+	limit     int64
+	profiles  map[string]string
+	alone     map[string]bool
+	listErr   error
+	badIndex  bool
+	noCompile bool
+	runs      []string
 }
 
 const (
@@ -264,31 +267,52 @@ func pkgArgs(args []string) []string {
 }
 
 func (f *fakeGo) index(c procexec.Command) (procexec.Result, error, bool) {
-	pkg := c.Args[len(c.Args)-1]
 	switch {
 	case len(c.Args) > 1 && c.Args[1] == "-list":
+		pkg := c.Args[len(c.Args)-1]
 		return procexec.Result{Stdout: "Test" + strings.TrimPrefix(pkg, "m/") + "\nBenchmarkSkipped\nok " + pkg + " 0.1s\n"}, f.listErr, true
-	case !slices.ContainsFunc(c.Args, func(a string) bool { return strings.HasPrefix(a, coverProfile) }):
+	case len(c.Args) > 1 && c.Args[1] == compileFlag:
+		return f.compile()
+	case c.Args[0] != goTool:
 		return procexec.Result{}, nil, false
-	case f.alone[pkg]:
+	}
+	return f.runIndexed(c)
+}
+
+func (f *fakeGo) compile() (procexec.Result, error, bool) {
+	if f.noCompile {
+		return procexec.Result{Stderr: "lib_test.go:1: syntax error"}, errors.New("exit 1"), true
+	}
+	return procexec.Result{}, nil, true
+}
+
+func (f *fakeGo) runIndexed(c procexec.Command) (procexec.Result, error, bool) {
+	f.mu.Lock()
+	f.runs = append(f.runs, c.Dir)
+	f.mu.Unlock()
+	pkg := "m/" + strings.TrimSuffix(strings.TrimPrefix(c.Args[4], "-test.run=^(Test"), ")$")
+	if f.alone[pkg] {
 		return procexec.Result{Stdout: failedTest}, errors.New("exit 1"), true
 	}
-	profile := libNothing
-	if pkg == pkgLib {
-		profile = libCovered
-	}
-	if custom, ok := f.profiles[pkg]; ok {
-		profile = custom
-	}
-	if f.badIndex {
-		profile = "garbage"
-	}
 	for _, a := range c.Args {
-		if path, ok := strings.CutPrefix(a, coverProfile); ok {
-			testutil.Write(f.t, path, profile)
+		if path, ok := strings.CutPrefix(a, binProfile); ok {
+			testutil.Write(f.t, path, f.profileOf(pkg))
 		}
 	}
 	return procexec.Result{Stdout: outOK}, nil, true
+}
+
+func (f *fakeGo) profileOf(pkg string) string {
+	if f.badIndex {
+		return "garbage"
+	}
+	if custom, ok := f.profiles[pkg]; ok {
+		return custom
+	}
+	if pkg == pkgLib {
+		return libCovered
+	}
+	return libNothing
 }
 
 func (f *fakeGo) handle(c procexec.Command) (procexec.Result, error) {
@@ -440,6 +464,10 @@ func TestRunFailures(t *testing.T) {
 	testutil.Write(t, filepath.Join(blocked.Out, mutantsDir), "file in the way")
 	_, err = Run(context.Background(), blocked)
 	testutil.Fails(t, err)
+	unseeded, _ := setup(t, func(string, []string) outcome { return outcome{} })
+	testutil.Write(t, filepath.Join(unseeded.Out, cacheDir+workerSep+"0"), "file in the way")
+	_, err = Run(context.Background(), unseeded)
+	testutil.Contains(t, err.Error(), "cannot seed the worker build caches")
 }
 
 func TestBrokenToolchainMakesTheRunIncomplete(t *testing.T) {
@@ -451,12 +479,15 @@ func TestBrokenToolchainMakesTheRunIncomplete(t *testing.T) {
 	_, err := Run(context.Background(), ws)
 	testutil.Is(t, err, ErrIncomplete)
 	testutil.Contains(t, err.Error(), "1 "+reasonErrored)
-	testutil.Contains(t, logs.String(), `"msg":"mutant could not be run","packages":["m/lib"],"output":"go: creating work dir: no space left on device"`)
+	testutil.Contains(t, logs.String(), `"msg":"mutant could not be run","packages":["m/lib"],"output":"go: creating work dir: no space left on device","error":"exit 1"`)
 	testutil.True(t, len(fg.caches) > 0, "mutants run with the isolated build cache")
 	for _, c := range fg.caches {
-		testutil.Equal(t, c, cacheEnv+filepath.Join(ws.Out, cacheDir))
+		testutil.True(t, strings.HasPrefix(c, cacheEnv+filepath.Join(ws.Out, cacheDir)+workerSep), "mutants run with a worker build cache: "+c)
 	}
 	testutil.Missing(t, filepath.Join(ws.Out, cacheDir))
+	for w := range Workers() {
+		testutil.Missing(t, filepath.Join(ws.Out, cacheDir+workerSep+strconv.Itoa(w)))
+	}
 }
 
 func TestCancelledRunIsIncomplete(t *testing.T) {
@@ -475,7 +506,7 @@ func TestStagingFailureIsAnError(t *testing.T) {
 	ws.Log = slog.New(slog.NewJSONHandler(&logs, nil))
 	e := &engine{ws: ws, baselines: map[string]time.Duration{}, dir: filepath.Join(ws.Out, "missing", "\x00")}
 	e.index = newIndex()
-	st := e.run(context.Background(), 1, target{mutant: Mutant{File: fileX}})
+	st := e.mutate(context.Background(), 1, target{mutant: Mutant{File: fileX}}, cacheEnv)
 	testutil.Equal(t, st, StatusErrored)
 	testutil.Contains(t, logs.String(), `"msg":"mutant staging failed","file":"x.go"`)
 	dir := t.TempDir()
@@ -697,4 +728,65 @@ func TestSelection(t *testing.T) {
 	testutil.Equal(t, run, []string{"-run=^(TestA|TestB)$"})
 	_, err := readProfile(filepath.Join(t.TempDir(), "missing.out"))
 	testutil.Fails(t, err)
+}
+
+func TestIndexRunsOneCompiledBinaryPerPackageInItsDirectory(t *testing.T) {
+	ws, fg := setup(t, func(string, []string) outcome { return outcome{killed: true} })
+	_, err := Run(context.Background(), ws)
+	testutil.NoErr(t, err)
+	testutil.Equal(t, len(fg.runs), 1)
+	testutil.True(t, strings.HasSuffix(fg.runs[0], string(filepath.Separator)+"lib"), "the test binary runs in its package directory: "+fg.runs[0])
+}
+
+func TestTestsThatDoNotCompileWithCoverageRunTheirPackageWhole(t *testing.T) {
+	var (
+		mu   sync.Mutex
+		pkgs [][]string
+	)
+	ws, fg := setup(t, nil)
+	fg.noCompile = true
+	fg.decide = func(_ string, p []string) outcome {
+		mu.Lock()
+		pkgs = append(pkgs, p)
+		mu.Unlock()
+		return outcome{}
+	}
+	var logs bytes.Buffer
+	ws.Log = slog.New(slog.NewJSONHandler(&logs, nil))
+	rep, err := Run(context.Background(), ws)
+	testutil.NoErr(t, err)
+	testutil.Equal(t, rep.Counts, map[Status]int{StatusSurvived: 6})
+	testutil.Equal(t, len(pkgs), 6)
+	testutil.Equal(t, len(fg.runs), 0)
+	testutil.Contains(t, logs.String(), `"msg":"tests do not compile with coverage, the package runs whole","package":"m/lib","output":"lib_test.go:1: syntax error"`)
+}
+
+func TestMutantWhoseCacheCannotBeTrimmedIsAnError(t *testing.T) {
+	ws, _ := setup(t, func(string, []string) outcome { return outcome{killed: true} })
+	var logs bytes.Buffer
+	ws.Log = slog.New(slog.NewJSONHandler(&logs, nil))
+	e := &engine{ws: ws, baselines: map[string]time.Duration{}, dir: filepath.Join(ws.Out, mutantsDir), index: newIndex()}
+	st := e.run(context.Background(), 1, target{mutant: Mutant{File: fileX}}, &workerCache{dir: filepath.Join(ws.Out, "gone")})
+	testutil.Equal(t, st, StatusErrored)
+	testutil.Contains(t, logs.String(), `"msg":"worker build cache trim failed"`)
+}
+
+func TestMutantIsRetriedOnceAfterATransientError(t *testing.T) {
+	var (
+		mu   sync.Mutex
+		seen = map[string]int{}
+	)
+	ws, _ := setup(t, func(mutated string, _ []string) outcome {
+		mu.Lock()
+		defer mu.Unlock()
+		seen[mutated]++
+		return outcome{broken: seen[mutated] == 1, killed: seen[mutated] > 1}
+	})
+	var logs bytes.Buffer
+	ws.Log = slog.New(slog.NewJSONHandler(&logs, nil))
+	rep, err := Run(context.Background(), ws)
+	testutil.NoErr(t, err)
+	testutil.Equal(t, rep.Counts[StatusKilled], 3)
+	testutil.Equal(t, rep.Counts[StatusErrored], 0)
+	testutil.Contains(t, logs.String(), `"msg":"mutant retried after an error"`)
 }

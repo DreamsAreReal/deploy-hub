@@ -69,7 +69,9 @@ func (p Project) Label() string {
 
 func (p Project) Workspace(ws gate.Workspace) (gate.Workspace, error) {
 	ws.Src = filepath.Join(ws.Src, filepath.FromSlash(p.Root))
-	ws.Out = filepath.Join(ws.Out, strings.NewReplacer("/", "-", labelSeparator, "-").Replace(p.Label()))
+	dir := strings.NewReplacer("/", "-", labelSeparator, "-").Replace(p.Label())
+	ws.Out = filepath.Join(ws.Out, dir)
+	ws.Mutation.Sub = filepath.Join(ws.Mutation.Sub, dir)
 	return ws, os.MkdirAll(ws.Out, outDirPerm)
 }
 
