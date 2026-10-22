@@ -114,6 +114,13 @@ func TestCommentsInEveryStack(t *testing.T) {
 	})
 }
 
+func TestGoDirectivesAreNotComments(t *testing.T) {
+	src := "//go:build integration\n\npackage a\n\nimport _ \"embed\"\n\n//go:embed x.txt\nvar X []byte\n\n//line a.go:1\n//export F\n//extern f\n// go: spaced\n// yes\n/* yes */\nvar s = 1 //go:noinline\n"
+	testutil.Equal(t, goComments(textFile{rel: fileA, data: []byte(src)}), []string{"a.go:13", "a.go:14", "a.go:15"})
+	ws := repo(t, map[string]string{fileA: "//go:build integration\n\npackage a\n"})
+	testutil.Equal(t, Comments(context.Background(), ws).Status, gate.StatusPass)
+}
+
 func TestCommentsReportLexerFailures(t *testing.T) {
 	saved := lex
 	t.Cleanup(func() { lex = saved })
