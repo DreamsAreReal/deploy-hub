@@ -60,6 +60,7 @@ func TestCommentsFoundInEveryLanguage(t *testing.T) {
 	ws := repo(t, map[string]string{
 		fileMain:               "package main\n\n// note\nfunc main() { /* inline */ }\n",
 		"clean.go":             "package main\n\nvar s = \"// not a comment\"\n",
+		"embed.go":             "//go:build linux\n\npackage main\n\nimport _ \"embed\"\n\n//go:embed static/*.css\nvar css string\n",
 		fileCI:                 "on: push # trailing\njobs: {}\n",
 		"compose.yaml":         "# head\nservices: {}\n",
 		"Dockerfile":           "FROM scratch\n# comment\n",
