@@ -501,7 +501,7 @@ Isolation, all in [`server/ci-runner`](server/ci-runner):
 | Docker | rootless `dockerd` per runner (`ci-docker@<repo>`), socket `/run/ci/<repo>/docker.sock`; the system socket is hidden and not accessible |
 | files | `ci-runner@<repo>`: `ProtectSystem=strict`, `ProtectHome`, `NoNewPrivileges`, empty capability set; `/opt`, `/etc/deploy-hub`, `/etc/srv-backup`, `/etc/wireguard`, `/var/lib/docker`, backups are inaccessible. The rootless daemon and the user manager of `ci` (it holds the container scopes) are jailed the same way, minus `NoNewPrivileges` for `dockerd` (rootlesskit needs the setuid `newuidmap`) |
 | network | namespace `ci` (`ci-netns`): NAT to the internet only. The host loopback (Caddy admin, VictoriaMetrics/Logs, Bugsink), the `shared` and other Docker networks, private ranges and the metadata address are dropped; of the host only SSH/HTTP/HTTPS on the public address answer. The drops live in the nftables table `inet ci_netns`, which neither Docker nor an iptables reload touches, and a drop there is final whatever Docker puts first in `FORWARD`. Ports published by gate containers live on the namespace's own loopback |
-| which jobs | job-started hook `ci-job-started`: only `<repo>/.github/workflows/deploy.yml@refs/heads/main` on a push to `main`; any other workflow, branch or event fails before its first step |
+| which jobs | job-started hook `ci-job-started`: only workflows of the repo's own `main` (push, `workflow_dispatch` or `schedule`); other branches, pull requests and other events fail before their first step |
 | CPU, memory | slice `user-<uid of ci>.slice` (`ci-limits.conf`): 6 of 8 CPUs, CPU and IO weight 20 (production keeps priority), `MemoryHigh` 11G, `MemoryMax` 13G, no swap |
 | disk | `/var/lib/ci` is the ext4 image `/srv/ci.img` (120G): CI can never fill `/` |
 | cleanup | job-completed hook `ci-runner-clean`: removes the job's containers, networks, volumes and pushed images, trims the build cache to 15 GB, empties the workspace, `RUNNER_TEMP`, `TMPDIR`, the tool cache and the downloaded actions; above 70% disk it drops all images and the language caches |
@@ -539,7 +539,7 @@ What is not isolated: all runners share the uid `ci` and `/var/lib/ci`, and a
 runner is not ephemeral. Code a job runs (the app's tests, its dependencies)
 can therefore tamper with the other runner's files and Docker data or leave a
 process behind for a later job of the same repo. Both repos have one owner,
-the hooks admit only the deploy workflow of `main`, and the tool cache and
+the hooks admit only workflows of `main`, and the tool cache and
 actions are fetched again for every job; a uid per repository and ephemeral
 runners would close the rest.
 
