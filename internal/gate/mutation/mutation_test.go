@@ -272,13 +272,21 @@ func (f *fakeGo) index(c procexec.Command) (procexec.Result, error, bool) {
 		pkg := c.Args[len(c.Args)-1]
 		return procexec.Result{Stdout: "Test" + strings.TrimPrefix(pkg, "m/") + "\nBenchmarkSkipped\nok " + pkg + " 0.1s\n"}, f.listErr, true
 	case len(c.Args) > 1 && c.Args[1] == compileFlag:
-		if f.noCompile {
-			return procexec.Result{Stderr: "lib_test.go:1: syntax error"}, errors.New("exit 1"), true
-		}
-		return procexec.Result{}, nil, true
+		return f.compile()
 	case c.Args[0] != goTool:
 		return procexec.Result{}, nil, false
 	}
+	return f.runIndexed(c)
+}
+
+func (f *fakeGo) compile() (procexec.Result, error, bool) {
+	if f.noCompile {
+		return procexec.Result{Stderr: "lib_test.go:1: syntax error"}, errors.New("exit 1"), true
+	}
+	return procexec.Result{}, nil, true
+}
+
+func (f *fakeGo) runIndexed(c procexec.Command) (procexec.Result, error, bool) {
 	f.mu.Lock()
 	f.runs = append(f.runs, c.Dir)
 	f.mu.Unlock()
@@ -286,22 +294,25 @@ func (f *fakeGo) index(c procexec.Command) (procexec.Result, error, bool) {
 	if f.alone[pkg] {
 		return procexec.Result{Stdout: failedTest}, errors.New("exit 1"), true
 	}
-	profile := libNothing
-	if pkg == pkgLib {
-		profile = libCovered
-	}
-	if custom, ok := f.profiles[pkg]; ok {
-		profile = custom
-	}
-	if f.badIndex {
-		profile = "garbage"
-	}
 	for _, a := range c.Args {
 		if path, ok := strings.CutPrefix(a, binProfile); ok {
-			testutil.Write(f.t, path, profile)
+			testutil.Write(f.t, path, f.profileOf(pkg))
 		}
 	}
 	return procexec.Result{Stdout: outOK}, nil, true
+}
+
+func (f *fakeGo) profileOf(pkg string) string {
+	if f.badIndex {
+		return "garbage"
+	}
+	if custom, ok := f.profiles[pkg]; ok {
+		return custom
+	}
+	if pkg == pkgLib {
+		return libCovered
+	}
+	return libNothing
 }
 
 func (f *fakeGo) handle(c procexec.Command) (procexec.Result, error) {
