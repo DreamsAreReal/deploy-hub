@@ -370,3 +370,76 @@ apps:
         tests:
           - internal/server.TestHealthReportsCountsWithoutAToken
           - internal/store.TestBackupThenRestoreKeepsData
+  router-bot:
+    repo: DreamsAreReal/router-bot
+    kind: service
+    port: 8080
+    health: /healthz
+    cpus: "0.5"
+    memory: 64m
+    env:
+      - ROUTER_TOKEN=gate-stage-only-router-token-000000
+      - PUBLIC_URL=http://localhost:8080
+    dast: {target: /, spider: 1m, max_time: 10m}
+    load: {rate: 20, duration: 30s, p95: 300ms, max_error_percent: 0, concurrency: 10, paths: [/healthz, /login]}
+    localized:
+      - internal/core/
+      - internal/tracker/
+      - internal/web/
+      - docs/
+      - "*_test.go"
+    allowed_files:
+      - docs/STATE.md
+      - docs/tasks/*/STATE.md
+    scenarios:
+      - id: report-token-is-required
+        category: security
+        tests:
+          - internal/api.TestRejectsWrongToken
+      - id: pages-need-sign-in
+        category: security
+        tests:
+          - internal/api.TestPagesNeedSignIn
+      - id: cross-site-form-is-refused
+        category: security
+        tests:
+          - internal/api.TestCrossSiteFormIsRefused
+          - internal/web.TestLocalPathRejectsOtherSites
+      - id: malformed-or-oversized-report-is-refused
+        category: security
+        tests:
+          - internal/api.TestBadReportLogsReason
+          - internal/router.TestCheckupCleanCapsSize
+          - internal/router.TestCleanDropsBadMACs
+      - id: router-commands-are-allowlisted
+        category: security
+        tests:
+          - internal/router.TestValidCommand
+          - internal/api.TestRejectsUnknownCommand
+          - internal/api.TestDeviceButtonQueuesCommand
+      - id: rendered-html-keeps-only-safe-tags
+        category: security
+        tests:
+          - internal/web.TestRichKeepsOnlySafeTags
+      - id: alerts-hide-secrets
+        category: security
+        tests:
+          - internal/api.TestSettingsAlertHidesSecretsAndSkipsOwn
+      - id: report-is-stored-and-shown
+        category: business
+        tests:
+          - internal/api.TestEveryScreenRenders
+          - internal/api.TestNewDeviceAlertHasButtons
+      - id: router-command-round-trip
+        category: business
+        tests:
+          - internal/api.TestBlockCommandRoundTrip
+      - id: alerts-open-tracker-tasks
+        category: business
+        tests:
+          - internal/tracker.TestNewDeviceOpensTaskWithLink
+          - internal/tracker.TestTunnelUpResolvesTunnelDown
+      - id: router-metrics-are-exposed
+        category: business
+        tests:
+          - internal/api.TestMetricsExposeRouterStats
