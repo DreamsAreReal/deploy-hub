@@ -192,7 +192,9 @@ whose tests do not compile that way runs whole for its mutants. Every worker
 builds mutants in its own copy of the build cache (hard links to the cache the
 baseline and the index filled), and everything a mutant adds to it is deleted
 right after the mutant ran, so the cache stays at its baseline size however
-many mutants run.
+many mutants run. A mutant whose test run fails in a way that is neither a
+test failure, a build failure, a timeout nor the memory budget is retried once
+before the run counts as incomplete.
 
 **Mutation shards.** An app with many mutants sets `mutation_shards: N` (2 to
 64) in its policy entry and passes the same number as `mutation_shards` to the
