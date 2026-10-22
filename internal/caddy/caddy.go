@@ -42,6 +42,8 @@ const (
 	candidateSuffix  = ".new"
 
 	standbyPortOffset = 10000
+	SpareStandbyFirst = 30000
+	SpareStandbyLast  = 32767
 
 	FailDuration = 5 * time.Second
 	Settle       = FailDuration + time.Second
@@ -78,28 +80,60 @@ type Route struct {
 	Standby string
 }
 
-func Routes(apps []registry.Entry) []Route {
+func Routes(apps []registry.Entry, busy func(int) bool) []Route {
+	out, pool := appRoutes(apps, busy)
+	for i, r := range out {
+		port, _ := strconv.Atoi(r.Port)
+		out[i].Standby = pool.claim(port + standbyPortOffset)
+	}
+	spare := SpareStandbyFirst
+	for i := range out {
+		out[i].Standby, spare = pool.spare(out[i].Standby, spare)
+	}
+	return out
+}
+
+type portPool struct {
+	taken map[int]bool
+	busy  func(int) bool
+}
+
+func appRoutes(apps []registry.Entry, busy func(int) bool) ([]Route, portPool) {
 	var out []Route
-	taken := map[string]bool{}
+	pool := portPool{taken: map[int]bool{}, busy: busy}
 	for _, a := range apps {
 		conf, err := registry.LoadAppConf(a.Dir)
 		if err != nil || validate.Port(conf.Port) != nil {
 			continue
 		}
 		out = append(out, Route{App: a.Name, Port: conf.Port})
-		taken[conf.Port] = true
+		port, _ := strconv.Atoi(conf.Port)
+		pool.taken[port] = true
 	}
-	for i, r := range out {
-		port, _ := strconv.Atoi(r.Port)
-		if standby := strconv.Itoa(port + standbyPortOffset); port+standbyPortOffset <= netprobe.MaxPort && !taken[standby] {
-			out[i].Standby = standby
-		}
-	}
-	return out
+	return out, pool
 }
 
-func StandbyPort(apps []registry.Entry, app string) string {
-	for _, r := range Routes(apps) {
+func (p portPool) free(port int) bool {
+	return port <= netprobe.MaxPort && !p.taken[port] && (p.busy == nil || !p.busy(port))
+}
+
+func (p portPool) claim(port int) string {
+	if !p.free(port) {
+		return ""
+	}
+	p.taken[port] = true
+	return strconv.Itoa(port)
+}
+
+func (p portPool) spare(standby string, next int) (string, int) {
+	for ; standby == "" && next <= SpareStandbyLast; next++ {
+		standby = p.claim(next)
+	}
+	return standby, next
+}
+
+func StandbyPort(apps []registry.Entry, app string, busy func(int) bool) string {
+	for _, r := range Routes(apps, busy) {
 		if r.App == app {
 			return r.Standby
 		}
@@ -162,7 +196,7 @@ func (s Syncer) sync(ctx context.Context) (syncResult, error) {
 	if err != nil {
 		return syncResult{}, err
 	}
-	routes := s.withoutForeignStandby(Routes(apps))
+	routes := Routes(apps, s.Listening)
 	content := []byte(Render(routes, s.Config.HostSlug, s.Config.Email))
 	if current, rerr := os.ReadFile(s.Config.Caddyfile); rerr == nil && bytes.Equal(current, content) {
 		s.Out.Println(msgUpToDate)
@@ -179,16 +213,6 @@ func (s Syncer) sync(ctx context.Context) (syncResult, error) {
 	s.Out.Println(msgUpdated)
 	s.Log.Info("caddyfile updated", "routes", len(routes))
 	return syncResult{reloaded: true, routes: len(routes)}, nil
-}
-
-func (s Syncer) withoutForeignStandby(routes []Route) []Route {
-	for i, r := range routes {
-		if port, _ := strconv.Atoi(r.Standby); r.Standby != "" && s.Listening(port) {
-			s.Log.Warn("standby port taken, no failover upstream", "app", r.App, "port", r.Standby)
-			routes[i].Standby = ""
-		}
-	}
-	return routes
 }
 
 func (s Syncer) install(ctx context.Context, content []byte) error {

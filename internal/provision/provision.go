@@ -26,7 +26,7 @@ const (
 )
 
 const (
-	composeHead  = "services:\n  app:\n    image: ${DEPLOY_IMAGE:?set by deploy runner, see .deploy-state}\n    container_name: %s\n    restart: unless-stopped\n    mem_limit: %s\n"
+	composeHead  = "services:\n  app:\n    image: ${DEPLOY_IMAGE:?set by deploy runner, see .deploy-state}\n    container_name: %s\n    restart: unless-stopped\n    mem_limit: %s\n    stop_grace_period: 30s\n"
 	composePorts = "    ports:\n      - \"127.0.0.1:%s:%s\"\n"
 	composeTail  = "    env_file: .env\n    logging:\n      driver: json-file\n      options:\n        max-size: \"10m\"\n        max-file: \"3\"\n"
 )

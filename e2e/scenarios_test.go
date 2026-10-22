@@ -61,7 +61,7 @@ func TestDeployLifecycle(t *testing.T) {
 	_, standbyLeft := h.fake.load("web-bg")
 	testutil.True(t, !standbyLeft, "standby must be removed")
 	calls := h.file("fake/calls.log")
-	testutil.Contains(t, calls, "run -d --name web-bg --restart no", "rm -f web-bg", "logout ghcr.io")
+	testutil.Contains(t, calls, "run -d --no-deps --name web-bg -p 127.0.0.1:"+strconv.Itoa(port+10000)+":"+h.port+" app", "up while standby is alive", "stop web-bg", "rm -f web-bg", "logout ghcr.io")
 
 	res = h.ssh("rollback web", "")
 	testutil.Equal(t, res.code, 0)
@@ -76,6 +76,31 @@ func TestDeployLifecycle(t *testing.T) {
 		`deploy_hub_lead_time_seconds{app="web"}`,
 		`deploy_hub_health_gate_duration_seconds{app="web",result="ok",target="standby"}`)
 	assertNoLeak(t, h, jobAuth)
+}
+
+func TestWorkerDeployOverlapsOldAndNewInstance(t *testing.T) {
+	t.Parallel()
+	h := newHub(t)
+	testutil.Write(t, filepath.Join(h.appDir, "app.conf"), "profile=bot\nimage="+imageName+"\nrepo="+appRepo+"\n")
+	testutil.Equal(t, h.ssh("deploy web "+goodA, h.deployStdin(goodA)).code, 0)
+	old, ok := h.fake.load("web-app-1")
+	testutil.True(t, ok && alive(old.PID), "first deploy starts the worker")
+
+	res := h.ssh("deploy web "+goodB, h.deployStdin(goodB))
+	testutil.Equal(t, res.code, 0)
+	testutil.Contains(t, res.stdout, "starting standby web-bg next to the live instance (no port)", "cutting over")
+	calls := h.file("fake/calls.log")
+	testutil.Contains(t, calls, "run -d --no-deps --name web-bg app\n", "up while standby is alive", "stop web-bg", "rm -f web-bg")
+	current, _ := h.fake.load("web-app-1")
+	testutil.Equal(t, current.Image, imageName+":"+goodB)
+	_, standbyLeft := h.fake.load("web-bg")
+	testutil.True(t, !standbyLeft, "standby must be removed")
+
+	res = h.ssh("deploy web "+dead, h.deployStdin(dead))
+	testutil.Equal(t, res.code, 1)
+	testutil.Contains(t, res.stderr, "standby unhealthy", "zero-downtime: prod never changed")
+	kept, _ := h.fake.load("web-app-1")
+	testutil.True(t, kept.Image == imageName+":"+goodB && alive(kept.PID), "a broken release never touches the live worker")
 }
 
 func TestBrokenReleaseKeepsServing(t *testing.T) {

@@ -98,6 +98,10 @@ func TestComposeContainer(t *testing.T) {
 	if got := c.ComposeContainer(context.Background(), composeFile, MainService); got != "web-1" {
 		t.Fatalf("got %q", got)
 	}
+	standbyFirst, _ := client(reply("web-bg\ta=b,com.docker.compose.oneoff=True\nweb\ta=b,com.docker.compose.oneoff=False\n", nil))
+	testutil.Equal(t, standbyFirst.ComposeContainer(context.Background(), composeFile, MainService), "web")
+	onlyStandby, _ := client(reply("web-bg\tcom.docker.compose.oneoff=True\n", nil))
+	testutil.Equal(t, onlyStandby.ComposeContainer(context.Background(), composeFile, MainService), "")
 	if f.Calls()[0].Env[0] != "DEPLOY_IMAGE=placeholder" {
 		t.Fatal("ps needs a placeholder image")
 	}
@@ -109,10 +113,9 @@ func TestComposeContainer(t *testing.T) {
 
 func inspectFake(cmd procexec.Command) (procexec.Result, error) {
 	outputs := map[string]string{
-		formatState:    "running\n",
-		formatHealth:   "healthy\n",
-		formatNetworks: "app_default\nshared\n",
-		formatPorts:    "443/tcp 9443\n80/tcp 9001\n",
+		formatState:  "running\n",
+		formatHealth: "healthy\n",
+		formatPorts:  "443/tcp 9443\n80/tcp 9001\n",
 	}
 	return procexec.Result{Stdout: outputs[cmd.Args[2]]}, nil
 }
@@ -120,7 +123,7 @@ func inspectFake(cmd procexec.Command) (procexec.Result, error) {
 func TestInspectHelpers(t *testing.T) {
 	ctx := context.Background()
 	c, _ := client(inspectFake)
-	testutil.Equal(t, []string{c.State(ctx, "x"), c.HealthStatus(ctx, "x"), c.Network(ctx, "x")}, []string{"running", "healthy", "app_default"})
+	testutil.Equal(t, []string{c.State(ctx, "x"), c.HealthStatus(ctx, "x")}, []string{"running", "healthy"})
 	testutil.Equal(t, c.ContainerPort(ctx, "x", "9001"), "80")
 	testutil.Equal(t, c.ContainerPort(ctx, "x", "1234"), "")
 }
@@ -128,7 +131,7 @@ func TestInspectHelpers(t *testing.T) {
 func TestInspectDefaults(t *testing.T) {
 	ctx := context.Background()
 	bad, _ := client(reply("", errBoom))
-	testutil.Equal(t, []string{bad.State(ctx, "x"), bad.HealthStatus(ctx, "x"), bad.Network(ctx, "x"), bad.ContainerPort(ctx, "x", "1")}, []string{StateMissing, NoHealth, "", ""})
+	testutil.Equal(t, []string{bad.State(ctx, "x"), bad.HealthStatus(ctx, "x"), bad.ContainerPort(ctx, "x", "1"), bad.ImageLabel(ctx, "img:t", "k")}, []string{StateMissing, NoHealth, "", ""})
 	empty, _ := client(reply("", nil))
 	testutil.Equal(t, []string{empty.State(ctx, "x"), empty.HealthStatus(ctx, "x")}, []string{StateMissing, NoHealth})
 }
@@ -152,19 +155,28 @@ func TestRunning(t *testing.T) {
 func TestRunStandbyArgs(t *testing.T) {
 	c, f := client(reply("", nil))
 	ctx := context.Background()
-	if err := c.RunStandby(ctx, Standby{Name: standbyName, Network: "net", EnvFile: "/a/.env", HostPort: "19001", Port: "80", Image: imageRef}); err != nil {
+	if err := c.RunStandby(ctx, Standby{Name: standbyName, File: composeFile, Service: MainService, Image: imageRef, HostPort: "19001", Port: "80"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.RunStandby(ctx, Standby{Name: standbyName, HostPort: "19001", Port: "80", Image: imageRef}); err != nil {
+	if err := c.RunStandby(ctx, Standby{Name: standbyName, File: composeFile, Service: "worker", Image: imageRef}); err != nil {
 		t.Fatal(err)
 	}
+	testutil.NoErr(t, c.Stop(ctx, standbyName))
 	want := []string{
-		"docker run -d --name a-bg --restart no --network net --env-file /a/.env --memory 256m -p 127.0.0.1:19001:80 img:t",
-		"docker run -d --name a-bg --restart no --memory 256m -p 127.0.0.1:19001:80 img:t",
+		"docker compose -f " + composeFile + " run -d --no-deps --name a-bg -p 127.0.0.1:19001:80 app",
+		"docker compose -f " + composeFile + " run -d --no-deps --name a-bg worker",
+		"docker stop a-bg",
 	}
 	if !reflect.DeepEqual(f.Lines(), want) {
 		t.Fatalf("got %v", f.Lines())
 	}
+	testutil.Equal(t, f.Calls()[0].Env, []string{"DEPLOY_IMAGE=" + imageRef})
+}
+
+func TestImageLabel(t *testing.T) {
+	c, f := client(reply("false\n", nil))
+	testutil.Equal(t, c.ImageLabel(context.Background(), imageRef, "deploy-hub.overlap"), "false")
+	testutil.Equal(t, f.Lines()[0], `docker image inspect --format {{index .Config.Labels "deploy-hub.overlap"}} `+imageRef)
 }
 
 func TestImageCommands(t *testing.T) {

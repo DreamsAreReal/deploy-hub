@@ -40,7 +40,7 @@ func TestFirstDeploySucceeds(t *testing.T) {
 	testutil.Equal(t, lines[1], "docker pull -q "+image+"@"+digest)
 	testutil.Equal(t, lines[2], "docker tag "+image+"@"+digest+" "+image+":"+goodTag)
 	testutil.Equal(t, lines[3], "docker logout ghcr.io")
-	testutil.Equal(t, e.exec.Count("docker run"), 0)
+	testutil.Equal(t, e.exec.Count(" run -d"), 0)
 	testutil.True(t, e.locker.released, "lock released")
 	e.noSecretLeak(jobAuth)
 	testutil.True(t, e.metrics.has(obs.MetricLeadTime, obs.Labels{obs.LabelApp: appName}), "lead time metric")
@@ -77,12 +77,14 @@ func TestBlueGreenSwapIsZeroDowntime(t *testing.T) {
 	if s := registry.LoadState(e.appDir); s.Current != good2Tag || s.Previous != goodTag {
 		t.Fatalf("state %+v", s)
 	}
-	run, ok := e.exec.Find("docker run")
-	if !ok || !strings.Contains(strings.Join(run.Args, " "), "--network web_default --env-file "+filepath.Join(e.appDir, ".env")+" --memory 256m -p 127.0.0.1:19001:8080") {
+	run, ok := e.exec.Find(" run ")
+	if !ok || strings.Join(run.Args, " ") != "compose -f "+filepath.Join(e.appDir, "docker-compose.yml")+" run -d --no-deps --name web-bg -p 127.0.0.1:19001:8080 app" {
 		t.Fatalf("standby args: %v", run.Args)
 	}
+	testutil.Equal(t, run.Env, []string{"DEPLOY_IMAGE=" + image + ":" + good2Tag})
 	testutil.Equal(t, standbyAtSync, []bool{false})
 	testutil.Equal(t, e.slept, []time.Duration{caddy.Settle})
+	testutil.Equal(t, e.sim.stopped, []string{"web-bg"})
 	testutil.True(t, !e.sim.running["web-bg"], "standby not removed")
 	e.expectOut(e.out, "blue-green: starting standby web-bg on 127.0.0.1:19001 -> 8080", msgCutover)
 	e.expectLog("health gate finished", "standby cleaned up")
@@ -110,7 +112,7 @@ func TestStatefulAppIsRecreatedInPlace(t *testing.T) {
 			if code := e.dispatch("deploy web "+good2Tag, meta()); code != ExitOK {
 				t.Fatalf("exit %d\n%s", code, e.err)
 			}
-			_, ran := e.exec.Find("docker run")
+			_, ran := e.exec.Find(" run ")
 			testutil.Equal(t, ran, c.standby)
 			testutil.Equal(t, e.sim.images[mainName], image+":"+good2Tag)
 			testutil.Equal(t, registry.LoadState(e.appDir), registry.DeployState{Current: good2Tag, Previous: goodTag})
@@ -145,7 +147,7 @@ func TestBYOCDeployKeepsBlueGreenOverride(t *testing.T) {
 	testutil.Equal(t, conf.BlueGreen, registry.BlueGreenOn)
 }
 
-func TestTakenStandbyPortFallsBackToInPlaceRecreate(t *testing.T) {
+func TestTakenStandbyPortMovesToASparePort(t *testing.T) {
 	e := newEnv(t)
 	e.sim.startOld(goodTag)
 	e.state(registry.DeployState{Current: goodTag})
@@ -153,7 +155,19 @@ func TestTakenStandbyPortFallsBackToInPlaceRecreate(t *testing.T) {
 	if code := e.dispatch("deploy web "+good2Tag, meta()); code != ExitOK {
 		t.Fatalf("exit %d\n%s", code, e.err)
 	}
-	if _, ok := e.exec.Find("docker run"); ok {
+	e.expectOut(e.out, "blue-green: starting standby web-bg on 127.0.0.1:30000 -> 8080", msgCutover)
+	testutil.Equal(t, e.router.syncs, 1)
+}
+
+func TestNoFreeStandbyPortFallsBackToInPlaceRecreate(t *testing.T) {
+	e := newEnv(t)
+	e.sim.startOld(goodTag)
+	e.state(registry.DeployState{Current: goodTag})
+	e.svc.Listening = func(p int) bool { return p == 19001 || p >= caddy.SpareStandbyFirst }
+	if code := e.dispatch("deploy web "+good2Tag, meta()); code != ExitOK {
+		t.Fatalf("exit %d\n%s", code, e.err)
+	}
+	if _, ok := e.exec.Find(" run "); ok {
 		t.Fatal("no standby on a port something else listens on: Caddy would route to it")
 	}
 	e.expectOut(e.err, msgNoStandbyPort)
@@ -197,7 +211,7 @@ func TestStandbyStartFailureFallsBackToRecreate(t *testing.T) {
 	}
 	e.expectLog("standby did not start")
 	lines := e.exec.Lines()
-	rm, run := slices.Index(lines, "docker rm -f web-bg"), slices.IndexFunc(lines, func(l string) bool { return strings.HasPrefix(l, "docker run -d --name web-bg") })
+	rm, run := slices.Index(lines, "docker rm -f web-bg"), slices.IndexFunc(lines, func(l string) bool { return strings.Contains(l, " run -d --no-deps --name web-bg ") })
 	testutil.True(t, rm >= 0 && run > rm, "a leftover standby is removed before the new one starts")
 }
 
@@ -218,7 +232,7 @@ func TestNonNumericPortDeploysInPlace(t *testing.T) {
 	e.sim.mainName = appName
 	e.sim.running[appName] = true
 	testutil.Equal(t, e.dispatch("deploy web "+good2Tag, ""), ExitOK)
-	testutil.Equal(t, e.exec.Count("docker run"), 0)
+	testutil.Equal(t, e.exec.Count(" run -d"), 0)
 }
 
 func TestRecreateFailureAfterStandbyRestoresPrevious(t *testing.T) {

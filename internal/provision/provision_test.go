@@ -73,7 +73,7 @@ func TestRenderCompose(t *testing.T) {
 	s := string(RenderCompose(service()))
 	var parsed map[string]any
 	testutil.NoErr(t, yaml.Unmarshal([]byte(s), &parsed))
-	for _, want := range []string{"container_name: web", "mem_limit: 256m", `- "127.0.0.1:9001:8080"`, "env_file: .env", "restart: unless-stopped", "max-size: \"10m\""} {
+	for _, want := range []string{"container_name: web", "mem_limit: 256m", `- "127.0.0.1:9001:8080"`, "env_file: .env", "restart: unless-stopped", "stop_grace_period: 30s", "max-size: \"10m\""} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("missing %q in\n%s", want, s)
 		}

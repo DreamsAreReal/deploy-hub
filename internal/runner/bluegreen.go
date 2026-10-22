@@ -3,10 +3,10 @@ package runner
 import (
 	"context"
 	"os"
-	"path/filepath"
-	"strconv"
+	"time"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/caddy"
+	"github.com/DreamsAreReal/deploy-hub/internal/compose"
 	"github.com/DreamsAreReal/deploy-hub/internal/docker"
 	"github.com/DreamsAreReal/deploy-hub/internal/health"
 	"github.com/DreamsAreReal/deploy-hub/internal/obs"
@@ -14,16 +14,22 @@ import (
 )
 
 const (
-	standbySuffix = "-bg"
-	dockerMain    = docker.MainService
-	targetMain    = "main"
-	targetStandby = "standby"
+	standbySuffix      = "-bg"
+	dockerMain         = docker.MainService
+	targetMain         = "main"
+	targetStandby      = "standby"
+	standbyStopTimeout = 2 * time.Minute
 )
 
 func (s *Service) blueGreen(ctx context.Context, op *operation, conf registry.AppConf, ref string, t health.Target) (bool, bool) {
 	old := s.container(ctx, op.app, op.dir, conf)
-	if t.Port == "" || old == "" || !s.Docker.Running(ctx, old) {
-		s.Log.Info("in-place recreate", "app", op.app, "reason", "no live instance or no port")
+	if old == "" || !s.Docker.Running(ctx, old) {
+		s.Log.Info("in-place recreate", "app", op.app, "reason", "no live instance")
+		return s.recreate(ctx, op, conf, ref, t), false
+	}
+	if !s.overlapAllowed(ctx, op.dir, conf, ref) {
+		s.Out.Println(msgOverlapOff)
+		s.Log.Info("in-place recreate", "app", op.app, "reason", "overlap disabled by label")
 		return s.recreate(ctx, op, conf, ref, t), false
 	}
 	if !s.standbySafe(ctx, conf, old) {
@@ -31,7 +37,19 @@ func (s *Service) blueGreen(ctx context.Context, op *operation, conf registry.Ap
 		s.Log.Info("in-place recreate", "app", op.app, "reason", "writable mount")
 		return s.recreate(ctx, op, conf, ref, t), false
 	}
+	if t.Port == "" {
+		return s.overlap(ctx, op, conf, ref, t)
+	}
 	return s.swap(ctx, op, conf, ref, t, old)
+}
+
+func (s *Service) overlapAllowed(ctx context.Context, dir string, conf registry.AppConf, ref string) bool {
+	if data, err := os.ReadFile(composePath(dir)); err == nil {
+		if v, ok := compose.OverlapLabel(data, mainService(conf)); ok {
+			return compose.AllowsOverlap(v)
+		}
+	}
+	return compose.AllowsOverlap(s.Docker.ImageLabel(ctx, ref, compose.LabelOverlap))
 }
 
 func (s *Service) standbySafe(ctx context.Context, conf registry.AppConf, old string) bool {
@@ -49,32 +67,49 @@ func (s *Service) standbySafe(ctx context.Context, conf registry.AppConf, old st
 	return len(mounts) == 0
 }
 
+func mainService(conf registry.AppConf) string {
+	if conf.IsBYOC() {
+		return conf.Main
+	}
+	return dockerMain
+}
+
 func (s *Service) recreate(ctx context.Context, op *operation, conf registry.AppConf, ref string, t health.Target) bool {
 	s.composeUp(ctx, op.dir, conf, ref)
 	return s.gateMain(ctx, op, conf, t)
 }
 
+func (s *Service) overlap(ctx context.Context, op *operation, conf registry.AppConf, ref string, t health.Target) (bool, bool) {
+	standby := s.standbySpec(op, conf, ref)
+	s.removeLeftover(ctx, standby.Name)
+	s.Out.Printf(msgOverlapStart, standby.Name)
+	return s.handover(ctx, op, conf, ref, t, standby, 0)
+}
+
 func (s *Service) swap(ctx context.Context, op *operation, conf registry.AppConf, ref string, t health.Target, old string) (bool, bool) {
-	name := op.app + standbySuffix
+	standby := s.standbySpec(op, conf, ref)
 	apps, err := s.Apps.All()
 	if err != nil {
 		s.Log.Warn("blue-green skipped", "app", op.app, "reason", "apps.list unreadable", "error", err.Error())
 		return s.recreate(ctx, op, conf, ref, t), false
 	}
-	standby := s.standbySpec(ctx, op.dir, name, old, ref, t.Port)
-	standby.HostPort = caddy.StandbyPort(apps, op.app)
-	if err := s.Docker.Remove(ctx, name); err != nil {
-		s.Log.Debug("no leftover standby removed", "standby", name, "error", err.Error())
-	}
-	if hostPort, err := strconv.Atoi(standby.HostPort); err != nil || s.Listening(hostPort) {
+	s.removeLeftover(ctx, standby.Name)
+	if standby.HostPort = caddy.StandbyPort(apps, op.app, s.Listening); standby.HostPort == "" {
 		s.Err.Println(msgNoStandbyPort)
 		s.Log.Warn("no free standby port", "app", op.app, "port", standby.HostPort)
 		return s.recreate(ctx, op, conf, ref, t), false
 	}
+	if standby.Port = s.Docker.ContainerPort(ctx, old, t.Port); standby.Port == "" {
+		standby.Port = t.Port
+	}
 	s.Router.Sync(ctx)
-	drain := false
-	defer func() { s.cleanupStandby(ctx, name, drain) }()
-	s.Out.Printf(msgStandbyStart, name, standby.HostPort, standby.Port)
+	s.Out.Printf(msgStandbyStart, standby.Name, standby.HostPort, standby.Port)
+	return s.handover(ctx, op, conf, ref, t, standby, caddy.Settle)
+}
+
+func (s *Service) handover(ctx context.Context, op *operation, conf registry.AppConf, ref string, t health.Target, standby docker.Standby, settle time.Duration) (bool, bool) {
+	cut := false
+	defer func() { s.cleanupStandby(ctx, standby.Name, cut, settle) }()
 	if err := s.Docker.RunStandby(ctx, standby); err != nil {
 		s.Err.Println(msgStandbyFallback)
 		s.Log.Warn("standby did not start", "app", op.app, "error", err.Error())
@@ -85,7 +120,7 @@ func (s *Service) swap(ctx context.Context, op *operation, conf registry.AppConf
 		return false, true
 	}
 	s.Out.Println(msgCutover)
-	drain = true
+	cut = true
 	if s.recreate(ctx, op, conf, ref, t) {
 		return true, false
 	}
@@ -96,16 +131,14 @@ func (s *Service) swap(ctx context.Context, op *operation, conf registry.AppConf
 	return false, true
 }
 
-func (s *Service) standbySpec(ctx context.Context, dir, name, old, ref, port string) docker.Standby {
-	spec := docker.Standby{Name: name, Network: s.Docker.Network(ctx, old), Port: s.Docker.ContainerPort(ctx, old, port), Image: ref}
-	if spec.Port == "" {
-		spec.Port = port
+func (s *Service) standbySpec(op *operation, conf registry.AppConf, ref string) docker.Standby {
+	return docker.Standby{Name: op.app + standbySuffix, File: composePath(op.dir), Service: mainService(conf), Image: ref}
+}
+
+func (s *Service) removeLeftover(ctx context.Context, name string) {
+	if err := s.Docker.Remove(ctx, name); err != nil {
+		s.Log.Debug("no leftover standby removed", "standby", name, "error", err.Error())
 	}
-	env := filepath.Join(dir, registry.EnvFile)
-	if _, err := os.Stat(env); err == nil {
-		spec.EnvFile = env
-	}
-	return spec
 }
 
 func (s *Service) gateStandby(ctx context.Context, app string, t health.Target, standby docker.Standby) bool {
@@ -121,17 +154,29 @@ func (s *Service) gateStandby(ctx context.Context, app string, t health.Target, 
 	return ok
 }
 
-func (s *Service) cleanupStandby(ctx context.Context, name string, drain bool) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
-	defer cancel()
-	if drain {
-		if err := s.Sleep(ctx, caddy.Settle); err != nil {
-			s.Log.Warn("standby drain cut short", "standby", name, "error", err.Error())
-		}
+func (s *Service) cleanupStandby(ctx context.Context, name string, cut bool, settle time.Duration) {
+	ctx = context.WithoutCancel(ctx)
+	if cut {
+		s.drainStandby(ctx, name, settle)
 	}
+	ctx, cancel := context.WithTimeout(ctx, cleanupTimeout)
+	defer cancel()
 	if err := s.Docker.Remove(ctx, name); err != nil {
 		s.Log.Error("standby not removed, it keeps its memory", "standby", name, "error", err.Error())
 		return
 	}
 	s.Log.Info("standby cleaned up", "standby", name)
+}
+
+func (s *Service) drainStandby(ctx context.Context, name string, settle time.Duration) {
+	ctx, cancel := context.WithTimeout(ctx, settle+standbyStopTimeout)
+	defer cancel()
+	if settle > 0 {
+		if err := s.Sleep(ctx, settle); err != nil {
+			s.Log.Warn("standby drain cut short", "standby", name, "error", err.Error())
+		}
+	}
+	if err := s.Docker.Stop(ctx, name); err != nil {
+		s.Log.Warn("standby not stopped gracefully", "standby", name, "error", err.Error())
+	}
 }
