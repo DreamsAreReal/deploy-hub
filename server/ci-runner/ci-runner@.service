@@ -1,7 +1,7 @@
 [Unit]
 Description=GitHub Actions runner for DreamsAreReal/%i (isolated, user ci-%i)
-Requires=ci-docker@%i.service ci-netns.service var-lib-ci.mount
-After=ci-docker@%i.service ci-netns.service var-lib-ci.mount
+Requires=ci-docker@%i.service ci-netns@%i.service var-lib-ci.mount
+After=ci-docker@%i.service ci-netns@%i.service var-lib-ci.mount
 
 [Service]
 User=ci-%i
@@ -14,8 +14,8 @@ Environment=DOCKER_HOST=unix:///run/ci/%i/docker.sock
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/lib/ci-runner/ci-job-started.sh
 Environment=ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/usr/local/lib/ci-runner/ci-runner-clean.sh
-NetworkNamespacePath=/run/netns/ci
-BindReadOnlyPaths=/etc/netns/ci/resolv.conf:/etc/resolv.conf
+NetworkNamespacePath=/run/netns/ci-%i
+BindReadOnlyPaths=/etc/netns/ci-%i/resolv.conf:/etc/resolv.conf
 ExecStartPre=/usr/bin/mkdir -p -m 700 /var/lib/ci/%i/tmp
 Restart=always
 RestartSec=30

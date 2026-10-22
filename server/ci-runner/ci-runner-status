@@ -4,34 +4,56 @@ URL=${DEPLOY_HUB_METRICS_URL-http://127.0.0.1:8428/api/v1/import/prometheus}
 WANTS=/etc/systemd/system/multi-user.target.wants
 
 connected() {
-  cg=$(systemctl show -p ControlGroup --value "$1")
+  cg=$(systemctl show -p ControlGroup --value "ci-runner@$1.service")
   [ -n "$cg" ] || return 1
   pids=$(tr '\n' '|' <"/sys/fs/cgroup$cg/cgroup.procs" 2>/dev/null) || return 1
   [ -n "$pids" ] || return 1
-  ip netns exec ci ss -Htnp state established '( dport = :443 )' | grep -Eq "pid=(${pids%|}),"
+  ip netns exec "ci-$1" ss -Htnp state established '( dport = :443 )' | grep -Eq "pid=(${pids%|}),"
 }
 
 isolated() {
-  mountpoint -q /var/lib/ci && [ -e /run/netns/ci ] && nft list table inet ci_netns >/dev/null 2>&1
+  mountpoint -q /var/lib/ci && nft list table inet ci_netns >/dev/null 2>&1
+}
+
+in_netns() {
+  pid=$(systemctl show -p MainPID --value "$1")
+  [ "${pid:-0}" -gt 0 ] || return 0
+  [ "$(stat -L -c %i "/proc/$pid/ns/net" 2>/dev/null)" = "$(stat -L -c %i "$2")" ]
+}
+
+netns_ok() {
+  uid=$(id -u "ci-$1" 2>/dev/null) || return 1
+  /usr/local/lib/ci-runner/ci-netns check "$1" &&
+    in_netns "ci-runner@$1.service" "/run/netns/ci-$1" &&
+    in_netns "ci-docker@$1.service" "/run/netns/ci-$1" &&
+    in_netns "user@$uid.service" "/run/netns/ci-$1"
 }
 
 metrics() {
-  iso=0
+  base=0
   if isolated; then
-    iso=1
+    base=1
   else
     systemctl stop 'ci-runner@*.service'
   fi
-  printf 'deploy_hub_ci_isolation_ok %s\n' "$iso"
+  iso=$base
+  runners=""
   for link in "$WANTS"/ci-runner@*.service; do
     [ -e "$link" ] || continue
     unit=$(basename "$link")
     repo=${unit#ci-runner@}
     repo=${repo%.service}
     up=0
-    if [ "$iso" = 1 ] && systemctl -q is-active "$unit" && connected "$unit"; then up=1; fi
-    printf 'deploy_hub_ci_runner_up{runner="%s"} %s\n' "$repo" "$up"
+    if [ "$base" = 1 ] && ! netns_ok "$repo"; then
+      iso=0
+      systemctl stop "$unit"
+    elif [ "$base" = 1 ] && systemctl -q is-active "$unit" && connected "$repo"; then
+      up=1
+    fi
+    runners="${runners}deploy_hub_ci_runner_up{runner=\"$repo\"} $up
+"
   done
+  printf 'deploy_hub_ci_isolation_ok %s\n%s' "$iso" "$runners"
   if mountpoint -q /var/lib/ci; then
     df -B1 --output=used,size /var/lib/ci | awk 'NR == 2 {printf "deploy_hub_ci_disk_used_ratio %.4f\n", $1 / $2}'
   fi

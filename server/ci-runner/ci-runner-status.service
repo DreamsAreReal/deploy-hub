@@ -1,6 +1,5 @@
 [Unit]
 Description=Push the CI runner connection state and CI disk fill to VictoriaMetrics
-After=ci-netns.service
 
 [Service]
 Type=oneshot

@@ -59,13 +59,13 @@ jail() {
   install -m 644 "$HERE/ci-limits.conf" "$UNITS/$slice.d/50-ci-limits.conf"
   cat >"$UNITS/user@$uid.service.d/50-ci-jail.conf" <<UNIT
 [Unit]
-Requires=ci-netns.service var-lib-ci.mount
-After=ci-netns.service var-lib-ci.mount
+Requires=ci-netns@$repo.service var-lib-ci.mount
+After=ci-netns@$repo.service var-lib-ci.mount
 
 [Service]
 Delegate=cpu cpuset io memory pids
-NetworkNamespacePath=/run/netns/ci
-BindReadOnlyPaths=/etc/netns/ci/resolv.conf:/etc/resolv.conf
+NetworkNamespacePath=/run/netns/ci-$repo
+BindReadOnlyPaths=/etc/netns/ci-$repo/resolv.conf:/etc/resolv.conf
 NoNewPrivileges=yes
 ProtectSystem=strict
 ReadWritePaths=$CI_ROOT/$repo /run/user/$uid
@@ -86,12 +86,42 @@ Slice=$slice
 UNIT
 }
 
+in_netns() {
+  pid=$(systemctl show -p MainPID --value "$1")
+  [ "${pid:-0}" -gt 0 ] || return 0
+  [ "$(stat -L -c %i "/proc/$pid/ns/net")" = "$(stat -L -c %i "$2")" ]
+}
+
+netns() {
+  install -d -m 755 "/etc/netns/ci-$1"
+  printf 'nameserver 1.1.1.1\nnameserver 9.9.9.9\n' >"/etc/netns/ci-$1/resolv.conf"
+  systemctl start "ci-netns@$1.service"
+}
+
 prepare() {
   repo_user "$1"
   repo_home "$1"
-  jail "$1" "$(id -u "ci-$1")"
+  uid=$(id -u "ci-$1")
+  jail "$1" "$uid"
   systemctl daemon-reload
+  netns "$1"
+  in_netns "user@$uid.service" "/run/netns/ci-$1" || systemctl restart "user@$uid.service"
   loginctl enable-linger "ci-$1"
+}
+
+shared_netns() {
+  [ -e "$UNITS/ci-netns.service" ] || [ -e /run/netns/ci ] || return 0
+  echo "moving the runners from the shared network namespace ci to one per repository" >&2
+  out=$(ip -4 route get 1.1.1.1 | grep -o 'dev [^ ]*' | awk '{print $2}')
+  systemctl stop 'ci-runner@*.service' 'ci-docker@*.service'
+  systemctl disable --now ci-netns.service 2>/dev/null || true
+  rm -f "$UNITS/ci-netns.service"
+  while iptables -D FORWARD -i ci-host -o "$out" -j ACCEPT 2>/dev/null; do :; done
+  while iptables -D FORWARD -o ci-host -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null; do :; done
+  while iptables -t nat -D POSTROUTING -s 10.79.0.0/30 -o "$out" -j MASQUERADE 2>/dev/null; do :; done
+  ip link del ci-host 2>/dev/null || true
+  ip netns del ci 2>/dev/null || true
+  rm -rf /etc/netns/ci
 }
 
 legacy() {
@@ -141,6 +171,7 @@ host() {
   install -m 644 "$HERE/rootlesskit.apparmor" /etc/apparmor.d/rootlesskit
   apparmor_parser -r /etc/apparmor.d/rootlesskit
   legacy
+  shared_netns
   install -d -m 755 "$LIB"
   install -m 755 "$HERE/ci-netns" "$LIB/ci-netns"
   install -m 755 "$HERE/ci-runner-status" "$LIB/ci-runner-status"
@@ -148,16 +179,15 @@ host() {
   install -m 755 "$HERE/ci-job-started" "$LIB/ci-job-started.sh"
   install -m 755 "$HERE/ci-runner-clean" "$LIB/ci-runner-clean.sh"
   rm -f "$LIB/ci-runner-clean"
-  for f in var-lib-ci.mount ci-netns.service ci-docker@.service ci-runner@.service \
+  for f in var-lib-ci.mount ci-netns@.service ci-docker@.service ci-runner@.service \
     ci-runner-status.service ci-runner-status.timer; do
     install -m 644 "$HERE/$f" "$UNITS/$f"
   done
   rm -f "$UNITS/ci-docker@.service.d/50-ci-user.conf" "$UNITS/ci-runner@.service.d/50-ci-user.conf"
-  install -d -m 755 /etc/netns/ci
-  printf 'nameserver 1.1.1.1\nnameserver 9.9.9.9\n' >/etc/netns/ci/resolv.conf
   systemctl daemon-reload
+  "$LIB/ci-netns" guard
   disk
-  systemctl enable --now ci-netns.service ci-runner-status.timer
+  systemctl enable --now ci-runner-status.timer
   for repo in $(registered); do
     prepare "$repo"
   done
@@ -181,7 +211,7 @@ register() {
   prepare "$repo"
   if [ ! -f "$dir/.runner" ]; then
     runuser -u "$user" -- tar -xzf - -C "$dir" <"$tarball"
-    ip netns exec ci runuser -u "$user" -- env HOME="$CI_ROOT/$repo" "$dir/config.sh" --unattended \
+    ip netns exec "ci-$repo" runuser -u "$user" -- env HOME="$CI_ROOT/$repo" "$dir/config.sh" --unattended \
       --url "https://github.com/$OWNER/$repo" --token "$token" \
       --name "eu-$repo" --labels eu --work _work --replace
   fi

@@ -85,13 +85,13 @@ groups:
         expr: max by (runner) (max_over_time(deploy_hub_ci_runner_up[10m])) == 0
         annotations:
           summary: "Self-hosted CI runner of {{ $labels.runner }} is offline"
-          description: "For 10 minutes the runner held no connection to GitHub, so deploys of {{ $labels.runner }} wait in the queue. On the VPS: systemctl status ci-runner@{{ $labels.runner }} ci-docker@{{ $labels.runner }} ci-netns, journalctl -u ci-runner@{{ $labels.runner }}. To deploy meanwhile, set the repository variable DEPLOY_HUB_RUNNER=github-hosted."
+          description: "For 10 minutes the runner held no connection to GitHub, so deploys of {{ $labels.runner }} wait in the queue. On the VPS: systemctl status ci-runner@{{ $labels.runner }} ci-docker@{{ $labels.runner }} ci-netns@{{ $labels.runner }}, journalctl -u ci-runner@{{ $labels.runner }}. To deploy meanwhile, set the repository variable DEPLOY_HUB_RUNNER=github-hosted."
 
       - alert: DeployHubCIIsolationBroken
         expr: min(min_over_time(deploy_hub_ci_isolation_ok[5m])) == 0
         annotations:
-          summary: "CI runner isolation is incomplete, the runners were stopped"
-          description: "The CI disk /var/lib/ci is not mounted, the network namespace ci is gone or the nftables table inet ci_netns is missing. ci-runner-status stops every ci-runner@ unit until all three are back. On the VPS: systemctl restart ci-netns var-lib-ci.mount, nft list table inet ci_netns, then systemctl start ci-runner@<repo>."
+          summary: "CI runner isolation is incomplete, runners were stopped"
+          description: "The CI disk /var/lib/ci is not mounted or the nftables table inet ci_netns is missing (ci-runner-status stops every ci-runner@ unit), or the network namespace ci-<repo> of a runner is gone, its veth is down, or its runner, rootless Docker or user manager runs outside that namespace (ci-runner-status stops that runner). On the VPS: /usr/local/lib/ci-runner/ci-netns check <repo>, nft list table inet ci_netns, then systemctl restart var-lib-ci.mount ci-netns@<repo> and systemctl start ci-runner@<repo>."
 
       - alert: DeployHubCIRunnerSilent
         expr: absent_over_time(deploy_hub_ci_isolation_ok[10m])

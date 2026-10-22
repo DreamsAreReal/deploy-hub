@@ -1,7 +1,7 @@
 [Unit]
 Description=Rootless Docker for the CI runner of %i
-Requires=ci-netns.service var-lib-ci.mount
-After=ci-netns.service var-lib-ci.mount
+Requires=ci-netns@%i.service var-lib-ci.mount
+After=ci-netns@%i.service var-lib-ci.mount
 PartOf=ci-runner@%i.service
 
 [Service]
@@ -13,8 +13,8 @@ Delegate=yes
 Environment=HOME=/var/lib/ci/%i
 Environment=XDG_RUNTIME_DIR=/run/ci/%i
 Environment=PATH=/usr/bin:/usr/sbin:/bin:/sbin
-NetworkNamespacePath=/run/netns/ci
-BindReadOnlyPaths=/etc/netns/ci/resolv.conf:/etc/resolv.conf
+NetworkNamespacePath=/run/netns/ci-%i
+BindReadOnlyPaths=/etc/netns/ci-%i/resolv.conf:/etc/resolv.conf
 RuntimeDirectory=ci/%i
 RuntimeDirectoryMode=0700
 ExecStart=/usr/bin/dockerd-rootless.sh --data-root /var/lib/ci/%i/docker --log-driver local

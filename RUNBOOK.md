@@ -124,7 +124,7 @@ from a GitHub-hosted runner:
 (delete the variable to switch back).
 
 ```
-ssh vpn 'systemctl status ci-netns ci-docker@<app> ci-runner@<app>'
+ssh vpn 'systemctl status ci-netns@<app> ci-docker@<app> ci-runner@<app>'
 ssh vpn 'journalctl -u ci-runner@<app> -u ci-docker@<app> -n 100'
 ssh vpn 'df -h /var/lib/ci; systemctl restart ci-runner@<app>'
 gh api repos/DreamsAreReal/<app>/actions/runners --jq '.runners[] | "\(.name) \(.status)"'

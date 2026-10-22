@@ -500,13 +500,13 @@ Isolation, all in [`server/ci-runner`](server/ci-runner):
 | user | one per repository: `ci-<repo>`, system user with its own subordinate uids/gids, no sudo, no login shell, home `/var/lib/ci/<repo>` (mode 700; `/var/lib/ci` itself is root, 755, because the runner refuses to start unless it can list every directory above its own), not in the `docker` group. A job of one repo cannot read or change the other runner's files (`runner/`, `.credentials`, `_work`), Docker data or socket, or signal and read `/proc/<pid>/environ` of its processes |
 | Docker | rootless `dockerd` per repository (`ci-docker@<repo>`, user `ci-<repo>`), data in `/var/lib/ci/<repo>/docker`, socket `/run/ci/<repo>/docker.sock` (directory 700); the system socket is hidden and not accessible |
 | files | `ci-runner@<repo>`: `ProtectSystem=strict`, `ProtectHome`, `NoNewPrivileges`, empty capability set; `/opt`, `/etc/deploy-hub`, `/etc/srv-backup`, `/etc/wireguard`, `/var/lib/docker`, backups are inaccessible. The rootless daemon and the user manager of `ci-<repo>` (it holds the container scopes) are jailed the same way, minus `NoNewPrivileges` for `dockerd` (rootlesskit needs the setuid `newuidmap`) |
-| network | namespace `ci` (`ci-netns`): NAT to the internet only. The host loopback (Caddy admin, VictoriaMetrics/Logs, Bugsink), the `shared` and other Docker networks, private ranges and the metadata address are dropped; of the host only SSH/HTTP/HTTPS on the public address answer. The drops live in the nftables table `inet ci_netns`, which neither Docker nor an iptables reload touches, and a drop there is final whatever Docker puts first in `FORWARD`. Ports published by gate containers live on the namespace's own loopback |
+| network | one namespace per repository, `ci-<repo>` (`ci-netns@<repo>`): the runner, its rootless `dockerd` and the user manager of `ci-<repo>` all run in it. Its own veth pair (`cih<uid>` on the host, `cin<uid>` inside) and a /30 out of `10.79.0.0/16` picked by the uid of `ci-<repo>` (host side `.1`, namespace `.2` of the block `10.79.0.0 + 4 × uid`); NAT to the internet only. The host loopback (Caddy admin, VictoriaMetrics/Logs, Bugsink), the `shared` and other Docker networks, private ranges and the metadata address are dropped; of the host only SSH/HTTP/HTTPS on the public address answer. The drops live in the nftables table `inet ci_netns`, which neither Docker nor an iptables reload touches, and a drop there is final whatever Docker puts first in `FORWARD`; its rules match every host-side veth by the name prefix `cih*`, so a new repo needs no rule change. Ports published by gate containers (rootlesskit's builtin port driver) live on the repo's own namespace, so a job of one repo cannot connect to the app, database or DAST target of another, take its port first, or reach its abstract unix sockets; the other namespace's addresses are in `10.0.0.0/8` and dropped |
 | which jobs | job-started hook `ci-job-started`: only workflows of the repo's own `main` (push, `workflow_dispatch` or `schedule`); other branches, pull requests and other events fail before their first step |
 | CPU, memory | every repo has its slice `user-<uid of ci-<repo>>.slice` (its runner, its `dockerd` and its user manager with the containers), each with `ci-limits.conf`: 6 of 8 CPUs, CPU and IO weight 20 (production keeps priority), `MemoryHigh` 8G, `MemoryMax` 9G, no swap. Two jobs at once take at most 18G of the host's 23G; the gate sizes its mutation workers from the cgroup limit |
 | disk | `/var/lib/ci` is the ext4 image `/srv/ci.img` (120G): CI can never fill `/` |
 | leftover processes | `ci-runner-reap`, run by both job hooks: SIGKILL to every process in the runner's cgroup that is not a descendant of the runner itself (`runsvc.sh` → `RunnerService.js` → `Runner.Listener` → `Runner.Worker` → steps). A step that forks into the background or daemonizes is reparented away from the runner and dies when the job ends, and again before the first step of the next job, so it cannot read the environment (`SSH_KEY`, `GH_TOKEN`) of a later job. A stop or restart of `ci-runner@<repo>` kills the whole cgroup (`KillMode=control-group`) |
 | cleanup | job-completed hook `ci-runner-clean`: removes the job's containers, networks, volumes and pushed images, trims the build cache to 15 GB, empties the workspace, `RUNNER_TEMP`, `TMPDIR`, the tool cache and the downloaded actions; above 70% disk it drops all images and the language caches |
-| fail-safe | `ci-runner-status` stops every runner when the CI disk is not mounted, the namespace is gone or the nftables table is missing (`deploy_hub_ci_isolation_ok` 0) |
+| fail-safe | `ci-runner-status` stops every runner when the CI disk is not mounted or the nftables table is missing, and stops the runner of a repo whose namespace is gone, whose veth is down or whose runner, `dockerd` or user manager runs outside `/run/netns/ci-<repo>` (`deploy_hub_ci_isolation_ok` 0) |
 
 Why the units look the way they do (the gate forbids comments in them):
 
@@ -518,7 +518,7 @@ Why the units look the way they do (the gate forbids comments in them):
   cgroup name, and from any other slice every container fails with
   "Interactive authentication required". So the limits sit on the per-user
   slice, and there is no single slice above all CI. That user manager is
-  jailed by a drop-in exactly like the runner (network namespace `ci`,
+  jailed by a drop-in exactly like the runner (network namespace `ci-<repo>`,
   read-only system, hidden paths), otherwise a job could mount the bus into a
   container and start a process outside the jail.
 - `ci-docker@` hides `/home` by path instead of `ProtectHome`, because
@@ -534,6 +534,10 @@ Why the units look the way they do (the gate forbids comments in them):
   get instance drop-ins from `ci-runner-setup`:
   `ci-runner@<repo>.service.d`, `ci-docker@<repo>.service.d`,
   `user@<uid>.service.d`, `user-<uid>.slice.d`.
+- The subnet of a repo comes from its uid (system uids are below 16384, which
+  is how many /30 fit `10.79.0.0/16`), so two repos never share one and
+  nothing has to keep an allocation table. The interface names carry the uid
+  too, because a name is at most 15 characters and a repo name up to 29.
 - `ci-runner-reap` runs as the repo user inside the hook and reads the tree
   from `/proc`: the root of the runner is the topmost ancestor of the hook in
   the same cgroup. Killing the whole cgroup instead would also kill the
@@ -563,9 +567,7 @@ environment and so reach later jobs **of the same repo** (it cannot reach the
 other repo). The same holds for its home (for example units in
 `~/.config/systemd/user`) and for a container that mounts the user
 manager's bus and starts a process in `user@<uid>.service`, outside the
-runner's cgroup. All runners also share the network namespace `ci`: while two
-jobs run at once, one can reach ports the other's gate containers publish on
-the namespace's loopback. Both repos have one owner, the job-started hook admits only
+runner's cgroup. Both repos have one owner, the job-started hook admits only
 workflows of `main`, and the tool cache and actions are fetched again
 for every job. Ephemeral runners (a just-in-time config per job, which needs a
 token with Administration: write on the repo kept on the host) would close
@@ -587,13 +589,14 @@ gh api -X POST repos/DreamsAreReal/<app>/actions/runners/registration-token --jq
 
 `host` is idempotent: `uidmap`/`slirp4netns`, the AppArmor profile that lets
 `rootlesskit` create user namespaces on Ubuntu 24.04, the disk image, the
-network namespace, the units, and for every repo already registered its user,
-subordinate ids, home, drop-ins and linger. `register` does the same for one
+nftables table, the units, and for every repo already registered its user,
+subordinate ids, home, drop-ins, network namespace and linger (a user manager
+still running in another namespace is restarted). `register` does the same for one
 repo (`<app>` lowercase, at most 29 characters, so `ci-<app>` is a valid user
 name), downloads the pinned runner (sha256-checked), configures it as
 `eu-<app>` with the label `eu` and starts `ci-runner@<app>`. The runner updates
 itself. To remove one: `systemctl disable --now ci-runner@<app> ci-docker@<app>`,
-`loginctl disable-linger ci-<app>`, delete the runner in the repo settings,
+`systemctl stop ci-netns@<app>`, `loginctl disable-linger ci-<app>`, delete the runner in the repo settings,
 `/var/lib/ci/<app>` and the user `ci-<app>`.
 
 Moving from the shared user `ci` of the first version: `host` stops every runner,
@@ -601,15 +604,23 @@ removes the user `ci`, its drop-ins and its files on the CI disk, then each
 repo is registered again with the `register` line above (`--replace` takes
 over the name `eu-<app>` on GitHub).
 
+Moving from the shared network namespace `ci`: `host` stops every runner and
+`dockerd`, removes `ci-netns.service`, its veth `ci-host`, its iptables rules
+and the namespace, then starts `ci-netns@<repo>` for every registered repo,
+restarts its user manager inside it and starts the runners again. Run it
+between jobs: a running job is cut off.
+
 Check it:
 
 ```
 gh api repos/DreamsAreReal/<app>/actions/runners --jq '.runners[] | "\(.name) \(.status)"'   # eu-<app> online
-ssh vpn 'systemctl status ci-runner@<app> ci-docker@<app> ci-netns'
+ssh vpn 'systemctl status ci-runner@<app> ci-docker@<app> ci-netns@<app>'
 ssh vpn 'runuser -u ci-tasks -- cat /opt/tasks/.env'                # Permission denied
 ssh vpn 'runuser -u ci-tasks -- docker ps'                          # permission denied on /var/run/docker.sock
 ssh vpn 'runuser -u ci-tasks -- ls /var/lib/ci/router-bot /run/ci/router-bot'   # Permission denied
 ssh vpn 'systemd-cgls -u user.slice'                               # each repo in its user-<uid>.slice
+ssh vpn 'ip netns list; /usr/local/lib/ci-runner/ci-netns check <app> && echo ok'   # ci-<app> ... ok
+ssh vpn 'ip netns exec ci-tasks curl -m 3 127.0.0.1:<port published by router-bot>'  # Connection refused
 ```
 
 Logs: the runner and the job hook write to the journal, so they are in

@@ -1,0 +1,10 @@
+[Unit]
+Description=Network namespace of the CI runner of %i, NAT to the internet only
+After=network-online.target iptables.service docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/lib/ci-runner/ci-netns up %i
+ExecStop=/usr/local/lib/ci-runner/ci-netns down %i
