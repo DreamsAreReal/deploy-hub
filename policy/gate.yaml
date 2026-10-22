@@ -331,6 +331,18 @@ apps:
         tests:
           - internal/sqlitebackup.TestACorruptFileIsNeverRestored
           - internal/sqlitebackup.TestRestoreNeverOverwritesADatabase
+      - id: untrusted-input-is-fuzzed
+        category: security
+        tests:
+          - internal/jsvalue.FuzzNumber
+          - internal/server.FuzzDecodeAlerts
+          - internal/server.FuzzIncomingText
+          - internal/server.FuzzMultipartField
+          - internal/server.FuzzParseGCPDelivery
+          - internal/server.FuzzParseGenericDelivery
+          - internal/server.FuzzParseGitHubDelivery
+          - internal/server.FuzzParseGitLabDelivery
+          - internal/web.FuzzMarkdown
       - id: task-lifecycle
         category: business
         tests:
