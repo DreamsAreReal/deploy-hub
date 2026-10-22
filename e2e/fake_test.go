@@ -206,6 +206,7 @@ func (f fake) inspect(args []string) int {
 		fmt.Println("-")
 	case strings.Contains(format, ".State.Status"):
 		fmt.Println(map[bool]string{true: "running", false: "exited"}[alive(c.PID)])
+	case strings.Contains(format, ".Mounts"):
 	case strings.Contains(format, ".Ports"):
 		fmt.Printf("%s/tcp %s\n", c.Port, c.Port)
 	default:

@@ -103,6 +103,7 @@ func (s *Service) installCompose(ctx context.Context, op *operation, conf regist
 	next := registry.AppConf{
 		Mode: registry.ModeBYOC, Main: meta.Main, Port: meta.HPort,
 		HealthPath: registry.DefaultHealthPath, HMode: meta.HMode, Image: conf.Image, Repo: conf.Repo,
+		BlueGreen: conf.BlueGreen,
 	}
 	s.Log.Info("byoc compose installed", "app", op.app, "main", meta.Main, "port", meta.HPort, "hmode", meta.HMode)
 	return next, next.Save(op.dir)

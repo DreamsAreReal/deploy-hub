@@ -27,6 +27,7 @@ const (
 	msgStandbyFallback  = "blue-green: standby did not start, falling back to in-place recreate"
 	msgNoStandbyPort    = "blue-green: no free standby port, falling back to in-place recreate"
 	msgStandbyUnhealthy = "blue-green: standby unhealthy — discarding it, old stays live"
+	msgStatefulRecreate = "blue-green: %s keeps state on a writable mount — recreating in place\n"
 	msgCutover          = "blue-green: standby healthy — cutting over"
 	msgRestorePrevious  = "blue-green: recreate failed after standby passed — restoring previous on permanent port"
 	msgPulling          = "pulling %s\n"
