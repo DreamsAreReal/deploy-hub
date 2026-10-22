@@ -759,3 +759,23 @@ func TestMutantWhoseCacheCannotBeTrimmedIsAnError(t *testing.T) {
 	testutil.Equal(t, st, StatusErrored)
 	testutil.Contains(t, logs.String(), `"msg":"worker build cache trim failed"`)
 }
+
+func TestMutantIsRetriedOnceAfterATransientError(t *testing.T) {
+	var (
+		mu   sync.Mutex
+		seen = map[string]int{}
+	)
+	ws, _ := setup(t, func(mutated string, _ []string) outcome {
+		mu.Lock()
+		defer mu.Unlock()
+		seen[mutated]++
+		return outcome{broken: seen[mutated] == 1, killed: seen[mutated] > 1}
+	})
+	var logs bytes.Buffer
+	ws.Log = slog.New(slog.NewJSONHandler(&logs, nil))
+	rep, err := Run(context.Background(), ws)
+	testutil.NoErr(t, err)
+	testutil.Equal(t, rep.Counts[StatusKilled], 3)
+	testutil.Equal(t, rep.Counts[StatusErrored], 0)
+	testutil.Contains(t, logs.String(), `"msg":"mutant retried after an error"`)
+}
