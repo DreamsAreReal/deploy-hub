@@ -33,10 +33,8 @@ const (
 	MetricRequestRefused       = "deploy_hub_request_refused"
 	MetricDeliverySuccess      = "deploy_hub_delivery_success"
 	MetricJournalReadable      = "deploy_hub_journal_readable"
-
-	// Pushed by server/ci-runner/ci-runner-status, not by the binary.
-	MetricCIRunnerUp      = "deploy_hub_ci_runner_up"
-	MetricCIDiskUsedRatio = "deploy_hub_ci_disk_used_ratio"
+	MetricCIRunnerUp           = "deploy_hub_ci_runner_up"
+	MetricCIDiskUsedRatio      = "deploy_hub_ci_disk_used_ratio"
 
 	LabelApp     = "app"
 	LabelAction  = "action"

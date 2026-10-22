@@ -1,15 +1,8 @@
 #!/bin/sh
-# Every minute (ci-runner-status.timer, root): pushes to VictoriaMetrics
-#   deploy_hub_ci_runner_up{runner}   1 when the runner of that repository holds
-#                                     a connection to GitHub, 0 when it is down,
-#                                     restarting or cut off
-#   deploy_hub_ci_disk_used_ratio     fill of the CI disk image (0..1)
-# A runner counts as configured when /var/lib/ci/runners/<repo>/.runner exists.
 set -eu
 URL=${DEPLOY_HUB_METRICS_URL-http://127.0.0.1:8428/api/v1/import/prometheus}
 RUNNERS=/var/lib/ci/runners
 
-# connected UNIT: a process of the unit has an established HTTPS connection.
 connected() {
   cg=$(systemctl show -p ControlGroup --value "$1")
   [ -n "$cg" ] || return 1

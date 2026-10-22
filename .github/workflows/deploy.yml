@@ -25,10 +25,6 @@ permissions: {}
 jobs:
   deploy:
     name: gate and deploy
-    # The isolated self-hosted runner on the hub host (user ci, rootless Docker,
-    # see server/ci-runner). Public repositories, forks and pull requests from
-    # forks always get a GitHub-hosted runner; an app repo goes back to
-    # GitHub-hosted with the repository variable DEPLOY_HUB_RUNNER=github-hosted.
     runs-on: >-
       ${{ (vars.DEPLOY_HUB_RUNNER == 'github-hosted' || !github.event.repository.private || github.event.repository.fork
       || (github.event.pull_request && github.event.pull_request.head.repo.full_name != github.repository))
@@ -155,8 +151,6 @@ jobs:
           SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
           HOST_KEY: ${{ secrets.VPS_HOST_KEY }}
         run: |
-          # In RUNNER_TEMP, not ~/.ssh: a self-hosted runner keeps its home between
-          # jobs, RUNNER_TEMP is emptied after every job.
           install -d -m 700 "$RUNNER_TEMP/ssh"
           install -m 600 /dev/null "$RUNNER_TEMP/ssh/deploy_key"
           printf '%s\n' "$SSH_KEY" > "$RUNNER_TEMP/ssh/deploy_key"

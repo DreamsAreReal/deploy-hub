@@ -501,6 +501,25 @@ Isolation, all in [`server/ci-runner`](server/ci-runner):
 | disk | `/var/lib/ci` is the ext4 image `/srv/ci.img` (120G): CI can never fill `/` |
 | cleanup | job-completed hook `ci-runner-clean`: removes the job's containers, networks, volumes and pushed images, trims the build cache to 15 GB, empties the workspace, `RUNNER_TEMP` and `TMPDIR`; above 70% disk it drops all images and the language caches |
 
+Why the units look the way they do (the gate forbids comments in them):
+
+- Container limits (`--cpus`, `--memory`, which the gate's stage containers
+  use) work in rootless Docker only with the systemd cgroup driver, so each
+  `dockerd` talks to the user manager of `ci` (`user@<uid>.service`, kept
+  running by linger) over `DBUS_SESSION_BUS_ADDRESS`. That user manager is
+  jailed by a drop-in exactly like the runner (network namespace `ci`,
+  read-only system, hidden paths), otherwise a job could mount the bus into a
+  container and start a process outside the jail.
+- `ci-docker@` hides `/home` by path instead of `ProtectHome`, because
+  `ProtectHome` also hides `/run/user`, where that bus lives; and it has no
+  `ProtectKernelLogs`/`ProtectKernelTunables`, because a user namespace may
+  mount `/proc` for a container only when nothing in `/proc` is covered.
+- Ubuntu 24.04 (`kernel.apparmor_restrict_unprivileged_userns=1`) lets
+  only profiled programs create user namespaces; `rootlesskit.apparmor` is the
+  profile from the Docker rootless docs.
+- One `dockerd` per runner: the job hook removes every container of its own
+  daemon, which would otherwise kill a concurrent job of the other repo.
+
 The deploy key is written to `RUNNER_TEMP` (emptied after the job), and the
 registry login uses a job-local `DOCKER_CONFIG`. The production path does not
 change: the job reaches the hub only as `deploy@<vps>` through the forced

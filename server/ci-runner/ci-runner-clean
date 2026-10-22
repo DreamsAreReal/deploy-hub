@@ -1,10 +1,4 @@
 #!/bin/sh
-# Job-completed hook of a CI runner (ACTIONS_RUNNER_HOOK_JOB_COMPLETED), runs
-# as ci after every job, passed or failed. Each runner has its own Docker
-# daemon, so everything left in it belongs to the job that just finished.
-# Kept between jobs: base image layers and build cache up to a cap, the Go
-# module and build caches, the runner's tool cache. When the CI disk is still
-# over the threshold, those go too.
 set -u
 BUILD_CACHE_KEEP=${CI_BUILD_CACHE_KEEP:-15gb}
 DISK_MAX_PERCENT=${CI_DISK_MAX_PERCENT:-70}
@@ -13,7 +7,6 @@ log() {
   echo "ci-runner-clean: $*"
 }
 
-# wipe DIR empties DIR; Go marks its module cache read-only.
 wipe() {
   [ -n "$1" ] && [ -d "$1" ] || return 0
   chmod -R u+w "$1" 2>/dev/null
@@ -25,14 +18,9 @@ used_percent() {
 }
 
 log "disk before: $(used_percent)%"
-ids=$(docker ps -aq)
-if [ -n "$ids" ]; then
-  # shellcheck disable=SC2086 # one id per word
-  docker rm -f $ids >/dev/null
-fi
+docker ps -aq | xargs -r docker rm -f >/dev/null
 docker network prune -f >/dev/null
 docker volume prune -af >/dev/null
-# Images built by the job (ghcr.io/<owner>/<app>:sha-...) are pushed already.
 docker image ls --format '{{.Repository}}:{{.Tag}}' | grep '^ghcr\.io/' | xargs -r docker image rm -f >/dev/null
 docker image prune -f >/dev/null
 docker builder prune -f --max-used-space "$BUILD_CACHE_KEEP" >/dev/null

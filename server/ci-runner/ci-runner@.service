@@ -1,7 +1,3 @@
-# GitHub Actions self-hosted runner of one repository (instance = repository
-# name under DreamsAreReal), user ci, labels self-hosted,linux,eu. Its Docker is
-# ci-docker@%i; the system Docker socket, /opt, the hub's config and the homes
-# of deploy and runner are not visible.
 [Unit]
 Description=GitHub Actions runner for DreamsAreReal/%i (isolated, user ci)
 Requires=ci-docker@%i.service ci-netns.service var-lib-ci.mount

@@ -1,11 +1,4 @@
 #!/bin/sh
-# Network namespace "ci" for the self-hosted GitHub runners and their rootless
-# Docker daemons. Its only way out is NAT to the internet: the host loopback
-# (Caddy admin, VictoriaMetrics/Logs, Bugsink), the Docker networks of the
-# production containers, private ranges and the cloud metadata address are
-# unreachable. On the host itself only SSH, HTTP and HTTPS of the public
-# address answer, the same as for anyone on the internet.
-#   ci-netns up | down
 set -eu
 NS=ci
 HOST_IF=ci-host
@@ -24,7 +17,6 @@ ext_ip() {
   ip -4 route get 1.1.1.1 | grep -o 'src [^ ]*' | awk '{print $2}'
 }
 
-# rule TABLE CHAIN ARGS... appends the rule unless it is already there.
 rule() {
   table=$1
   chain=$2
@@ -47,8 +39,6 @@ firewall_up() {
   pub=$(ext_ip)
   iptables -N "$CHAIN_FWD"
   iptables -N "$CHAIN_IN"
-  # Forwarded traffic of the namespace: replies back in, new connections only
-  # to public addresses through the uplink.
   iptables -A "$CHAIN_FWD" -o "$HOST_IF" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
   iptables -A "$CHAIN_FWD" -o "$HOST_IF" -j DROP
   for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16 127.0.0.0/8; do
@@ -56,7 +46,6 @@ firewall_up() {
   done
   iptables -A "$CHAIN_FWD" -i "$HOST_IF" -o "$out" -j ACCEPT
   iptables -A "$CHAIN_FWD" -i "$HOST_IF" -j DROP
-  # Traffic to the host itself: only what the host serves to the internet.
   iptables -A "$CHAIN_IN" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
   iptables -A "$CHAIN_IN" -d "$pub" -p tcp -m multiport --dports 22,80,443 -j ACCEPT
   iptables -A "$CHAIN_IN" -p icmp -j ACCEPT
@@ -83,7 +72,6 @@ up() {
   ip -n "$NS" addr add "$NS_IP/30" dev "$NS_IF"
   ip -n "$NS" link set "$NS_IF" up
   ip -n "$NS" route add default via "$HOST_IP"
-  # IPv6 is not routed out of the namespace: keep it off so nothing tries it.
   ip netns exec "$NS" sysctl -qw net.ipv6.conf.all.disable_ipv6=1
   sysctl -qw net.ipv4.ip_forward=1
   firewall_up

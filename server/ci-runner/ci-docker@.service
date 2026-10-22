@@ -1,13 +1,3 @@
-# Rootless Docker daemon of one runner (instance = repository name), user ci.
-# No access to the system daemon, /opt, the hub's config or other homes.
-# NoNewPrivileges stays off here only: rootlesskit maps the subordinate ids
-# through the setuid newuidmap/newgidmap. Container cgroups (--cpus, --memory)
-# need the systemd driver, i.e. the user manager of ci (user@<uid>.service,
-# jailed the same way); ci-runner-setup adds a drop-in with the slice and the
-# user bus address. /home is hidden by path, not ProtectHome: that would also
-# hide /run/user, where the bus lives. No ProtectKernelLogs or
-# ProtectKernelTunables: a user namespace may mount /proc for a container only
-# when nothing in /proc is covered.
 [Unit]
 Description=Rootless Docker for the CI runner of %i
 Requires=ci-netns.service var-lib-ci.mount

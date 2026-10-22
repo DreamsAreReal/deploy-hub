@@ -1,10 +1,4 @@
 #!/bin/sh
-# Host setup of the isolated self-hosted GitHub runners, as root on the VPS,
-# from a copy of server/ci-runner:
-#   ci-runner-setup host                     user ci, rootless Docker prerequisites,
-#                                            CI disk, network namespace, units
-#   ci-runner-setup register <repo> < token  runner for DreamsAreReal/<repo>
-# Idempotent: rerun after changing any file here.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 LIB=/usr/local/lib/ci-runner
@@ -16,7 +10,6 @@ DISK_IMAGE=/srv/ci.img
 DISK_SIZE=${CI_DISK_SIZE:-120G}
 SUBID_COUNT=65536
 
-# next_subid FILE prints the first id after every range in FILE.
 next_subid() {
   awk -F: 'BEGIN {n = 100000} {if ($2 + $3 > n) n = $2 + $3} END {print n}' "$1"
 }
@@ -34,10 +27,6 @@ user_ci() {
   fi
 }
 
-# jail UID writes the drop-ins that put every CI process into user-UID.slice
-# under ci-limits.conf, and jail the user manager of ci (it starts the
-# container scopes of rootless Docker) like the runner: network namespace ci,
-# read-only system, no /opt, hub config, backups or system Docker.
 jail() {
   uid=$1
   hidden="/opt /root /home /etc/srv-backup /etc/wireguard /etc/deploy-hub /var/backups /var/lib/docker /var/lib/containerd -/var/lib/app-backup -/run/docker.sock -/var/run/docker.sock -/run/containerd"

@@ -1,5 +1,3 @@
-# Ubuntu 24.04 forbids unprivileged user namespaces unless an AppArmor profile
-# allows them; rootless Docker (user ci) needs one for rootlesskit.
 abi <abi/4.0>,
 include <tunables/global>
 

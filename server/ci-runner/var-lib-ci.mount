@@ -1,5 +1,3 @@
-# CI home, workdirs, caches and Docker data live in a fixed-size image, so CI
-# can fill at most this file and never the host's root filesystem.
 [Unit]
 Description=CI disk (fixed-size image)
 
