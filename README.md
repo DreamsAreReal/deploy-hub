@@ -14,7 +14,7 @@ pitfalls. When things break, see [RUNBOOK.md](RUNBOOK.md).
 The VPS address is configuration, not code: `VPS_ADDR` on the operator machine,
 the `VPS_HOST`/`VPS_HOST_KEY` secrets in each app repo and
 `/opt/deploy-hub/hub.conf` on the server. Two ways in: the `deploy` user
-(locked to the runner — how CI and `onboard status` reach it) and your own root
+(locked to the runner — how CI, `onboard status` and `deploy-hub mcp` reach it) and your own root
 access as SSH alias `vpn` (how you edit `/opt/<app>/.env` and read logs).
 
 ## How a deploy flows
@@ -289,6 +289,7 @@ commands:
 | `provision --app … ` | root (from `onboard`) | prepares `/opt/<app>/` and the allowlist line |
 | `facts <app>` | root (from `onboard`) | reports what already exists on the server |
 | `onboard <repo> …` | operator machine | connects a GitHub repo end-to-end |
+| `mcp` | operator machine | MCP server for AI agents: `status`, `history`, `rollback` over the deploy channel |
 
 Build it with `make build` (linux/amd64 by default, output outside the repo in
 `$TMPDIR/deploy-hub-build/`); `make build GOOS=darwin GOARCH=arm64` gives a
@@ -519,6 +520,67 @@ Runner settings: `DEPLOY_HUB_OIDC_AUDIENCE` (default `deploy-hub`),
 `<container state>/<check>` where `<check>` is the container healthcheck, a live
 HTTP probe (`ok`/`fail`) for HTTP apps without one, or `-`.
 
+## MCP for agents
+
+`deploy-hub mcp` is a [Model Context Protocol](https://modelcontextprotocol.io)
+server for AI agents (Claude Code, Claude Desktop, any MCP client). It speaks
+newline-delimited JSON-RPC on stdin/stdout (protocol `2025-06-18`) and turns
+every tool call into one runner request over the deploy channel — exactly
+`ssh -i $DEPLOY_KEY -o IdentitiesOnly=yes -o BatchMode=yes deploy@$VPS_ADDR "<request>"`,
+the same channel as `onboard status`. Run it on the operator machine; nothing
+new runs on the server.
+
+| Tool | Arguments | Runner request | Kind |
+|---|---|---|---|
+| `status` | — | `status` | read-only |
+| `history` | `app` | `history <app>` | read-only |
+| `rollback` | `app`, optional `tag` (`sha-<7..40 hex>`) | `rollback <app> [tag]` | destructive: restarts the app |
+
+There is no `deploy` or `report` tool: those need a GitHub OIDC token that only
+the hub's workflow has, so an agent ships new code the normal way — a push to
+the app repo. `rollback` is bound by the runner's rules: only versions this hub
+deployed successfully before, journaled as `rollback`/`redeploy`.
+Arguments are validated before anything is sent (app name and tag regex); an
+invalid argument, a refusal or a failed health gate comes back as a tool result
+with `isError: true` and the runner's own output, so the agent sees why.
+
+Settings (environment of the MCP process): `VPS_ADDR` (required), `DEPLOY_KEY`
+(default `~/.ssh/deploy_hub_key`), `DEPLOY_USER` (default `deploy`). The host
+key must already be in `known_hosts` (`BatchMode` never prompts). Logs go to
+stderr as JSON (`DEPLOY_HUB_LOG_LEVEL`, default `warn`; `info` logs every
+tool call).
+
+Connect it to Claude Code (build the binary for the laptop first, see
+[The binary](#the-binary)):
+
+```
+claude mcp add deploy-hub --env VPS_ADDR=<vps> -- /path/to/deploy-hub mcp
+```
+
+or in a project's `.mcp.json` / Claude Desktop's config:
+
+```json
+{
+  "mcpServers": {
+    "deploy-hub": {
+      "command": "/path/to/deploy-hub",
+      "args": ["mcp"],
+      "env": {"VPS_ADDR": "<vps>", "DEPLOY_KEY": "/Users/<you>/.ssh/deploy_hub_key"}
+    }
+  }
+}
+```
+
+Check it by hand without a client:
+
+```
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{}}}' \
+  | VPS_ADDR=<vps> deploy-hub mcp
+```
+
+Agents that should only watch can be denied the `rollback` tool in the client
+(in Claude Code: `"permissions": {"deny": ["mcp__deploy-hub__rollback"]}`).
+
 ## Health gate and rollback
 
 The gate polls every 5 s for up to 90 s:
@@ -717,6 +779,9 @@ hand-managed vhosts that are not deploy-hub apps.
   yields "deploy an allowlisted app with a valid GitHub identity", not a shell.
   The runner never invokes a shell; it executes only `docker` and
   `sudo -n deploy-hub caddy-sync`, from a fixed table of literal executables.
+- `deploy-hub mcp` holds no extra power: it uses the deploy key, so an agent
+  gets exactly the runner's verbs minus `deploy`/`report` (no OIDC token), and
+  validates arguments before they reach SSH.
 - App names: strict regex + allowlist; tags and digests: strict regex; BYOC
   metadata and every provision argument are validated on the server again.
 - Containers bind to 127.0.0.1 only and carry mem limits and log rotation.
@@ -757,12 +822,11 @@ From the bash version:
    `command="/opt/deploy-hub/bin/deploy-hub runner"`.
 3. Replace the sudoers rule for `caddy-sync.sh` with the one in step 6.
 4. Copy the new `deploy-hub-prune.service`, `systemctl daemon-reload`.
-5. Remove what the Telegram integration left behind:
-   `systemctl disable --now deploy-hub-bot.service deploy-hub-userops.path`,
-   delete their unit files, `/opt/deploy-hub/telegram.env`, `telegram.log`,
-   the old `*.sh`/`*.py`/`bot.py` files in `/opt/deploy-hub/bin`, and the
-   `TG_TOKEN`/`TG_CHAT_ID` secrets in the app repos (revoke the bot token
-   with @BotFather).
+5. Remove what the bash version left behind: every `deploy-hub-*` systemd
+   unit except the prune service and timer (`systemctl disable --now`, then
+   delete the unit files), the old `*.sh`/`*.py` files in `/opt/deploy-hub/bin`
+   with their `*.env`/`*.log` files, and the repo secrets that only the old
+   workflows used. Agents reach the hub through `deploy-hub mcp` instead.
 
 To the gated version (any earlier hub):
 

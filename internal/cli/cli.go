@@ -44,6 +44,7 @@ const (
 	CmdOnboard   = "onboard"
 	CmdGate      = "gate"
 	CmdTools     = "tools"
+	CmdMCP       = "mcp"
 
 	binDocker    = "docker"
 	binSudo      = "sudo"
@@ -63,7 +64,8 @@ commands:
   facts <app>                      print server facts for onboarding
   onboard <repo> [options]         connect a GitHub repo (run on the operator machine)
   gate --app NAME --repo O/N ...   run the deploy quality gate on a checkout (CI)
-  tools --manifest FILE --dir DIR  install the pinned gate toolchain (CI)`
+  tools --manifest FILE --dir DIR  install the pinned gate toolchain (CI)
+  mcp                              MCP server for AI agents on stdio (run on the operator machine)`
 )
 
 type IO struct {
@@ -101,6 +103,7 @@ var handlers = map[string]handler{
 	CmdOnboard:   {run: runOnboard, binaries: []string{binGH, binGit, binSSH, onboard.SSHKeygen}},
 	CmdGate:      {run: runGate, binaries: gateBinaries, verbose: true},
 	CmdTools:     {run: runTools, binaries: []string{tools.GoBinary, tools.TarBinary}, verbose: true},
+	CmdMCP:       {run: runMCP, binaries: []string{binSSH}},
 }
 
 var gateBinaries = []string{
