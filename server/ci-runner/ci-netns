@@ -6,8 +6,7 @@ NS_IF=ci-ns
 HOST_IP=10.79.0.1
 NS_IP=10.79.0.2
 NET=10.79.0.0/30
-CHAIN_FWD=CI-FORWARD
-CHAIN_IN=CI-INPUT
+TABLE=ci_netns
 
 ext_if() {
   ip -4 route get 1.1.1.1 | grep -o 'dev [^ ]*' | awk '{print $2}'
@@ -24,45 +23,54 @@ rule() {
   iptables -t "$table" -C "$chain" "$@" 2>/dev/null || iptables -t "$table" -A "$chain" "$@"
 }
 
-firewall_down() {
-  iptables -D FORWARD -j "$CHAIN_FWD" 2>/dev/null || true
-  iptables -D INPUT -i "$HOST_IF" -j "$CHAIN_IN" 2>/dev/null || true
-  iptables -t nat -D POSTROUTING -s "$NET" -j MASQUERADE -o "$(ext_if)" 2>/dev/null || true
-  for c in "$CHAIN_FWD" "$CHAIN_IN"; do
-    iptables -F "$c" 2>/dev/null || true
-    iptables -X "$c" 2>/dev/null || true
-  done
+unrule() {
+  table=$1
+  chain=$2
+  shift 2
+  while iptables -t "$table" -D "$chain" "$@" 2>/dev/null; do :; done
 }
 
-firewall_up() {
-  out=$(ext_if)
-  pub=$(ext_ip)
-  iptables -N "$CHAIN_FWD"
-  iptables -N "$CHAIN_IN"
-  iptables -A "$CHAIN_FWD" -o "$HOST_IF" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-  iptables -A "$CHAIN_FWD" -o "$HOST_IF" -j DROP
-  for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16 127.0.0.0/8; do
-    iptables -A "$CHAIN_FWD" -i "$HOST_IF" -d "$net" -j DROP
-  done
-  iptables -A "$CHAIN_FWD" -i "$HOST_IF" -o "$out" -j ACCEPT
-  iptables -A "$CHAIN_FWD" -i "$HOST_IF" -j DROP
-  iptables -A "$CHAIN_IN" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-  iptables -A "$CHAIN_IN" -d "$pub" -p tcp -m multiport --dports 22,80,443 -j ACCEPT
-  iptables -A "$CHAIN_IN" -p icmp -j ACCEPT
-  iptables -A "$CHAIN_IN" -j DROP
-  iptables -I FORWARD 1 -j "$CHAIN_FWD"
-  iptables -I INPUT 1 -i "$HOST_IF" -j "$CHAIN_IN"
-  rule nat POSTROUTING -s "$NET" -o "$out" -j MASQUERADE
+guard_up() {
+  out=$1
+  pub=$2
+  nft -f - <<NFT
+table inet $TABLE
+delete table inet $TABLE
+table inet $TABLE {
+  chain forward {
+    type filter hook forward priority -10; policy accept;
+    oifname "$HOST_IF" ct state established,related accept
+    oifname "$HOST_IF" drop
+    iifname "$HOST_IF" meta nfproto ipv6 drop
+    iifname "$HOST_IF" ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16, 127.0.0.0/8 } drop
+    iifname "$HOST_IF" oifname != "$out" drop
+  }
+  chain input {
+    type filter hook input priority -10; policy accept;
+    iifname != "$HOST_IF" accept
+    ct state established,related accept
+    ip daddr $pub tcp dport { 22, 80, 443 } accept
+    ip protocol icmp accept
+    drop
+  }
+}
+NFT
 }
 
 down() {
-  firewall_down
+  out=$(ext_if)
+  nft delete table inet "$TABLE" 2>/dev/null || true
+  unrule filter FORWARD -i "$HOST_IF" -o "$out" -j ACCEPT
+  unrule filter FORWARD -o "$HOST_IF" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  unrule nat POSTROUTING -s "$NET" -o "$out" -j MASQUERADE
   ip link del "$HOST_IF" 2>/dev/null || true
   ip netns del "$NS" 2>/dev/null || true
 }
 
 up() {
   down
+  out=$(ext_if)
+  guard_up "$out" "$(ext_ip)"
   ip netns add "$NS"
   ip -n "$NS" link set lo up
   ip link add "$HOST_IF" type veth peer name "$NS_IF"
@@ -74,7 +82,9 @@ up() {
   ip -n "$NS" route add default via "$HOST_IP"
   ip netns exec "$NS" sysctl -qw net.ipv6.conf.all.disable_ipv6=1
   sysctl -qw net.ipv4.ip_forward=1
-  firewall_up
+  rule filter FORWARD -i "$HOST_IF" -o "$out" -j ACCEPT
+  rule filter FORWARD -o "$HOST_IF" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  rule nat POSTROUTING -s "$NET" -o "$out" -j MASQUERADE
 }
 
 case "${1:-}" in

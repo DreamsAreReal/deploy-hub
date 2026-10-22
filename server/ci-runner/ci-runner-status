@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 URL=${DEPLOY_HUB_METRICS_URL-http://127.0.0.1:8428/api/v1/import/prometheus}
-RUNNERS=/var/lib/ci/runners
+WANTS=/etc/systemd/system/multi-user.target.wants
 
 connected() {
   cg=$(systemctl show -p ControlGroup --value "$1")
@@ -11,16 +11,30 @@ connected() {
   ip netns exec ci ss -Htnp state established '( dport = :443 )' | grep -Eq "pid=(${pids%|}),"
 }
 
+isolated() {
+  mountpoint -q /var/lib/ci && [ -e /run/netns/ci ] && nft list table inet ci_netns >/dev/null 2>&1
+}
+
 metrics() {
-  for conf in "$RUNNERS"/*/.runner; do
-    [ -f "$conf" ] || continue
-    repo=$(basename "$(dirname "$conf")")
-    unit="ci-runner@$repo.service"
+  iso=0
+  if isolated; then
+    iso=1
+  else
+    systemctl stop 'ci-runner@*.service'
+  fi
+  printf 'deploy_hub_ci_isolation_ok %s\n' "$iso"
+  for link in "$WANTS"/ci-runner@*.service; do
+    [ -e "$link" ] || continue
+    unit=$(basename "$link")
+    repo=${unit#ci-runner@}
+    repo=${repo%.service}
     up=0
-    if systemctl -q is-active "$unit" && connected "$unit"; then up=1; fi
+    if [ "$iso" = 1 ] && systemctl -q is-active "$unit" && connected "$unit"; then up=1; fi
     printf 'deploy_hub_ci_runner_up{runner="%s"} %s\n' "$repo" "$up"
   done
-  df -B1 --output=used,size /var/lib/ci | awk 'NR == 2 {printf "deploy_hub_ci_disk_used_ratio %.4f\n", $1 / $2}'
+  if mountpoint -q /var/lib/ci; then
+    df -B1 --output=used,size /var/lib/ci | awk 'NR == 2 {printf "deploy_hub_ci_disk_used_ratio %.4f\n", $1 / $2}'
+  fi
 }
 
 body=$(metrics)

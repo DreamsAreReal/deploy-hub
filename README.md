@@ -496,10 +496,12 @@ Isolation, all in [`server/ci-runner`](server/ci-runner):
 | user | `ci`, system user, no sudo, no login shell, home `/var/lib/ci`, not in the `docker` group |
 | Docker | rootless `dockerd` per runner (`ci-docker@<repo>`), socket `/run/ci/<repo>/docker.sock`; the system socket is hidden and not accessible |
 | files | `ci-runner@<repo>`: `ProtectSystem=strict`, `ProtectHome`, `NoNewPrivileges`, empty capability set; `/opt`, `/etc/deploy-hub`, `/etc/srv-backup`, `/etc/wireguard`, `/var/lib/docker`, backups are inaccessible. The rootless daemon and the user manager of `ci` (it holds the container scopes) are jailed the same way, minus `NoNewPrivileges` for `dockerd` (rootlesskit needs the setuid `newuidmap`) |
-| network | namespace `ci` (`ci-netns`): NAT to the internet only. The host loopback (Caddy admin, VictoriaMetrics/Logs, Bugsink), the `shared` and other Docker networks, private ranges and the metadata address are dropped; of the host only SSH/HTTP/HTTPS on the public address answer. Ports published by gate containers live on the namespace's own loopback |
+| network | namespace `ci` (`ci-netns`): NAT to the internet only. The host loopback (Caddy admin, VictoriaMetrics/Logs, Bugsink), the `shared` and other Docker networks, private ranges and the metadata address are dropped; of the host only SSH/HTTP/HTTPS on the public address answer. The drops live in the nftables table `inet ci_netns`, which neither Docker nor an iptables reload touches, and a drop there is final whatever Docker puts first in `FORWARD`. Ports published by gate containers live on the namespace's own loopback |
+| which jobs | job-started hook `ci-job-started`: only `<repo>/.github/workflows/deploy.yml@refs/heads/main` on a push to `main`; any other workflow, branch or event fails before its first step |
 | CPU, memory | slice `user-<uid of ci>.slice` (`ci-limits.conf`): 6 of 8 CPUs, CPU and IO weight 20 (production keeps priority), `MemoryHigh` 11G, `MemoryMax` 13G, no swap |
 | disk | `/var/lib/ci` is the ext4 image `/srv/ci.img` (120G): CI can never fill `/` |
-| cleanup | job-completed hook `ci-runner-clean`: removes the job's containers, networks, volumes and pushed images, trims the build cache to 15 GB, empties the workspace, `RUNNER_TEMP` and `TMPDIR`; above 70% disk it drops all images and the language caches |
+| cleanup | job-completed hook `ci-runner-clean`: removes the job's containers, networks, volumes and pushed images, trims the build cache to 15 GB, empties the workspace, `RUNNER_TEMP`, `TMPDIR`, the tool cache and the downloaded actions; above 70% disk it drops all images and the language caches |
+| fail-safe | `ci-runner-status` stops every runner when the CI disk is not mounted, the namespace is gone or the nftables table is missing (`deploy_hub_ci_isolation_ok` 0) |
 
 Why the units look the way they do (the gate forbids comments in them):
 
@@ -519,6 +521,23 @@ Why the units look the way they do (the gate forbids comments in them):
   profile from the Docker rootless docs.
 - One `dockerd` per runner: the job hook removes every container of its own
   daemon, which would otherwise kill a concurrent job of the other repo.
+- The hooks are installed as `/usr/local/lib/ci-runner/*.sh`: the runner runs a
+  hook only with a `.sh`, `.ps1` or `.js` name, through `bash -e -o pipefail`,
+  so `ci-runner-clean` turns both off and always exits 0.
+- Root never writes into `/var/lib/ci` through a path `ci` controls: the runner
+  tarball is kept in `/var/cache/ci-runner` (root, 700) and checked against its
+  sha256 before every extract, `ci` creates its own directories, the runner's
+  dependencies come from apt.
+- The runner starts through `bin/runsvc.sh` with `KillMode=mixed`, so a stop
+  reaches the listener and nothing outlives the unit.
+
+What is not isolated: all runners share the uid `ci` and `/var/lib/ci`, and a
+runner is not ephemeral. Code a job runs (the app's tests, its dependencies)
+can therefore tamper with the other runner's files and Docker data or leave a
+process behind for a later job of the same repo. Both repos have one owner,
+the hooks admit only the deploy workflow of `main`, and the tool cache and
+actions are fetched again for every job; a uid per repository and ephemeral
+runners would close the rest.
 
 The deploy key is written to `RUNNER_TEMP` (emptied after the job), and the
 registry login uses a job-local `DOCKER_CONFIG`. The production path does not
@@ -558,7 +577,7 @@ VictoriaLogs as `unit:"ci-runner@<app>.service"` (the rootless daemon:
 `deploy_hub_ci_runner_up{runner}` (1 while the runner holds its connection to
 GitHub) and `deploy_hub_ci_disk_used_ratio` every minute; the alerts
 `DeployHubCIRunnerOffline`, `DeployHubCIRunnerSilent` and `DeployHubCIDiskFull`
-watch them.
+watch them, `DeployHubCIIsolationBroken` the fail-safe above.
 
 ## Server layout
 
@@ -823,7 +842,7 @@ rollback, a gate rejection (per check, `ci-<step>` included), a crashed gate
 check, any refused request, an app unhealthy for 5 minutes, a failed Caddy
 sync, a deploy waiting over 120 s for the lock, a failed tracker post and an
 unreadable journal, a self-hosted CI runner offline for 10 minutes, its
-state not pushed, and the CI disk over 85%. `go test ./internal/obs` fails when a rule uses a metric
+state not pushed, broken CI isolation, and the CI disk over 85%. `go test ./internal/obs` fails when a rule uses a metric
 that the code does not declare, or when a problem metric has no rule.
 
 To load them, copy the file into the observability stack's `rules/` directory

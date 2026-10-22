@@ -7,18 +7,19 @@ After=ci-docker@%i.service ci-netns.service var-lib-ci.mount
 User=ci
 Group=ci
 WorkingDirectory=/var/lib/ci/runners/%i
-ExecStart=/var/lib/ci/runners/%i/run.sh
+ExecStart=/var/lib/ci/runners/%i/bin/runsvc.sh
 Environment=HOME=/var/lib/ci
 Environment=TMPDIR=/var/lib/ci/tmp/%i
 Environment=DOCKER_HOST=unix:///run/ci/%i/docker.sock
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
-Environment=ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/usr/local/lib/ci-runner/ci-runner-clean
+Environment=ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/lib/ci-runner/ci-job-started.sh
+Environment=ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/usr/local/lib/ci-runner/ci-runner-clean.sh
 NetworkNamespacePath=/run/netns/ci
 BindReadOnlyPaths=/etc/netns/ci/resolv.conf:/etc/resolv.conf
-ExecStartPre=+/usr/bin/install -d -o ci -g ci -m 700 /var/lib/ci/tmp/%i
+ExecStartPre=/usr/bin/mkdir -p -m 700 /var/lib/ci/tmp/%i
 Restart=always
 RestartSec=30
-KillMode=process
+KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=5min
 
@@ -30,7 +31,7 @@ ProtectSystem=strict
 ReadWritePaths=/var/lib/ci
 ProtectHome=yes
 InaccessiblePaths=/opt /root /etc/srv-backup /etc/wireguard /etc/deploy-hub /var/backups /var/lib/docker /var/lib/containerd -/var/lib/app-backup
-InaccessiblePaths=-/run/docker.sock -/var/run/docker.sock -/run/containerd
+InaccessiblePaths=-/run/docker.sock -/var/run/docker.sock -/run/containerd /run/user
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectKernelLogs=yes

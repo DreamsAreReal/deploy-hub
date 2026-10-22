@@ -1,4 +1,6 @@
-#!/bin/sh
+#!/bin/bash
+set +e
+set +o pipefail
 set -u
 BUILD_CACHE_KEEP=${CI_BUILD_CACHE_KEEP:-15gb}
 DISK_MAX_PERCENT=${CI_DISK_MAX_PERCENT:-70}
@@ -28,6 +30,8 @@ docker builder prune -f --max-used-space "$BUILD_CACHE_KEEP" >/dev/null
 wipe "${GITHUB_WORKSPACE:-}"
 wipe "${RUNNER_TEMP:-}"
 wipe "${TMPDIR:-}"
+wipe "${RUNNER_TOOL_CACHE:-}"
+[ -z "${RUNNER_TEMP:-}" ] || wipe "$(dirname "$RUNNER_TEMP")/_actions"
 
 if [ "$(used_percent)" -ge "$DISK_MAX_PERCENT" ]; then
   log "disk over ${DISK_MAX_PERCENT}%: dropping every image, the build cache and the language caches"
@@ -37,3 +41,4 @@ if [ "$(used_percent)" -ge "$DISK_MAX_PERCENT" ]; then
   done
 fi
 log "disk after: $(used_percent)%"
+exit 0

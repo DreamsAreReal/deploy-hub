@@ -87,8 +87,14 @@ groups:
           summary: "Self-hosted CI runner of {{ $labels.runner }} is offline"
           description: "For 10 minutes the runner held no connection to GitHub, so deploys of {{ $labels.runner }} wait in the queue. On the VPS: systemctl status ci-runner@{{ $labels.runner }} ci-docker@{{ $labels.runner }} ci-netns, journalctl -u ci-runner@{{ $labels.runner }}. To deploy meanwhile, set the repository variable DEPLOY_HUB_RUNNER=github-hosted."
 
+      - alert: DeployHubCIIsolationBroken
+        expr: min(min_over_time(deploy_hub_ci_isolation_ok[5m])) == 0
+        annotations:
+          summary: "CI runner isolation is incomplete, the runners were stopped"
+          description: "The CI disk /var/lib/ci is not mounted, the network namespace ci is gone or the nftables table inet ci_netns is missing. ci-runner-status stops every ci-runner@ unit until all three are back. On the VPS: systemctl restart ci-netns var-lib-ci.mount, nft list table inet ci_netns, then systemctl start ci-runner@<repo>."
+
       - alert: DeployHubCIRunnerSilent
-        expr: absent_over_time(deploy_hub_ci_disk_used_ratio[10m])
+        expr: absent_over_time(deploy_hub_ci_isolation_ok[10m])
         annotations:
           summary: "No CI runner state for 10 minutes"
           description: "ci-runner-status.timer pushes the runner state every minute. On the VPS: systemctl status ci-runner-status.timer ci-runner-status.service."

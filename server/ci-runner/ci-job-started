@@ -1,0 +1,8 @@
+#!/bin/sh
+set +e
+want="${GITHUB_REPOSITORY:-}/.github/workflows/deploy.yml@refs/heads/main"
+if [ "${GITHUB_EVENT_NAME:-}" != push ] || [ "${GITHUB_REF:-}" != refs/heads/main ] || [ "${GITHUB_WORKFLOW_REF:-}" != "$want" ]; then
+  echo "ci-job-started: this runner takes only $want on push to main, got event=${GITHUB_EVENT_NAME:-?} ref=${GITHUB_REF:-?} workflow=${GITHUB_WORKFLOW_REF:-?}"
+  exit 1
+fi
+exit 0

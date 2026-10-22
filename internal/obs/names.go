@@ -35,6 +35,7 @@ const (
 	MetricJournalReadable      = "deploy_hub_journal_readable"
 	MetricCIRunnerUp           = "deploy_hub_ci_runner_up"
 	MetricCIDiskUsedRatio      = "deploy_hub_ci_disk_used_ratio"
+	MetricCIIsolationOK        = "deploy_hub_ci_isolation_ok"
 
 	LabelApp     = "app"
 	LabelAction  = "action"
