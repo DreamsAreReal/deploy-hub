@@ -53,6 +53,15 @@ jobs:
         id: start
         run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
 
+      - name: Free disk space
+        run: |
+          df -m / "$RUNNER_TEMP"
+          # Preinstalled SDKs the gate never uses; its own toolchain is pinned in policy/tools.yaml.
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
+            /usr/share/swift /usr/local/share/boost /usr/local/share/powershell /usr/local/julia*
+          docker system prune -af --volumes > /dev/null
+          df -m / "$RUNNER_TEMP"
+
       - name: Check out
         id: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -115,6 +124,9 @@ jobs:
           export PATH="$TOOLCHAIN:$PATH"
           extra=()
           if [ "$FORK" = "true" ]; then extra+=(--fork); fi
+          while sleep 30; do
+            echo "resources: $(free -m | awk '/^Mem:/ {print "mem_available_mb=" $7}') $(df -m / "$RUNNER_TEMP" | awk 'NR > 1 {print $6 "_free_mb=" $4}' | tr '\n' ' ')top_dirs_mb=$(du -xsm "$RUNNER_TEMP"/gate/* /tmp 2>/dev/null | sort -rn | head -3 | awk '{printf "%s:%s,", $2, $1}')"
+          done &
           deploy-hub gate --app "$APP" --repo "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" \
             --policy "$POLICY" --src "$GITHUB_WORKSPACE" --out "$RUNNER_TEMP/gate" --image "$IMAGE" "${extra[@]}"
 
