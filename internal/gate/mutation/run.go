@@ -353,6 +353,10 @@ func (e *engine) dropWorkerCaches() {
 
 func (e *engine) run(ctx context.Context, id int, t target, c *workerCache) Status {
 	status := e.mutate(ctx, id, t, cacheEnv+c.dir)
+	if status == StatusErrored && ctx.Err() == nil {
+		e.ws.Log.Info("mutant retried after an error", "file", t.mutant.File, "line", t.mutant.Line)
+		status = e.mutate(ctx, id, t, cacheEnv+c.dir)
+	}
 	if err := c.trim(); err != nil {
 		e.ws.Log.Error("worker build cache trim failed", "dir", c.dir, "error", err.Error())
 		return StatusErrored
