@@ -185,12 +185,12 @@ func goComments(f textFile) []string {
 		findings = append(findings, fmt.Sprintf(locationForm+": %s", f.rel, pos.Line, msg))
 	}, scanner.ScanComments)
 	for {
-		pos, tok, _ := s.Scan()
+		pos, tok, lit := s.Scan()
 		if tok == token.EOF {
 			return findings
 		}
-		if tok == token.COMMENT {
-			findings = append(findings, fmt.Sprintf(locationForm, f.rel, fset.Position(pos).Line))
+		if tok == token.COMMENT && !lexis.IsDirective(lit) {
+			findings = append(findings, fmt.Sprintf(locationForm, f.rel, fset.PositionFor(pos, false).Line))
 		}
 	}
 }
