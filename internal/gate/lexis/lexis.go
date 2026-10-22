@@ -13,6 +13,7 @@ import (
 
 const (
 	docstringLanguage = "Python"
+	directiveLanguage = "Go"
 	tripleDouble      = `"""`
 	tripleSingle      = "'''"
 )
@@ -56,8 +57,11 @@ func Lex(name string, data []byte) ([]Token, bool, error) {
 		return nil, true, err
 	}
 	toks := significant(it.Tokens(), offsetMap(data))
-	if l.Config().Name == docstringLanguage {
+	switch l.Config().Name {
+	case docstringLanguage:
 		markDocstrings(toks)
+	case directiveLanguage:
+		unmarkDirectives(toks)
 	}
 	return toks, true, nil
 }
@@ -88,6 +92,25 @@ func offsetMap(data []byte) func(int) int {
 	return func(at int) int {
 		return at + sort.SearchInts(dropped, at+1)
 	}
+}
+
+var goDirectives = []string{"//go:", "//line ", "//export ", "//extern "}
+
+func unmarkDirectives(toks []Token) {
+	for i := range toks {
+		if toks[i].Note && isDirective(toks[i].Text) {
+			toks[i].Note = false
+		}
+	}
+}
+
+func isDirective(text string) bool {
+	for _, prefix := range goDirectives {
+		if strings.HasPrefix(text, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func isComment(t chroma.TokenType) bool {

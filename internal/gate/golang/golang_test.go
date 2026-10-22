@@ -211,7 +211,7 @@ func TestTestsCheck(t *testing.T) {
 	testutil.Equal(t, out.Values[ValuePackages], float64(len(samplePackages())))
 	testutil.Equal(t, testutil.Read(t, w.Report(TestsReport)), events)
 	calls := procexectest.LinesOf(w.Exec)
-	testutil.Contains(t, calls[1], "-coverpkg="+module+","+module+"/lib,"+module+"/orphan", "-race", "-coverprofile="+w.Report(CoverReport))
+	testutil.Contains(t, calls[1], "-coverpkg="+module+","+module+"/lib,"+module+"/orphan", "-race", "-timeout="+w.Policy.Limits.Check.String(), "-coverprofile="+w.Report(CoverReport))
 	green := `{"Action":"pass","Package":"example.com/app/lib","Test":"TestA"}` + "\n"
 	pass := Tests(context.Background(), ws(t, script{cmdListJSON: ok(""), cmdTest: ok(green)}))
 	testutil.Equal(t, pass.Status, gate.StatusPass)
@@ -304,8 +304,16 @@ func TestBranches(t *testing.T) {
 	w.Policy.Thresholds.BranchCoverage = float64(4) * 100 / 6
 	testutil.Equal(t, Branches(context.Background(), w).Status, gate.StatusPass)
 	broken := ws(t, nil)
-	broken.Exec = &procexectest.Fake{Handler: script{cmdListJSON: ok(pkgJSON(t, Package{ImportPath: module, Dir: broken.Src, GoFiles: []string{fileMain}})), "gobco": ok("FAIL")}.Handle}
+	broken.Exec = &procexectest.Fake{Handler: script{cmdListJSON: ok(pkgJSON(t, Package{ImportPath: module, Dir: broken.Src, GoFiles: []string{fileMain}})), GobcoBinary: ok("FAIL")}.Handle}
 	testutil.Contains(t, Branches(context.Background(), broken).Reason, "no branch coverage summary")
+	crashed := ws(t, nil)
+	crashed.Exec = &procexectest.Fake{Handler: script{cmdListJSON: ok(pkgJSON(t, Package{ImportPath: module, Dir: crashed.Src, GoFiles: []string{fileMain}})), GobcoBinary: {Err: &procexec.Error{Err: errExit, Output: "panic: a_test.go:3:4: undefined: lib.X\n\ngoroutine 1 [running]:\nmain.ok(...)\n"}}}.Handle}
+	reason := Branches(context.Background(), crashed).Reason
+	testutil.Contains(t, reason, "panic: a_test.go:3:4: undefined: lib.X")
+	testutil.True(t, !strings.Contains(reason, "goroutine"), reason)
+	failed := ws(t, nil)
+	failed.Exec = &procexectest.Fake{Handler: script{cmdListJSON: ok(pkgJSON(t, Package{ImportPath: module, Dir: failed.Src, GoFiles: []string{fileMain}})), GobcoBinary: {Err: &procexec.Error{Err: errExit, Output: "build failed"}}}.Handle}
+	testutil.Contains(t, Branches(context.Background(), failed).Reason, "build failed")
 	testutil.Contains(t, Branches(context.Background(), ws(t, script{cmdList: {Err: errExit}})).Reason, cmdList)
 	outside := ws(t, script{cmdListJSON: ok(pkgJSON(t, Package{ImportPath: module, Dir: "relative", GoFiles: []string{fileMain}}))})
 	testutil.Contains(t, Branches(context.Background(), outside).Reason, "Rel: can't make relative")
