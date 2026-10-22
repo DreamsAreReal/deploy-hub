@@ -102,6 +102,23 @@ type Workspace struct {
 	Exec        procexec.Runner
 	Log         *slog.Logger
 	MemoryLimit int64
+	Mutation    MutationPlan
+}
+
+type MutationPlan struct {
+	Shards int
+	Shard  int
+	Merge  string
+	Sub    string
+	Subject
+}
+
+func (m MutationPlan) Sharded() bool {
+	return m.Shards > 1
+}
+
+func (m MutationPlan) ShardRun() bool {
+	return m.Sharded() && m.Merge == "" && m.Shard >= 0
 }
 
 type Subject struct {
