@@ -17,6 +17,10 @@ const (
 
 const digest = "@sha256:" + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
+const reviewedExpr = `"MIT OR (MIT AND MIT)"`
+
+const reviewedKey = `"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"`
+
 const declaredLine = `"pkg:pypi/legacy": MIT`
 
 const valid = `owners: [Owner]
@@ -38,6 +42,7 @@ limits:
 licenses: [MIT]
 dependencies: [example.com/dep]
 declared_licenses: {"pkg:pypi/legacy": MIT}
+reviewed_license_texts: {"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": "MIT OR (MIT AND MIT)", "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": NONE}
 forbidden_files: ["*.bak"]
 markers: [todo]
 sast_rulesets: [p/default]
@@ -122,6 +127,12 @@ func TestParseRejects(t *testing.T) {
 		"declared purl":      {declaredLine, `"pypi/legacy": MIT`},
 		"declared version":   {declaredLine, `"pkg:pypi/legacy@1": MIT`},
 		"markers":            {"markers: [todo]", "markers: []"},
+		"reviewed key":       {reviewedKey, `"md5:abc"`},
+		"reviewed license":   {reviewedExpr, `"GPL-3.0-only"`},
+		"reviewed trailing":  {reviewedExpr, `"MIT AND"`},
+		"reviewed leading":   {reviewedExpr, `"OR MIT"`},
+		"reviewed adjacent":  {reviewedExpr, `"MIT MIT"`},
+		"reviewed empty":     {reviewedExpr, `""`},
 		"rulesets":           {"sast_rulesets: [p/default]", "sast_rulesets: []"},
 		"unpinned semgrep":   {"semgrep: semgrep/semgrep" + digest, "semgrep: semgrep/semgrep:latest"},
 		"unpinned zap":       {"zap: ghcr.io/zaproxy/zaproxy" + digest, "zap: ghcr.io/zaproxy/zaproxy:stable"},

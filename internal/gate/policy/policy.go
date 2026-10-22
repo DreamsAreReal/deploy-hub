@@ -21,6 +21,10 @@ const (
 	KindService = "service"
 	KindWorker  = "worker"
 
+	NotALicense = "NONE"
+	exprAnd     = "AND"
+	exprOr      = "OR"
+
 	CategorySecurity = "security"
 	CategoryBusiness = "business"
 
@@ -35,6 +39,8 @@ var (
 	digestRef = regexp.MustCompile(`^[a-z0-9./_-]+@sha256:[0-9a-f]{64}$`)
 )
 
+var licenseDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
 var (
 	ErrPolicy     = errors.New("invalid gate policy")
 	ErrUnknownApp = errors.New("app is not registered in the gate policy")
@@ -47,6 +53,7 @@ type Policy struct {
 	Licenses       []string          `yaml:"licenses"`
 	Dependencies   []string          `yaml:"dependencies"`
 	Declared       map[string]string `yaml:"declared_licenses"`
+	ReviewedTexts  map[string]string `yaml:"reviewed_license_texts"`
 	ForbiddenFiles []string          `yaml:"forbidden_files"`
 	Markers        []string          `yaml:"markers"`
 	SASTRules      []string          `yaml:"sast_rulesets"`
@@ -153,7 +160,7 @@ func (p Policy) Validate() error {
 	errs = append(errs,
 		p.Thresholds.validate(), p.Limits.validate(), p.Images.validate(),
 		nonEmpty("owners", p.Owners), nonEmpty("licenses", p.Licenses), nonEmpty("markers", p.Markers), nonEmpty("sast_rulesets", p.SASTRules),
-		p.validateDeclared(),
+		p.validateDeclared(), p.validateReviewedTexts(),
 	)
 	for name, app := range p.Apps {
 		errs = append(errs, app.validate(name))
@@ -172,6 +179,31 @@ func (p Policy) validateDeclared() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func (p Policy) validateReviewedTexts() error {
+	var errs []error
+	for digest, expr := range p.ReviewedTexts {
+		if !licenseDigest.MatchString(digest) {
+			errs = append(errs, fmt.Errorf("%w: reviewed_license_texts key %q must be sha256:<64 hex>", ErrPolicy, digest))
+		}
+		if expr != NotALicense && !p.approvedExpression(expr) {
+			errs = append(errs, fmt.Errorf("%w: reviewed license text %s maps to %q, which is not built from approved licenses", ErrPolicy, digest, expr))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (p Policy) approvedExpression(expr string) bool {
+	ids := strings.FieldsFunc(expr, func(r rune) bool { return r == '(' || r == ')' })
+	terms := strings.Fields(strings.Join(ids, " "))
+	for i, term := range terms {
+		operator := term == exprAnd || term == exprOr
+		if operator == (i%2 == 0) || (!operator && !slices.Contains(p.Licenses, term)) {
+			return false
+		}
+	}
+	return len(terms)%2 == 1
 }
 
 func nonEmpty(field string, values []string) error {

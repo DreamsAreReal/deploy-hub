@@ -151,6 +151,12 @@ prefix for the rest: `pypi:requests`, `npm:express`, `nuget:Serilog`. When a
 package publishes no machine-readable license, `declared_licenses` in the
 policy records it by package URL without a version
 (`pkg:npm/some-lib: MIT`); the license must be on the approved list.
+A license file whose text syft cannot identify shows up as `sha256:<digest>`;
+after a person reads it, `reviewed_license_texts` maps that digest to an SPDX
+expression built from approved licenses, or to `NONE` when the file grants no
+license for shipped code (a logo attribution, say). A changed text gets a new
+digest and needs a new review. License files under `testdata/` of a Go module
+are ignored: the Go toolchain never builds those directories.
 
 **Whose code.** Repositories of the policy `owners` that are not forks get every
 check. Forks and other code get only the security checks (secrets, SAST,
