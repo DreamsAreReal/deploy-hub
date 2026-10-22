@@ -53,11 +53,16 @@ func shardRun(t *testing.T, policyPath string, extra ...string) (*harness, *plan
 	return h, p, code
 }
 
-func TestShardRunRunsOnlyMutationTesting(t *testing.T) {
-	_, p, code := shardRun(t, shardedPolicy(t), flagShard, "2/3")
+func TestShardRunRunsOnlyTestsAndMutationTesting(t *testing.T) {
+	h := newHarness(t)
+	p := &planned{}
+	h.gateChecks = append([]gate.Check{{Name: "lint", Run: func(context.Context, gate.Workspace) gate.Outcome { return gate.Pass(nil) }}}, p.checks()...)
+	out := filepath.Join(t.TempDir(), "gate")
+	code := h.run(append([]string{CmdGate, flagShard, "2/3"}, gateFlags(hubApp, hubRepo, commitSha, shardedPolicy(t), t.TempDir(), out)...)...)
 	testutil.Equal(t, code, ExitOK)
-	testutil.Equal(t, p.ran, []string{pack.CheckMutation})
-	testutil.Equal(t, p.plans[0], gate.MutationPlan{Shards: 3, Shard: 2, Subject: gate.Subject{App: hubApp, Repo: hubRepo, Commit: commitSha, Own: true}})
+	testutil.Equal(t, p.ran, []string{checkTests, pack.CheckMutation})
+	testutil.Contains(t, h.out.String(), "(2 checks")
+	testutil.Equal(t, p.plans[1], gate.MutationPlan{Shards: 3, Shard: 2, Subject: gate.Subject{App: hubApp, Repo: hubRepo, Commit: commitSha, Own: true}})
 }
 
 func TestMergeRunPassesTheShardReportsToEveryCheck(t *testing.T) {

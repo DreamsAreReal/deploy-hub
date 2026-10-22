@@ -198,7 +198,8 @@ many mutants run.
 64) in its policy entry and passes the same number as `mutation_shards` to the
 reusable workflow. The workflow then runs N `mutation shard K` jobs next to each
 other before the gate job; each runs `deploy-hub gate --mutation-shard K/N`,
-which runs only the mutation check and only mutants whose index modulo N is K,
+which runs only the tests check (the language packs mutate from its coverage)
+and the mutation check, and only mutants whose index modulo N is K,
 and keeps `mutation-shard.json` per project plus its `verdict.json` as the
 artifact `mutation-shard-K`. The gate job downloads them all and runs
 `deploy-hub gate --mutation-shards DIR`: the mutation check then measures

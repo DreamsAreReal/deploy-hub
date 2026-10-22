@@ -150,7 +150,7 @@ func gateChecks(all []gate.Check, plan gate.MutationPlan) []gate.Check {
 	if !plan.ShardRun() {
 		return all
 	}
-	return slices.DeleteFunc(all, func(c gate.Check) bool { return c.Name != pack.CheckMutation })
+	return slices.DeleteFunc(all, func(c gate.Check) bool { return c.Name != pack.CheckTests && c.Name != pack.CheckMutation })
 }
 
 func exitCode(passed bool) int {
