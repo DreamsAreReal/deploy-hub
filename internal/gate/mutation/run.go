@@ -448,7 +448,7 @@ func (e *engine) test(ctx context.Context, env, pkgs []string, extra ...string) 
 	case strings.Contains(out, testFailed):
 		return StatusKilled
 	default:
-		e.ws.Log.Error("mutant could not be run", "packages", pkgs, "output", gate.Tail(out))
+		e.ws.Log.Error("mutant could not be run", "packages", pkgs, "output", gate.Tail(out), "error", err.Error())
 		return StatusErrored
 	}
 }

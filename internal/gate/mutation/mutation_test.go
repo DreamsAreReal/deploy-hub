@@ -468,7 +468,7 @@ func TestBrokenToolchainMakesTheRunIncomplete(t *testing.T) {
 	_, err := Run(context.Background(), ws)
 	testutil.Is(t, err, ErrIncomplete)
 	testutil.Contains(t, err.Error(), "1 "+reasonErrored)
-	testutil.Contains(t, logs.String(), `"msg":"mutant could not be run","packages":["m/lib"],"output":"go: creating work dir: no space left on device"`)
+	testutil.Contains(t, logs.String(), `"msg":"mutant could not be run","packages":["m/lib"],"output":"go: creating work dir: no space left on device","error":"exit 1"`)
 	testutil.True(t, len(fg.caches) > 0, "mutants run with the isolated build cache")
 	for _, c := range fg.caches {
 		testutil.True(t, strings.HasPrefix(c, cacheEnv+filepath.Join(ws.Out, cacheDir)+workerSep), "mutants run with a worker build cache: "+c)
