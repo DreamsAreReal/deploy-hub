@@ -24,7 +24,10 @@ log "disk before: $(used_percent)%"
 docker ps -aq | xargs -r docker rm -f >/dev/null
 docker network prune -f >/dev/null
 docker volume prune -af >/dev/null
-docker image ls --format '{{.Repository}}:{{.Tag}}' | grep '^ghcr\.io/' | xargs -r docker image rm -f >/dev/null
+owner=$(printf '%s' "${GITHUB_REPOSITORY_OWNER:-}" | tr '[:upper:]' '[:lower:]')
+if [ -n "$owner" ]; then
+  docker image ls --filter "reference=ghcr.io/$owner/*" --format '{{.ID}}' | sort -u | xargs -r docker image rm -f >/dev/null
+fi
 docker image prune -f >/dev/null
 docker builder prune -f --max-used-space "$BUILD_CACHE_KEEP" >/dev/null
 
