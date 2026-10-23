@@ -103,9 +103,9 @@ func (ix *testIndex) isolate(pkg string) {
 	ix.whole[pkg] = true
 }
 
-func (e *engine) buildIndex(ctx context.Context, pkgs golang.Packages) (*testIndex, error) {
+func (e *engine) buildIndex(ctx context.Context, pkgs golang.Packages, need map[string]bool) (*testIndex, error) {
 	started := time.Now()
-	refs, err := e.listTests(ctx, pkgs)
+	refs, err := e.listTests(ctx, pkgs, need)
 	if err != nil {
 		return nil, err
 	}
@@ -128,10 +128,10 @@ func (e *engine) buildIndex(ctx context.Context, pkgs golang.Packages) (*testInd
 	return ix, nil
 }
 
-func (e *engine) listTests(ctx context.Context, pkgs golang.Packages) ([]testRef, error) {
+func (e *engine) listTests(ctx context.Context, pkgs golang.Packages, need map[string]bool) ([]testRef, error) {
 	var refs []testRef
 	for _, p := range pkgs {
-		if !p.HasTests() {
+		if !p.HasTests() || !need[p.ImportPath] {
 			continue
 		}
 		res, err := e.ws.RunEnv(ctx, []string{e.cache}, golang.GoBinary, goTest, "-list", ".", p.ImportPath)

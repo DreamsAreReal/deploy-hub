@@ -2,6 +2,7 @@ package mutation
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -235,6 +236,10 @@ type outcome struct {
 type fakeGo struct {
 	t        *testing.T
 	pkgs     string
+	closure  string
+	tracked  string
+	env      string
+	testLogs string
 	baseErr  error
 	mu       sync.Mutex
 	decide   func(mutated string, pkgs []string) outcome
@@ -293,14 +298,19 @@ func (f *fakeGo) index(c procexec.Command) (procexec.Result, error, bool) {
 func (f *fakeGo) handle(c procexec.Command) (procexec.Result, error) {
 	switch {
 	case c.Name == source.GitBinary:
-		return procexec.Result{Stdout: "lib/" + fileLib + "\x00"}, nil
-	case c.Args[0] == "list":
+		return procexec.Result{Stdout: cmp.Or(f.tracked, "lib/"+fileLib+"\x00")}, nil
+	case c.Args[0] == "env":
+		return procexec.Result{Stdout: f.env}, nil
+	case c.Args[0] == goList && slices.Contains(c.Args, "-deps"):
+		return procexec.Result{Stdout: strings.ReplaceAll(f.closure, srcMarker, c.Dir)}, nil
+	case c.Args[0] == goList:
 		return procexec.Result{Stdout: strings.ReplaceAll(f.pkgs, srcMarker, c.Dir)}, nil
 	}
 	if res, err, ok := f.index(c); ok {
 		return res, err
 	}
 	if !strings.HasPrefix(c.Env[0], overlayEnv) {
+		f.writeTestLog(c.Args)
 		testutil.Mkdir(f.t, strings.TrimPrefix(c.Env[0], cacheEnv))
 		return procexec.Result{Stdout: outOK}, f.baseErr
 	}
@@ -623,7 +633,7 @@ func TestExecuteHandsWorkersTheirIndex(t *testing.T) {
 	for w := range seen {
 		testutil.True(t, w >= 0 && w < 3, "worker index in range")
 	}
-	testutil.Equal(t, rep.Entries[0], entry{File: "a.py", Line: 1, Operator: OpArithmetic, Original: "a + b", Mutated: "a - b", Status: StatusKilled})
+	testutil.Equal(t, rep.Entries[0], entry{File: "a.py", Line: 1, Operator: OpArithmetic, Original: "a + b", Mutated: "a - b", Status: StatusKilled, Source: SourceRun})
 	testutil.Equal(t, Workers(), max(minWorkers, procexec.CPUs()/cpuShare))
 	out := Judge(gate.Workspace{Out: t.TempDir(), Policy: policy.Policy{Thresholds: policy.Thresholds{MutationScore: 90}}}, rep, nil)
 	testutil.Equal(t, out.Status, gate.StatusPass)
@@ -696,4 +706,12 @@ func TestSelection(t *testing.T) {
 	testutil.Equal(t, run, []string{"-run=^(TestA|TestB)$"})
 	_, err := readProfile(filepath.Join(t.TempDir(), "missing.out"))
 	testutil.Fails(t, err)
+}
+
+func (f *fakeGo) writeTestLog(args []string) {
+	for _, a := range args {
+		if path, ok := strings.CutPrefix(a, testLogFlag); ok && f.testLogs != "" {
+			testutil.Write(f.t, path, f.testLogs)
+		}
+	}
 }

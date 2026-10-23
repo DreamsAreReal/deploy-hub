@@ -13,6 +13,7 @@ import (
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/golang"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/mutation"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/policy"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
 	"github.com/DreamsAreReal/deploy-hub/internal/tools"
@@ -33,12 +34,15 @@ const (
 	toolsPrefix    = "tools: "
 	usageTools     = "usage: deploy-hub tools --manifest FILE --dir DIR"
 	msgToolsDone   = "tools: %d installed into %s\n"
+	digestPrefix   = "sha256:"
+	msgVerdicts    = "mutation verdicts: %s %s%s\n"
 )
 
-var ErrGateArgs = errors.New("usage: deploy-hub gate --app NAME --repo OWNER/NAME --commit SHA --policy FILE --src DIR --out DIR [--image REF] [--fork]")
+var ErrGateArgs = errors.New("usage: deploy-hub gate --app NAME --repo OWNER/NAME --commit SHA --policy FILE --src DIR --out DIR [--image REF] [--fork] [--mutation-cache FILE --mutation-cache-sha256 sha256:HEX]")
 
 type gateArgs struct {
 	app, repo, commit, src, out, policy, image string
+	cache, cacheSum                            string
 	fork                                       bool
 }
 
@@ -54,6 +58,8 @@ func parseGateArgs(args []string) (gateArgs, error) {
 	fs.StringVar(&g.policy, "policy", "", "central gate policy file")
 	fs.StringVar(&g.image, "image", "", "locally built image reference")
 	fs.BoolVar(&g.fork, "fork", false, "the repository is a fork")
+	fs.StringVar(&g.cache, "mutation-cache", "", "mutation verdicts from the hub (absolute path)")
+	fs.StringVar(&g.cacheSum, "mutation-cache-sha256", "", "sha256 the hub recorded for the mutation verdicts")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		return g, ErrGateArgs
 	}
@@ -68,7 +74,22 @@ func (g *gateArgs) normalize() error {
 	if rel, _ := filepath.Rel(g.src, g.out); !strings.HasPrefix(rel, "..") {
 		return fmt.Errorf("%w: reports must live outside the source tree", ErrGateArgs)
 	}
-	return errors.Join(validate.AppName(g.app), validate.RepoSlug(g.repo), validate.Commit(g.commit), nonEmptyArg(g.policy))
+	return errors.Join(validate.AppName(g.app), validate.RepoSlug(g.repo), validate.Commit(g.commit), nonEmptyArg(g.policy), g.cacheArgs())
+}
+
+func outside(dir, path string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && (rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+func (g *gateArgs) cacheArgs() error {
+	if g.cache == "" && g.cacheSum == "" {
+		return nil
+	}
+	if !filepath.IsAbs(g.cache) || !outside(g.src, filepath.Clean(g.cache)) || validate.Digest(g.cacheSum) != nil {
+		return fmt.Errorf("%w: --mutation-cache needs an absolute path outside the source tree and --mutation-cache-sha256 sha256:HEX", ErrGateArgs)
+	}
+	return nil
 }
 
 func nonEmptyArg(v string) error {
@@ -107,6 +128,9 @@ func runGate(ctx context.Context, a *App, ex procexec.Runner, args []string) int
 	if err := v.Save(ws.Report(VerdictFile)); err != nil {
 		return a.failWith(gatePrefix, err)
 	}
+	if err := a.keepVerdicts(ws); err != nil {
+		return a.failWith(gatePrefix, err)
+	}
 	a.printVerdict(v)
 	return exitCode(v.Passed)
 }
@@ -124,6 +148,9 @@ func newWorkspace(ctx context.Context, g *gateArgs, a *App, ex procexec.Runner, 
 	}
 	app, _ := pol.App(g.app)
 	ws := gate.Workspace{Src: g.src, Out: g.out, PolicyDir: filepath.Dir(g.policy), Image: g.image, AppName: g.app, Repo: g.repo, App: app, Policy: pol, Exec: ex, Log: a.Log}
+	if g.cache != "" {
+		ws.MutationCache = gate.CachedVerdicts{Path: filepath.Clean(g.cache), SHA256: strings.TrimPrefix(g.cacheSum, digestPrefix)}
+	}
 	if !exists(filepath.Join(g.src, goModFile)) {
 		return ws, nil
 	}
@@ -184,4 +211,23 @@ func runTools(ctx context.Context, a *App, ex procexec.Runner, args []string) in
 	}
 	a.Out.Printf(msgToolsDone, len(m.Binaries)+len(m.Go), *dir)
 	return ExitOK
+}
+
+func (a *App) keepVerdicts(ws gate.Workspace) error {
+	entries, err := os.ReadDir(ws.Out)
+	var projects []string
+	for _, e := range entries {
+		if p := filepath.Join(ws.Out, e.Name(), mutation.VerdictsFile); e.IsDir() && exists(p) {
+			projects = append(projects, p)
+		}
+	}
+	if err != nil || len(projects) == 0 {
+		return err
+	}
+	out := ws.Report(mutation.VerdictsFile)
+	digest, err := mutation.MergeVerdicts(out, projects)
+	if err == nil {
+		a.Out.Printf(msgVerdicts, out, digestPrefix, digest)
+	}
+	return err
 }

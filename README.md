@@ -205,6 +205,42 @@ CPUs, at least two, where the CPUs are `NumCPU` capped by the tightest
 `cpu.max` quota. On the self-hosted runner the repo's slice (9G, 6 CPUs) sets
 both, not the host.
 
+**Verdict cache (incremental mutation, Go).** Every Go mutant gets a key: the
+sha256 of everything its verdict depends on. That is the mutant itself (file,
+line, operator, edits); the build closure of every test binary that links its
+package, test-only imports included, from `go list -deps -test` (every file in
+each package directory of the module, its embedded files and `testdata/` tree;
+`path@version` for external modules, the Go version for the std library); the
+files, directories and environment variables those tests actually read in the
+baseline run (Go's `-test.testlogfile`, only paths inside the checkout count,
+read through `os.Root`, so a symlink cannot point elsewhere); every non-Go file
+of the module when a package of that test binary has a `TestMain` or an
+`init` function, because the test log starts only inside `m.Run`; `go.mod`,
+`go.sum`, `go.work`, `go.work.sum` and `vendor/modules.txt`; `go env` (Go
+version, target, cgo, `GOFLAGS`, `GOEXPERIMENT`, compilers and their flags);
+the engine's own test flags; the app policy, thresholds and limits; the host
+(CPUs, mutation workers and the memory budget per mutant, since `timed-out`
+and `out-of-memory` depend on them); and `EngineVersion`. `EngineVersion` is the
+sha256 of the engine sources (`internal/gate/mutation` and the module packages
+it imports, except `policy` and `validate`, whose effect is already in the
+policy part), and `TestEngineVersionCoversTheEngineSources` fails until it is
+updated after any change there. When anything in a mutant's key changes, the
+mutant runs again. A package whose tests left no test log is never cached.
+What stays outside the key is a read made by a package-level variable
+initializer or by a child process of a test; the scheduled full run without the
+cache is the backstop for those. A run that stops early (an errored mutant, the
+check timeout) still keeps the verdicts it finished; a mutant whose run was cut
+off by the cancellation is never kept.
+`deploy-hub gate --mutation-cache FILE --mutation-cache-sha256 sha256:HEX` takes
+verdicts from an earlier run: the file must lie outside the checkout. If its
+sha256 differs from the one given, or it cannot be read, it is ignored and every
+mutant runs. A cached verdict counts in the score exactly like a fresh one. Each
+entry of `mutation.json` says `"source": "cache"` or `"run"`, and the check
+reports `mutants_cached` and `mutants_run`. After every run the gate merges
+the verdicts of all Go projects into `<out>/mutation-verdicts.json` and prints
+its sha256. `deploy.yml` does not pass a cache yet, so in CI every run is
+still a full one.
+
 **Load test, done for a 1-CPU VPS.** The image runs in an isolated docker
 network on the CI runner with the production limits from the policy (`cpus`,
 `memory`, no swap, pid limit); a built-in generator sends the app's profile
