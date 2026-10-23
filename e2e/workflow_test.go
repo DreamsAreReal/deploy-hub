@@ -80,3 +80,28 @@ func mapValues(m map[string]string) []string {
 	}
 	return out
 }
+
+type callerJob struct {
+	Uses    string            `yaml:"uses"`
+	With    map[string]string `yaml:"with"`
+	Secrets map[string]string `yaml:"secrets"`
+	RunsOn  any               `yaml:"runs-on"`
+}
+
+func TestTheHubGatesItselfThroughDeployYML(t *testing.T) {
+	data, err := os.ReadFile(filepath.Clean(filepath.Join(workflows, "ci.yml")))
+	testutil.NoErr(t, err)
+	var ci struct {
+		Jobs map[string]callerJob `yaml:"jobs"`
+	}
+	testutil.NoErr(t, yaml.Unmarshal(data, &ci))
+	testutil.Equal(t, len(ci.Jobs), 1)
+	for _, job := range ci.Jobs {
+		testutil.Equal(t, job.Uses, "DreamsAreReal/deploy-hub/.github/workflows/deploy.yml@main")
+		testutil.Equal(t, job.With["app"], "deploy-hub")
+		testutil.Equal(t, job.Secrets["RELEASE_TOKEN"], "${{ github.event_name == 'push' && "+releaseToken+" || '' }}")
+		testutil.Equal(t, len(job.Secrets), 1)
+		testutil.Equal(t, job.RunsOn, nil)
+	}
+	testutil.Excludes(t, string(data), "runs-on")
+}
