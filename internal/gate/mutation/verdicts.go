@@ -74,7 +74,7 @@ func (v Verdicts) check() error {
 
 func (v Verdicts) lookup(key string) (Status, bool) {
 	s, ok := v.Entries[key]
-	return s, ok && cacheable(s)
+	return s, ok
 }
 
 func (v Verdicts) Merge(o Verdicts) Verdicts {
@@ -82,9 +82,7 @@ func (v Verdicts) Merge(o Verdicts) Verdicts {
 	slices.Sort(v.Bases)
 	v.Bases = slices.Compact(v.Bases)
 	for k, s := range o.Entries {
-		if cacheable(s) {
-			v.Entries[k] = s
-		}
+		v.Entries[k] = s
 	}
 	return v
 }
