@@ -556,6 +556,8 @@ commit only rewrites the sudoers rule and the CI runner files if they drifted
 alert `DeployHubSelfUpdateFailed` fires when no run succeeded for 40 minutes.
 To pin an older gated release, run `sudo /opt/deploy-hub/bin/deploy-hub
 self-update sha-<commit>`; the next timer run moves back to the latest one.
+A release older than `ci-runner-sync` cannot be pinned: its binary fails that
+check and the current one is restored.
 
 The only manual install is the bootstrap (Bootstrap, step 5). Do not copy a
 binary to the server any other way.
