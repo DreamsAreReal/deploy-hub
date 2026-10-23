@@ -2,6 +2,6 @@
 # (ext4 project quota, project id = uid of ci-<repo>). ci-runner-setup refuses
 # to register a repository that has no line here.
 tasks 140
-router-bot 25
+router-bot 40
 observability 10
-deploy-hub 15
+deploy-hub 35
