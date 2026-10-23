@@ -10,15 +10,17 @@ import (
 )
 
 const (
-	actionSuffix = "-a"
-	outputSuffix = "-d"
-	workerSep    = "-"
-	walkRoot     = "."
+	actionSuffix    = "-a"
+	outputSuffix    = "-d"
+	workerSep       = "-"
+	walkRoot        = "."
+	workerCacheKeep = int64(1) << 30
 )
 
 type workerCache struct {
 	dir  string
 	base map[string]bool
+	keep int64
 }
 
 func (e *engine) workerCaches(workers int) ([]*workerCache, error) {
@@ -28,7 +30,7 @@ func (e *engine) workerCaches(workers int) ([]*workerCache, error) {
 	}
 	caches := make([]*workerCache, 0, workers)
 	for w := range workers {
-		c := &workerCache{dir: e.cacheDir + workerSep + strconv.Itoa(w), base: base}
+		c := &workerCache{dir: e.cacheDir + workerSep + strconv.Itoa(w), base: base, keep: workerCacheKeep}
 		if err := c.seed(e.cacheDir); err != nil {
 			return nil, err
 		}
@@ -71,12 +73,17 @@ func (c *workerCache) trim() error {
 	}
 	defer func() { _ = root.Close() }()
 	var stale []string
+	var added int64
 	err = fs.WalkDir(root.FS(), walkRoot, func(path string, d fs.DirEntry, err error) error {
 		if err == nil && !d.IsDir() && !c.base[path] {
 			stale = append(stale, path)
+			added += entrySize(d)
 		}
 		return err
 	})
+	if err != nil || added <= c.keep {
+		return err
+	}
 	for _, path := range stale {
 		err = errors.Join(err, root.Remove(path))
 	}
@@ -87,4 +94,12 @@ func (e *engine) dropWorkerCaches() {
 	for _, c := range e.workers {
 		_ = os.RemoveAll(c.dir)
 	}
+}
+
+func entrySize(d fs.DirEntry) int64 {
+	info, err := d.Info()
+	if err != nil {
+		return 0
+	}
+	return info.Size()
 }
