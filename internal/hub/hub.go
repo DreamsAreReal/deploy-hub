@@ -11,6 +11,8 @@ const (
 	lockFile      = "deploy.lock"
 	smokeFile     = "smoke.conf"
 	lastErrorFile = "last-error.log"
+	mutationDir   = "mutation-cache"
+	cacheLockFile = "mutation-cache.lock"
 	hubConfFile   = "hub.conf"
 	binDir        = "bin"
 	logsDir       = "logs"
@@ -28,7 +30,12 @@ func (p Paths) Smoke() string     { return filepath.Join(p.Dir, smokeFile) }
 func (p Paths) LastError() string { return filepath.Join(p.Dir, lastErrorFile) }
 func (p Paths) Binary() string    { return filepath.Join(p.Dir, binDir, BinaryName) }
 func (p Paths) HubConf() string   { return filepath.Join(p.Dir, hubConfFile) }
-func (p Paths) AppsRoot() string  { return filepath.Dir(p.Dir) }
+func (p Paths) CacheLock() string { return filepath.Join(p.Dir, cacheLockFile) }
+
+func (p Paths) MutationCache(app string) string {
+	return filepath.Join(p.Dir, mutationDir, app)
+}
+func (p Paths) AppsRoot() string { return filepath.Dir(p.Dir) }
 
 func (p Paths) LogFile(command string) string {
 	return filepath.Join(p.Dir, logsDir, command+logExt)

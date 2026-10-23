@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 )
 
@@ -18,7 +19,10 @@ const (
 	SourceRun       = "run"
 )
 
-var ErrVerdicts = errors.New("mutation verdict cache rejected")
+var (
+	ErrVerdicts = errors.New("mutation verdict cache rejected")
+	digestHex   = regexp.MustCompile(`^[0-9a-f]{64}$`)
+)
 
 type Verdicts struct {
 	Version int               `json:"version"`
@@ -40,10 +44,10 @@ func LoadVerdicts(path, digest string) (Verdicts, error) {
 	if got := Digest(data); got != digest {
 		return Verdicts{}, fmt.Errorf("%w: sha256 %s, the hub recorded %s", ErrVerdicts, got, digest)
 	}
-	return decodeVerdicts(data)
+	return DecodeVerdicts(data)
 }
 
-func decodeVerdicts(data []byte) (Verdicts, error) {
+func DecodeVerdicts(data []byte) (Verdicts, error) {
 	var v Verdicts
 	if err := json.Unmarshal(data, &v); err != nil {
 		return Verdicts{}, fmt.Errorf("%w: %w", ErrVerdicts, err)
@@ -51,7 +55,21 @@ func decodeVerdicts(data []byte) (Verdicts, error) {
 	if v.Version != verdictsVersion {
 		return Verdicts{}, fmt.Errorf("%w: version %d, expected %d", ErrVerdicts, v.Version, verdictsVersion)
 	}
-	return v, nil
+	return v, v.check()
+}
+
+func (v Verdicts) check() error {
+	for _, b := range v.Bases {
+		if !digestHex.MatchString(b) {
+			return fmt.Errorf("%w: base %q is not a sha256", ErrVerdicts, b)
+		}
+	}
+	for k, s := range v.Entries {
+		if !digestHex.MatchString(k) || !cacheable(s) {
+			return fmt.Errorf("%w: entry %q: %q", ErrVerdicts, k, s)
+		}
+	}
+	return nil
 }
 
 func (v Verdicts) lookup(key string) (Status, bool) {
@@ -59,7 +77,7 @@ func (v Verdicts) lookup(key string) (Status, bool) {
 	return s, ok && cacheable(s)
 }
 
-func (v Verdicts) merge(o Verdicts) Verdicts {
+func (v Verdicts) Merge(o Verdicts) Verdicts {
 	v.Bases = append(v.Bases, o.Bases...)
 	slices.Sort(v.Bases)
 	v.Bases = slices.Compact(v.Bases)
@@ -78,17 +96,21 @@ func MergeVerdicts(out string, paths []string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		v, err := decodeVerdicts(data)
+		v, err := DecodeVerdicts(data)
 		if err != nil {
 			return "", err
 		}
-		all = all.merge(v)
+		all = all.Merge(v)
 	}
 	return all.Save(out)
 }
 
+func (v Verdicts) Encode() ([]byte, error) {
+	return json.Marshal(v)
+}
+
 func (v Verdicts) Save(path string) (string, error) {
-	data, err := json.Marshal(v)
+	data, err := v.Encode()
 	if err != nil {
 		return "", err
 	}

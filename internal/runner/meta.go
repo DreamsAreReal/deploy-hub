@@ -25,17 +25,18 @@ var (
 )
 
 type Meta struct {
-	Token   string
-	Actor   string
-	Subject string
-	Start   string
-	Compose string
-	Main    string
-	HPort   string
-	HMode   string
-	OIDC    string
-	Digest  string
-	Verdict string
+	Token    string
+	Actor    string
+	Subject  string
+	Start    string
+	Compose  string
+	Main     string
+	HPort    string
+	HMode    string
+	OIDC     string
+	Digest   string
+	Verdict  string
+	Verdicts string
 }
 
 func ReadMeta(r io.Reader) (Meta, error) {
@@ -43,7 +44,7 @@ func ReadMeta(r io.Reader) (Meta, error) {
 	fields := map[string]*string{
 		"token": &m.Token, "actor": &m.Actor, "subject": &m.Subject, "start": &m.Start,
 		"compose": &m.Compose, metaMain: &m.Main, "hport": &m.HPort, "hmode": &m.HMode,
-		"oidc": &m.OIDC, "digest": &m.Digest, "verdict": &m.Verdict,
+		"oidc": &m.OIDC, "digest": &m.Digest, "verdict": &m.Verdict, "verdicts": &m.Verdicts,
 	}
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, initialBuffer), maxMetaLine)
