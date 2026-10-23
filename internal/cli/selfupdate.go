@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/policy"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
@@ -16,6 +17,8 @@ var Commit = "dev"
 
 const (
 	usageSelfUpdate  = "usage: deploy-hub self-update [sha-<40 hex>]"
+	usageBootstrap   = "usage: deploy-hub bootstrap [sha-<40 hex>]"
+	bootstrapPrefix  = "bootstrap: "
 	selfUpdatePrefix = "self-update: "
 	sudoersPrefix    = "sudoers-sync: "
 	runnerSyncPrefix = "ci-runner-sync: "
@@ -60,8 +63,12 @@ func runSelfUpdate(ctx context.Context, a *App, ex procexec.Runner, args []strin
 	if err != nil {
 		return a.failWith(selfUpdatePrefix, err)
 	}
+	token, err := selfupdate.ReadToken(a.Token, os.Geteuid())
+	if err != nil {
+		return a.failWith(selfUpdatePrefix, err)
+	}
 	u := selfupdate.Updater{
-		Source: selfupdate.Source{API: selfupdate.DefaultAPI, Download: selfupdate.DefaultDownload, Repo: defaultHubRepo, Client: &http.Client{}},
+		Source: selfupdate.Source{API: selfupdate.DefaultAPI, Repo: defaultHubRepo, Token: token, Client: &http.Client{}},
 		Binary: selfupdate.DefaultBinary, Current: Commit, Exec: ex, Sudo: sudo, Runner: runnerFiles(ex),
 		Journal: a.journal(), Metrics: a.metrics(), Now: a.Now, Out: a.Out, Log: a.Log,
 	}
@@ -86,5 +93,26 @@ func runRunnerSync(ctx context.Context, a *App, ex procexec.Runner, _ []string) 
 	if changed {
 		a.Out.Println(runnerSyncPrefix + "installed " + selfupdate.DefaultRunnerDir)
 	}
+	return ExitOK
+}
+
+func runBootstrap(ctx context.Context, a *App, ex procexec.Runner, args []string) int {
+	tag := ""
+	if len(args) == 1 {
+		tag = args[0]
+	}
+	if len(args) > 1 || (tag != "" && !selfupdate.ValidTag(tag)) {
+		a.Err.Println(usageBootstrap)
+		return ExitUsage
+	}
+	b := selfupdate.Bootstrap{
+		Source: selfupdate.Source{API: selfupdate.DefaultAPI, Repo: defaultHubRepo, Client: &http.Client{}},
+		Host:   a.Config.HostAlias, Exec: ex,
+	}
+	r, err := b.Run(ctx, tag)
+	if err != nil {
+		return a.failWith(bootstrapPrefix, err)
+	}
+	a.Out.Printf("bootstrap: installed %s on %s\n", r.Tag, a.Config.HostAlias)
 	return ExitOK
 }
