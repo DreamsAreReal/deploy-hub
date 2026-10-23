@@ -35,7 +35,7 @@ programs that subcommand may execute.
 | Where | Who runs it | Subcommands | What it does |
 |---|---|---|---|
 | GitHub Actions runner of an **app** repo | `.github/workflows/deploy.yml` (reusable workflow from this repo) | `tools`, `render`, `gate` | install pinned scanners, render the app's compose file, run the quality gate |
-| GitHub Actions runner of **this** repo | `.github/workflows/ci.yml` | `tools`, `gate` | the same gate, run on deploy-hub itself |
+| EU runner `eu-deploy-hub` of **this** repo | `.github/workflows/ci.yml` → `deploy.yml` | `tools`, `gate` | the same gate, run on deploy-hub itself |
 | **VPS**, user `deploy` | SSH forced command | `runner` | `deploy`, `report`, `rollback`, `status`, `history` |
 | **VPS**, root | sudo (narrow rules), systemd timers, `onboard` over root SSH | `caddy-sync`, `host-sync`, `self-update`, `sudoers-sync`, `prune`, `provision`, `facts` | HTTPS routes, host files from a gated image, image cleanup, preparing `/opt/<app>/` |
 | **Operator machine** | you | `onboard` | connect a new app repo end to end |
@@ -413,7 +413,7 @@ pin** in `.github/workflows/deploy.yml` to that `main` commit in a follow-up
 commit. Until the pin moves, app CI keeps the old policy.
 
 **Release the server binary.** Merge to `main`. After the gate passes,
-`ci.yml` publishes the release `sha-<commit>`, and within 10 minutes the
+the `deploy.yml` job called by `ci.yml` publishes the release `sha-<commit>`, and within 10 minutes the
 server's `deploy-hub-self-update.timer` installs it (README "Releases and
 self-update"). Nobody copies binaries to the server; the bootstrap is the only
 exception.

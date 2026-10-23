@@ -571,12 +571,21 @@ prints a header (an empty app list is fine on a fresh hub).
 The binary on the server comes only from this repo's CI, and only for a commit
 that passed the full gate on `main`:
 
-1. `ci.yml` runs the gate on every push to `main`, then builds the linux/amd64
-   binary with the commit stamped in (`deploy-hub version` prints it; the
-   build step fails if it does not).
-2. The `release` job (push to `main` only, after `gate`) publishes the release
-   `sha-<commit>` targeting that commit, with the assets
-   `deploy-hub-linux-amd64` and `deploy-hub-linux-amd64.sha256`.
+1. `ci.yml` calls `deploy.yml` of `main` like an app stub (`app: deploy-hub`),
+   so the hub is gated on its own EU runner `eu-deploy-hub` (user
+   `ci-deploy-hub`, 15 GiB disk quota) with the toolchain and policy of the
+   commit under test, on every pull request and push to `main`. The job then
+   builds the linux/amd64 binary with the commit stamped in (`deploy-hub
+   version` prints it; the step fails if it does not).
+2. On a push to `main` with a passed gate, the step `Publish the hub release`
+   of that job publishes the release `sha-<commit>` targeting that commit, with
+   the assets `deploy-hub-linux-amd64` and `deploy-hub-linux-amd64.sha256`. It
+   is the only step that sees the repo secret `RELEASE_TOKEN` (a fine-grained
+   PAT of the owner, only `deploy-hub`, **Contents: Read and write**; set it with
+   `gh secret set RELEASE_TOKEN -R DreamsAreReal/deploy-hub`) and runs only for
+   this repo, so app jobs never publish anything and their `GITHUB_TOKEN` stays
+   `contents: read` (e2e `TestOnlyTheHubPublishesReleases`). A change to
+   `deploy.yml` reaches the hub's own CI once it is on `main`.
 3. On the server `deploy-hub-self-update.timer` runs `deploy-hub self-update`
    as root every 10 minutes. It reads releases and runs with the token in
    `/etc/deploy-hub/github.token` (Bootstrap, step 5; without it the run fails
@@ -1395,8 +1404,8 @@ make gate       # the full quality gate on this repo (reports in $TMPDIR/deploy-
 
 Requires Go (version in `go.mod`) and, for `make gate`, the tools listed in
 `policy/tools.yaml` plus Docker (Semgrep runs in a container). Build output and
-reports never land in the checkout. CI (`.github/workflows/ci.yml`) runs the
-same gate on every push and pull request.
+reports never land in the checkout. CI (`.github/workflows/ci.yml`, through
+`deploy.yml` on the EU runner) runs the same gate on every push and pull request.
 
 The deploy workflow takes the gate toolchain — this binary, the policy and the
 scanner manifest — from the commit its `uses:` line pins. A change to the gate

@@ -178,6 +178,7 @@ apps:
         tests:
           - e2e.TestOnlyTheHubPublishesReleases
           - e2e.TestDeployRunsOnlyOnTheEURunner
+          - e2e.TestTheHubGatesItselfThroughDeployYML
       - id: preempt-cancels-only-pull-request-runs
         category: security
         tests:
