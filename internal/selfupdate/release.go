@@ -119,17 +119,21 @@ func (s Source) get(ctx context.Context, raw, accept string, limit int64) ([]byt
 	return data, err
 }
 
+func (s Source) getJSON(ctx context.Context, raw string, out any) error {
+	data, err := s.get(ctx, raw, acceptJSON, maxDocument)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
 func (s Source) Find(ctx context.Context, tag string) (Release, error) {
 	path := "/releases/latest"
 	if tag != "" {
 		path = "/releases/tags/" + url.PathEscape(tag)
 	}
-	data, err := s.get(ctx, s.API+"/repos/"+s.Repo+path, acceptJSON, maxDocument)
-	if err != nil {
-		return Release{}, err
-	}
 	var doc releaseDoc
-	if err := json.Unmarshal(data, &doc); err != nil {
+	if err := s.getJSON(ctx, s.API+"/repos/"+s.Repo+path, &doc); err != nil {
 		return Release{}, err
 	}
 	return s.release(doc, tag)
@@ -157,12 +161,8 @@ func (s Source) release(doc releaseDoc, want string) (Release, error) {
 
 func (s Source) Gated(ctx context.Context, commit string) error {
 	q := url.Values{"head_sha": {commit}, "branch": {mainBranch}, "event": {pushEvent}, "status": {success}}
-	data, err := s.get(ctx, s.API+"/repos/"+s.Repo+"/actions/workflows/"+Workflow+"/runs?"+q.Encode(), acceptJSON, maxDocument)
-	if err != nil {
-		return err
-	}
 	var doc runsDoc
-	if err := json.Unmarshal(data, &doc); err != nil {
+	if err := s.getJSON(ctx, s.API+"/repos/"+s.Repo+"/actions/workflows/"+Workflow+"/runs?"+q.Encode(), &doc); err != nil {
 		return err
 	}
 	for _, r := range doc.Runs {
@@ -198,14 +198,10 @@ func (s Source) Descends(ctx context.Context, base, head string) error {
 	if !fullCommit.MatchString(base) || base == head {
 		return nil
 	}
-	data, err := s.get(ctx, s.API+"/repos/"+s.Repo+"/compare/"+base+"..."+head, acceptJSON, maxDocument)
-	if err != nil {
-		return err
-	}
 	var doc struct {
 		Status string `json:"status"`
 	}
-	if err := json.Unmarshal(data, &doc); err != nil {
+	if err := s.getJSON(ctx, s.API+"/repos/"+s.Repo+"/compare/"+base+"..."+head, &doc); err != nil {
 		return err
 	}
 	if doc.Status != compareAhead && doc.Status != compareSame {

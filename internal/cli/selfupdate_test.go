@@ -63,3 +63,9 @@ func TestBootstrapNeedsTheHubToken(t *testing.T) {
 	testutil.Contains(t, h.err.String(), "bootstrap: ")
 	testutil.Contains(t, strings.Join(h.exec.Lines(), "\n"), "ssh vpn test ! -e /opt/deploy-hub/bin/deploy-hub", "ssh vpn stat -c %U:%a /etc/deploy-hub/github.token")
 }
+
+func TestBootstrapTakesOneTag(t *testing.T) {
+	h := newHarness(t)
+	testutil.Equal(t, h.run(CmdBootstrap, "sha-0123456789abcdef0123456789abcdef01234567"), ExitFail)
+	testutil.Excludes(t, h.err.String(), usageBootstrap)
+}

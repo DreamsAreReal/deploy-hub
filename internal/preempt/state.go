@@ -37,10 +37,7 @@ func Load(path string) (State, error) {
 }
 
 func (s *State) Save(path string) error {
-	data, err := json.Marshal(s)
-	if err != nil {
-		return err
-	}
+	data, _ := json.Marshal(s)
 	staged := path + ".tmp"
 	if err := os.WriteFile(staged, data, statePerm); err != nil {
 		return err
