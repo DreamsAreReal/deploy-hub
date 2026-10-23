@@ -7,21 +7,52 @@ on:
         description: deploy-hub branch or commit with the mutation engine
         type: string
         default: mutation-shards
+      runner:
+        description: JSON list of runner labels for the shard jobs
+        type: string
+        default: '["ubuntu-latest"]'
+      max_parallel:
+        description: How many shards run at the same time
+        type: number
+        default: 20
+      yield_to:
+        description: Workflow file of the app whose queued or running runs a shard gives the runner up to
+        type: string
+        default: ""
 
 permissions: {}
 
 jobs:
   shard:
     name: tasks mutation shard ${{ matrix.shard }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runner) }}
     timeout-minutes: 240
     permissions:
       contents: read
+      actions: read
     strategy:
       fail-fast: false
+      max-parallel: ${{ inputs.max_parallel }}
       matrix:
         shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
     steps:
+      - name: Give the runner up to a waiting deploy
+        if: inputs.yield_to != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          WORKFLOW: ${{ inputs.yield_to }}
+        run: |
+          set -euo pipefail
+          for status in queued in_progress; do
+            count="$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$REPO/actions/workflows/$WORKFLOW/runs?status=$status&per_page=1" | jq .total_count)"
+            if [ "$count" != "0" ]; then
+              echo "::error::$WORKFLOW has a $status run; this shard yields the runner, rerun it later"
+              exit 1
+            fi
+          done
+
       - name: Check out the hub
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
