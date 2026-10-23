@@ -51,6 +51,7 @@ const (
 	CmdSelfUpdate = "self-update"
 	CmdSudoers    = "sudoers-sync"
 	CmdVersion    = "version"
+	CmdBootstrap  = "bootstrap"
 
 	binDocker    = "docker"
 	binSudo      = "sudo"
@@ -68,6 +69,7 @@ commands:
   host-sync <app> <tag>            install the app's gated host files as root (policy host spec)
   self-update [sha-<commit>]       replace this binary with a released, gated build (root)
   sudoers-sync                     write the sudoers rule of the runner from the policy (root)
+  bootstrap [sha-<commit>]         install the first gated build on a fresh hub (run on the operator machine)
   version                          print the commit this binary was built from
   prune                            delete old app images (keep running + 2 previous)
   provision --app NAME ...         prepare /opt/<app> on the VPS (root)
@@ -95,6 +97,7 @@ type App struct {
 	Owner   func(username string) func(path string) error
 	Checks  func() []gate.Check
 	Sudoers string
+	Token   string
 }
 
 type handler struct {
@@ -118,6 +121,7 @@ var handlers = map[string]handler{
 	CmdSelfUpdate: {run: runSelfUpdate, binaries: []string{selfupdate.InstalledCommand, selfupdate.CandidateCommand, selfupdate.VisudoCommand}, onServer: true},
 	CmdSudoers:    {run: runSudoersSync, binaries: []string{selfupdate.VisudoCommand}, onServer: true},
 	CmdVersion:    {run: runVersion},
+	CmdBootstrap:  {run: runBootstrap, binaries: []string{selfupdate.SSHBinary}},
 	CmdHostSync:   {run: runHostSync, binaries: []string{hostsync.DockerBinary, hostsync.SystemctlBinary, hostsync.AnalyzeBinary, hostsync.CaddyBinary}, onServer: true},
 }
 
@@ -134,11 +138,12 @@ type Deps struct {
 	Now     func() time.Time
 	Checks  func() []gate.Check
 	Sudoers string
+	Token   string
 }
 
 func OSDeps() Deps {
 	return Deps{Exec: func(names ...string) procexec.Runner { return procexec.NewOS(names...) }, Owner: ChownTo, Now: time.Now, Checks: catalog.Checks,
-		Sudoers: selfupdate.DefaultSudoers}
+		Sudoers: selfupdate.DefaultSudoers, Token: selfupdate.DefaultPATFile}
 }
 
 func Main(ctx context.Context, args []string, env Env, stdio IO) int {
@@ -164,7 +169,7 @@ func Run(ctx context.Context, args []string, env Env, stdio IO, deps Deps) int {
 	counts := &obs.LevelCounts{}
 	log, closeLog := openLogger(cfg, args[0], h, stdio.Stderr, counts)
 	defer closeLog()
-	a := &App{Config: cfg, IO: stdio, Out: stdout, Err: stderr, Now: deps.Now, Log: log, Owner: deps.Owner, Exec: deps.Exec, Checks: deps.Checks, Sudoers: deps.Sudoers}
+	a := &App{Config: cfg, IO: stdio, Out: stdout, Err: stderr, Now: deps.Now, Log: log, Owner: deps.Owner, Exec: deps.Exec, Checks: deps.Checks, Sudoers: deps.Sudoers, Token: deps.Token}
 	started := time.Now()
 	log.Info("command started", "args", len(args)-1)
 	code, panicked := a.invoke(ctx, h, args[1:])

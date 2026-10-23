@@ -27,7 +27,12 @@ import (
 )
 
 const (
-	downloadURL = "browser_download_url"
+	assetURL    = "url"
+	pat         = "github_pat_good"
+	wrongPAT    = "github_pat_wrong"
+	noRuns      = `{"workflow_runs":[]}`
+	forged      = "evil"
+	behind      = `{"status":"behind"}`
 	assetName   = "name"
 	garbage     = "garbage"
 	repo        = "Owner/deploy-hub"
@@ -38,6 +43,10 @@ const (
 	oldBinary   = "old binary"
 	latest      = "/repos/" + repo + "/releases/latest"
 	runsPath    = "/repos/" + repo + "/actions/workflows/ci.yml/runs"
+	assets      = "/repos/" + repo + "/releases/assets/"
+	binaryPath  = assets + "11"
+	sumPath     = assets + "12"
+	comparePath = "/repos/" + repo + "/compare/" + oldCommit + "..." + newCommit
 	verify      = "visudo -cf"
 	version     = InstalledCommand + " version"
 	candidate   = CandidateCommand + " version"
@@ -48,6 +57,7 @@ type hub struct {
 	mu      sync.Mutex
 	routes  map[string]string
 	queries []string
+	auth    []string
 	srv     *httptest.Server
 }
 
@@ -55,6 +65,11 @@ func (h *hub) handle(w http.ResponseWriter, r *http.Request) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.queries = append(h.queries, r.URL.RawQuery)
+	h.auth = append(h.auth, r.Header.Get("Authorization"))
+	if r.Header.Get("Authorization") != "Bearer "+pat {
+		http.Error(w, "Bad credentials", http.StatusUnauthorized)
+		return
+	}
 	body, ok := h.routes[r.URL.Path]
 	if !ok {
 		http.NotFound(w, r)
@@ -69,11 +84,11 @@ func sum(data string) string {
 }
 
 func releaseJSON(h *hub, tag, target string) string {
-	prefix := h.srv.URL + "/" + repo + "/releases/download/" + tag + "/"
+	prefix := h.srv.URL + assets
 	doc := map[string]any{"tag_name": tag, "target_commitish": target, "assets": []map[string]string{
-		{assetName: AssetBinary, downloadURL: prefix + AssetBinary},
-		{assetName: AssetSum, downloadURL: prefix + AssetSum},
-		{assetName: "notes.txt", downloadURL: prefix + "notes.txt"},
+		{assetName: AssetBinary, assetURL: prefix + "11"},
+		{assetName: AssetSum, assetURL: prefix + "12"},
+		{assetName: "notes.txt", assetURL: prefix + "13"},
 	}}
 	data, _ := json.Marshal(doc)
 	return string(data)
@@ -114,10 +129,11 @@ func newFixture(t *testing.T) *fixture {
 	h.srv = httptest.NewServer(http.HandlerFunc(h.handle))
 	t.Cleanup(h.srv.Close)
 	h.routes = map[string]string{
-		latest:   releaseJSON(h, newTag, newCommit),
-		runsPath: runsJSON(newCommit, mainBranch, pushEvent, success, ".github/workflows/ci.yml"),
-		"/" + repo + "/releases/download/" + newTag + "/" + AssetBinary: newBinary,
-		"/" + repo + "/releases/download/" + newTag + "/" + AssetSum:    sum(newBinary) + "  deploy-hub-linux-amd64\n",
+		latest:      releaseJSON(h, newTag, newCommit),
+		runsPath:    runsJSON(newCommit, mainBranch, pushEvent, success, ".github/workflows/ci.yml"),
+		binaryPath:  newBinary,
+		sumPath:     sum(newBinary) + "  deploy-hub-linux-amd64\n",
+		comparePath: `{"status":"ahead"}`,
 	}
 	dir := t.TempDir()
 	testutil.Write(t, filepath.Join(dir, "deploy-hub"), oldBinary)
@@ -131,7 +147,7 @@ func newFixture(t *testing.T) *fixture {
 	f.exec = &procexectest.Fake{Handler: func(c procexec.Command) (procexec.Result, error) { return f.script.Handle(c) }}
 	now := func() time.Time { return time.Date(2026, 10, 23, 2, 0, 0, 0, time.UTC) }
 	f.u = Updater{
-		Source:  Source{API: h.srv.URL, Download: h.srv.URL, Repo: repo, Client: h.srv.Client()},
+		Source:  Source{API: h.srv.URL, Repo: repo, Token: pat, Client: h.srv.Client()},
 		Binary:  filepath.Join(dir, "deploy-hub"),
 		Current: oldCommit,
 		Exec:    f.exec,
@@ -196,7 +212,7 @@ func TestRefusesReleasesThatAreNotGatedBuilds(t *testing.T) {
 		"assets elsewhere": {func(f *fixture) {
 			f.hub.routes[latest] = strings.ReplaceAll(f.hub.routes[latest], f.hub.srv.URL, "https://evil.example")
 		}, ErrAsset},
-		"no successful run": {func(f *fixture) { f.hub.routes[runsPath] = `{"workflow_runs":[]}` }, ErrNotGated},
+		"no successful run": {func(f *fixture) { f.hub.routes[runsPath] = noRuns }, ErrNotGated},
 		"failed run": {func(f *fixture) {
 			f.hub.routes[runsPath] = runsJSON(newCommit, mainBranch, pushEvent, "failure", ".github/workflows/ci.yml")
 		}, ErrNotGated},
@@ -212,11 +228,15 @@ func TestRefusesReleasesThatAreNotGatedBuilds(t *testing.T) {
 		"run of another commit": {func(f *fixture) {
 			f.hub.routes[runsPath] = runsJSON(oldCommit, mainBranch, pushEvent, success, ".github/workflows/ci.yml")
 		}, ErrNotGated},
-		"substituted binary":         {func(f *fixture) { f.hub.routes["/"+repo+"/releases/download/"+newTag+"/"+AssetBinary] = "evil" }, ErrChecksum},
-		"checksum not a sha256":      {func(f *fixture) { f.hub.routes["/"+repo+"/releases/download/"+newTag+"/"+AssetSum] = "nope" }, ErrSumFormat},
-		"binary missing":             {func(f *fixture) { delete(f.hub.routes, "/"+repo+"/releases/download/"+newTag+"/"+AssetBinary) }, ErrHTTP},
-		"checksum missing":           {func(f *fixture) { delete(f.hub.routes, "/"+repo+"/releases/download/"+newTag+"/"+AssetSum) }, ErrHTTP},
+		"substituted binary":         {func(f *fixture) { f.hub.routes[binaryPath] = forged }, ErrChecksum},
+		"checksum not a sha256":      {func(f *fixture) { f.hub.routes[sumPath] = "nope" }, ErrSumFormat},
+		"binary missing":             {func(f *fixture) { delete(f.hub.routes, binaryPath) }, ErrHTTP},
+		"checksum missing":           {func(f *fixture) { delete(f.hub.routes, sumPath) }, ErrHTTP},
 		"no release":                 {func(f *fixture) { delete(f.hub.routes, latest) }, ErrHTTP},
+		"main was rewritten":         {func(f *fixture) { f.hub.routes[comparePath] = `{"status":"diverged"}` }, ErrRewritten},
+		"release is older":           {func(f *fixture) { f.hub.routes[comparePath] = behind }, ErrRewritten},
+		"no token":                   {func(f *fixture) { f.u.Source.Token = "" }, ErrNoToken},
+		"wrong token":                {func(f *fixture) { f.u.Source.Token = wrongPAT }, ErrHTTP},
 		"candidate is another build": {func(f *fixture) { f.script[candidate] = procexectest.Reply{Res: procexec.Result{Stdout: oldCommit}} }, ErrVersion},
 		"candidate does not start":   {func(f *fixture) { f.script[candidate] = procexectest.Reply{Err: errors.New("exec format error")} }, ErrVersion},
 	}
@@ -319,10 +339,86 @@ func FuzzReleaseAcceptsOnlyMatchingShaTags(f *testing.F) {
 	f.Add(newTag, newCommit)
 	f.Add("v1", "main")
 	f.Fuzz(func(t *testing.T, tag, target string) {
-		s := Source{Download: "https://github.com", Repo: repo}
+		s := Source{API: "https://api.github.com", Repo: repo}
 		r, err := s.release(releaseDoc{TagName: tag, Target: target}, "")
 		if err == nil || (ValidTag(tag) && tag == TagPrefix+target && !errors.Is(err, ErrAsset)) {
 			t.Fatalf("%q %q: %+v %v", tag, target, r, err)
 		}
 	})
+}
+
+func TestNoTokenRefusesBeforeAnyRequest(t *testing.T) {
+	f := newFixture(t)
+	f.u.Source.Token = ""
+	testutil.Is(t, f.u.Run(context.Background(), ""), ErrNoToken)
+	testutil.Equal(t, len(f.hub.auth), 0)
+}
+
+func TestWrongTokenIsReportedAsUnauthorized(t *testing.T) {
+	f := newFixture(t)
+	f.u.Source.Token = wrongPAT
+	err := f.u.Run(context.Background(), "")
+	testutil.Is(t, err, ErrHTTP)
+	testutil.Contains(t, err.Error(), "401")
+	testutil.Equal(t, testutil.Read(t, f.u.Binary), oldBinary)
+}
+
+func TestEveryRequestCarriesTheToken(t *testing.T) {
+	f := newFixture(t)
+	testutil.NoErr(t, f.u.Run(context.Background(), ""))
+	testutil.Equal(t, len(f.hub.auth), 5)
+	for _, a := range f.hub.auth {
+		testutil.Equal(t, a, "Bearer "+pat)
+	}
+}
+
+func TestPinnedRollbackSkipsTheAncestryCheck(t *testing.T) {
+	f := newFixture(t)
+	f.hub.routes["/repos/"+repo+"/releases/tags/"+newTag] = f.hub.routes[latest]
+	f.hub.routes[comparePath] = behind
+	testutil.NoErr(t, f.u.Run(context.Background(), newTag))
+	testutil.Equal(t, testutil.Read(t, f.u.Binary), newBinary)
+}
+
+func TestUnknownCurrentCommitSkipsTheAncestryCheck(t *testing.T) {
+	f := newFixture(t)
+	f.u.Current = "dev"
+	delete(f.hub.routes, comparePath)
+	testutil.NoErr(t, f.u.Run(context.Background(), ""))
+}
+
+func TestAssetRedirectDropsTheToken(t *testing.T) {
+	var seen []string
+	storage := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.Header.Get("Authorization"))
+		_, _ = w.Write([]byte(newBinary))
+	}))
+	t.Cleanup(storage.Close)
+	f := newFixture(t)
+	mux := http.NewServeMux()
+	mux.HandleFunc(binaryPath, func(w http.ResponseWriter, r *http.Request) {
+		testutil.Equal(t, r.Header.Get("Accept"), acceptBinary)
+		http.Redirect(w, r, storage.URL+"/signed", http.StatusFound)
+	})
+	mux.HandleFunc("/", f.hub.handle)
+	f.hub.srv.Config.Handler = mux
+	testutil.NoErr(t, f.u.Run(context.Background(), ""))
+	testutil.Equal(t, testutil.Read(t, f.u.Binary), newBinary)
+	testutil.Equal(t, len(seen), 1)
+	testutil.Equal(t, seen[0], "")
+}
+
+func TestEndlessAssetRedirectsFail(t *testing.T) {
+	f := newFixture(t)
+	hops := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc(binaryPath, func(w http.ResponseWriter, r *http.Request) {
+		hops++
+		testutil.Equal(t, r.Header.Get("Authorization"), "Bearer "+pat)
+		http.Redirect(w, r, binaryPath, http.StatusFound)
+	})
+	mux.HandleFunc("/", f.hub.handle)
+	f.hub.srv.Config.Handler = mux
+	testutil.Is(t, f.u.Run(context.Background(), ""), ErrRedirects)
+	testutil.Equal(t, hops, maxRedirects)
 }
