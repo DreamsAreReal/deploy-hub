@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -256,4 +257,21 @@ func TestGateCommandHandsTheCacheOverAndKeepsTheVerdicts(t *testing.T) {
 		return gate.Pass(nil)
 	}}}
 	testutil.Equal(t, h2.run(append([]string{CmdGate}, gateFlags(hubApp, hubRepo, commitSha, gatePolicy(t), t.TempDir(), filepath.Join(t.TempDir(), "g"))...)...), ExitFail)
+}
+
+func TestEngineVersionCommand(t *testing.T) {
+	h := newHarness(t)
+	h.exec.Handler = func(c procexec.Command) (procexec.Result, error) {
+		if slices.Contains(c.Args, "{{.Dir}}") {
+			return procexec.Result{Stdout: "/nowhere\n"}, nil
+		}
+		return procexec.Result{Stdout: ""}, nil
+	}
+	testutil.Equal(t, h.run(CmdEngine), ExitOK)
+	testutil.Equal(t, len(strings.TrimSpace(h.out.String())), 64)
+	testutil.Equal(t, h.run(CmdEngine, "extra"), ExitUsage)
+	testutil.Contains(t, h.err.String(), usageEngine)
+	h.exec.Handler = func(procexec.Command) (procexec.Result, error) { return procexec.Result{}, errSim }
+	testutil.Equal(t, h.run(CmdEngine), ExitFail)
+	testutil.Contains(t, h.err.String(), enginePrefix)
 }

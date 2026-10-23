@@ -243,6 +243,7 @@ func TestKeyBaseFollowsModuleToolchainAndPolicy(t *testing.T) {
 
 func cachedSetup(t *testing.T) (gate.Workspace, *fakeGo) {
 	t.Helper()
+	versioned(t)
 	ws, fg := setup(t, func(mutated string, _ []string) outcome {
 		return outcome{killed: strings.Contains(mutated, "!(a > 0)")}
 	})
@@ -381,4 +382,23 @@ func TestIncompleteRunStillKeepsItsFinalVerdicts(t *testing.T) {
 	v, err := LoadVerdicts(ws.Report(VerdictsFile), Digest([]byte(data)))
 	testutil.NoErr(t, err)
 	testutil.Equal(t, len(v.Entries), len(rep.Entries)-1)
+}
+
+func versioned(t *testing.T) {
+	t.Helper()
+	old := EngineVersion
+	EngineVersion = "test-engine"
+	t.Cleanup(func() { EngineVersion = old })
+}
+
+func TestUnversionedEngineNeverCachesOrReuses(t *testing.T) {
+	ws, fg := cachedSetup(t)
+	runOnce(t, ws, fg)
+	ws.MutationCache = keepVerdicts(t, ws)
+	EngineVersion = ""
+	rep, ran := runOnce(t, ws, fg)
+	testutil.True(t, ran > 0 && rep.Cached == 0, "an engine without a version reuses nothing")
+	v, err := LoadVerdicts(ws.Report(VerdictsFile), Digest([]byte(testutil.Read(t, ws.Report(VerdictsFile)))))
+	testutil.NoErr(t, err)
+	testutil.Equal(t, len(v.Entries), 0)
 }

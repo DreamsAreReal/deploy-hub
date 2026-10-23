@@ -2,62 +2,70 @@ package mutation
 
 import (
 	"context"
-	"os"
+	"errors"
+	"log/slog"
 	"path/filepath"
-	"slices"
-	"strings"
 	"testing"
 
+	"github.com/DreamsAreReal/deploy-hub/internal/gate"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/golang"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
+	"github.com/DreamsAreReal/deploy-hub/internal/procexec/procexectest"
 	"github.com/DreamsAreReal/deploy-hub/internal/testutil"
 )
 
-var policyPackages = []string{"internal/gate/policy", "internal/validate"}
+const (
+	engRun    = "internal/gate/mutation/run.go"
+	engTest   = "internal/gate/mutation/x_test.go"
+	engGate   = "internal/gate/gate.go"
+	engPolicy = "internal/gate/policy/policy.go"
+	engOther  = "internal/other/other.go"
+)
 
-func goOutput(t *testing.T, args ...string) string {
+func engineModule(t *testing.T) string {
 	t.Helper()
-	res, err := procexec.NewOS(golang.GoBinary).Run(context.Background(), procexec.Command{Name: golang.GoBinary, Args: args})
-	testutil.NoErr(t, err)
-	return strings.TrimSpace(res.Stdout)
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod":  "module example.com/hub\n\ngo 1.27\n",
+		engRun:    "package mutation\n\nimport (\n\t\"example.com/hub/internal/gate\"\n\t\"example.com/hub/internal/gate/policy\"\n)\n\nvar _ = gate.X + policy.Y\n",
+		engTest:   "package mutation\n",
+		engGate:   "package gate\n\nconst X = 1\n",
+		engPolicy: "package policy\n\nconst Y = 1\n",
+		engOther:  "package other\n",
+	}
+	for rel, body := range files {
+		testutil.Write(t, filepath.Join(dir, rel), body)
+	}
+	return dir
 }
 
-func engineSources(t *testing.T) string {
-	t.Helper()
-	root := goOutput(t, "list", "-m", "-f", "{{.Dir}}")
-	listing := goOutput(t, "list", "-deps", "-f", "{{if not .Standard}}{{.Dir}}{{range .GoFiles}} {{.}}{{end}}{{end}}", ".")
-	lines := strings.Split(listing, "\n")
-	parts := make([]string, 0, len(lines))
-	for _, line := range lines {
-		parts = append(parts, packageSources(t, root, strings.Fields(line))...)
+func TestSourceVersionFollowsTheEngineSources(t *testing.T) {
+	dir := engineModule(t)
+	ws := gate.Workspace{Src: dir, Exec: procexec.NewOS(golang.GoBinary), Log: slog.New(slog.DiscardHandler)}
+	version := func() string {
+		v, err := SourceVersion(context.Background(), ws)
+		testutil.NoErr(t, err)
+		return v
 	}
-	return hashOf(parts...)
-}
-
-func packageSources(t *testing.T, root string, fields []string) []string {
-	t.Helper()
-	rel, err := filepath.Rel(root, fields[0])
-	if err != nil || strings.HasPrefix(rel, parentDirElem) || slices.Contains(policyPackages, filepath.ToSlash(rel)) {
-		return nil
+	first := version()
+	testutil.Equal(t, len(first), 64)
+	steps := []struct {
+		file    string
+		changed bool
+	}{
+		{engTest, false},
+		{engPolicy, false},
+		{engOther, false},
+		{engGate, true},
+		{engRun, true},
 	}
-	dir, err := os.OpenRoot(fields[0])
-	testutil.NoErr(t, err)
-	defer func() { _ = dir.Close() }()
-	parts := make([]string, 0, 2*len(fields))
-	for _, f := range fields[1:] {
-		if rel == "internal/gate/mutation" && f == "engine.go" {
-			continue
-		}
-		data, rerr := dir.ReadFile(f)
-		testutil.NoErr(t, rerr)
-		parts = append(parts, filepath.ToSlash(filepath.Join(rel, f)), string(data))
+	for _, s := range steps {
+		before := version()
+		body := testutil.Read(t, filepath.Join(dir, s.file))
+		testutil.Write(t, filepath.Join(dir, s.file), body+"\nconst changed = 2\n")
+		testutil.Equal(t, version() != before, s.changed)
 	}
-	return parts
-}
-
-func TestEngineVersionCoversTheEngineSources(t *testing.T) {
-	got := engineSources(t)
-	if EngineVersion != got {
-		t.Fatalf("the mutation engine changed: cached verdicts must not survive it; set EngineVersion in engine.go to %q", got)
-	}
+	ws.Exec = &procexectest.Fake{Handler: func(procexec.Command) (procexec.Result, error) { return procexec.Result{}, errors.New("exit 1") }}
+	_, err := SourceVersion(context.Background(), ws)
+	testutil.Fails(t, err)
 }
