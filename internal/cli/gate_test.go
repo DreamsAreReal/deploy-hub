@@ -276,3 +276,15 @@ func TestEngineVersionCommand(t *testing.T) {
 	testutil.Equal(t, h.run(CmdEngine), ExitFail)
 	testutil.Contains(t, h.err.String(), enginePrefix)
 }
+
+func TestKeepVerdictsNeedsAReadableReportDirectory(t *testing.T) {
+	h := newHarness(t)
+	out := t.TempDir()
+	a := &App{Out: console.New(h.out)}
+	testutil.NoErr(t, a.keepVerdicts(gate.Workspace{Out: out}))
+	testutil.Missing(t, filepath.Join(out, mutation.VerdictsFile))
+	testutil.Equal(t, h.out.String(), "")
+	file := filepath.Join(t.TempDir(), "file")
+	testutil.Write(t, file, "")
+	testutil.Fails(t, a.keepVerdicts(gate.Workspace{Out: file}))
+}

@@ -83,6 +83,7 @@ type engine struct {
 	cacheDir  string
 	workers   []*workerCache
 	index     *testIndex
+	guard     diskGuard
 }
 
 type Report struct {
@@ -151,9 +152,12 @@ func Run(ctx context.Context, ws gate.Workspace) (Report, error) {
 		return Report{}, err
 	}
 	defer func() { _ = os.RemoveAll(ws.Report(cacheDir)) }()
-	e := &engine{ws: ws, baselines: map[string]time.Duration{}, dir: ws.Report(mutantsDir), cacheDir: ws.Report(cacheDir), cache: cacheEnv + ws.Report(cacheDir)}
+	e := &engine{ws: ws, baselines: map[string]time.Duration{}, dir: ws.Report(mutantsDir), cacheDir: ws.Report(cacheDir), cache: cacheEnv + ws.Report(cacheDir), guard: guard}
 	if berr := e.measureBaselines(ctx, pkgs); berr != nil {
 		return Report{}, berr
+	}
+	if gerr := e.guard.check(); gerr != nil {
+		return Report{}, fmt.Errorf("%w: %w", ErrIncomplete, gerr)
 	}
 	return e.incremental(ctx, pkgs)
 }
