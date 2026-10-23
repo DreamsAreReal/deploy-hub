@@ -32,6 +32,7 @@ func TestWorkerCachesShareTheBaseAndDropMutantBuilds(t *testing.T) {
 	testutil.Write(t, filepath.Join(w.dir, "trim.txt"), "2")
 	testutil.Write(t, filepath.Join(w.dir, "cd", "cd56-d"), "mutant build")
 	testutil.Write(t, filepath.Join(w.dir, "ab", "ab78-a"), "mutant action")
+	w.keep = 0
 	testutil.NoErr(t, w.trim())
 	testutil.Missing(t, filepath.Join(w.dir, "cd", "cd56-d"))
 	testutil.Missing(t, filepath.Join(w.dir, "ab", "ab78-a"))
@@ -69,4 +70,22 @@ func TestFailedTrimMakesTheMutantAnError(t *testing.T) {
 	e.index = newIndex()
 	gone := &workerCache{dir: filepath.Join(t.TempDir(), "gone")}
 	testutil.Equal(t, e.run(context.Background(), 1, target{mutant: Mutant{File: fileX}}, gone), StatusErrored)
+}
+
+func TestWorkerCacheKeepsMutantBuildsUntilItsBudget(t *testing.T) {
+	base := filepath.Join(t.TempDir(), cacheDir)
+	testutil.Write(t, filepath.Join(base, "ab", "ab12-a"), "action")
+	caches, err := (&engine{cacheDir: base}).workerCaches(1)
+	testutil.NoErr(t, err)
+	w := caches[0]
+	testutil.Equal(t, w.keep, workerCacheKeep)
+	w.keep = 10
+	testutil.Write(t, filepath.Join(w.dir, "cd", "cd56-d"), "small")
+	testutil.NoErr(t, w.trim())
+	testutil.Equal(t, testutil.Read(t, filepath.Join(w.dir, "cd", "cd56-d")), "small")
+	testutil.Write(t, filepath.Join(w.dir, "cd", "cd78-d"), "now over ten bytes")
+	testutil.NoErr(t, w.trim())
+	testutil.Missing(t, filepath.Join(w.dir, "cd", "cd56-d"))
+	testutil.Missing(t, filepath.Join(w.dir, "cd", "cd78-d"))
+	testutil.Equal(t, testutil.Read(t, filepath.Join(w.dir, "ab", "ab12-a")), "action")
 }
