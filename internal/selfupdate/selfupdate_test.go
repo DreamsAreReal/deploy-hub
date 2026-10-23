@@ -42,6 +42,8 @@ const (
 	version     = InstalledCommand + " version"
 	candidate   = CandidateCommand + " version"
 	syncCmd     = InstalledCommand + " sudoers-sync"
+	runnerCmd   = InstalledCommand + " ci-runner-sync"
+	setupCmd    = SetupCommand + " host"
 )
 
 type hub struct {
@@ -126,6 +128,8 @@ func newFixture(t *testing.T) *fixture {
 		candidate: {Res: procexec.Result{Stdout: newCommit + "\n"}},
 		version:   {Res: procexec.Result{Stdout: newCommit + "\n"}},
 		syncCmd:   {},
+		runnerCmd: {},
+		setupCmd:  {},
 		verify:    {},
 	}
 	f.exec = &procexectest.Fake{Handler: func(c procexec.Command) (procexec.Result, error) { return f.script.Handle(c) }}
@@ -137,6 +141,7 @@ func newFixture(t *testing.T) *fixture {
 		Exec:    f.exec,
 		Sudo: Sudoers{Path: filepath.Join(dir, "sudoers"), Binary: DefaultBinary, Exec: f.exec,
 			Hub: policy.Hub{SudoUser: "deploy", SudoCommands: []string{policy.SudoCaddySync, policy.SudoHostSync, policy.SudoSelfUpdate}}},
+		Runner:  RunnerFiles{Files: runnerTree(), Dir: filepath.Join(dir, "ci-runner"), Exec: f.exec},
 		Journal: journal.Journal{Path: filepath.Join(dir, "deploys.log"), Now: now},
 		Metrics: f.metrics, Now: now, Out: console.New(f.out), Log: slog.New(slog.DiscardHandler),
 	}
@@ -156,7 +161,7 @@ func TestInstallsTheLatestGatedRelease(t *testing.T) {
 	testutil.Equal(t, testutil.Read(t, f.u.Binary+previousSuffix), oldBinary)
 	testutil.Perm(t, f.u.Binary, binaryPerm)
 	testutil.Missing(t, f.u.Binary+candidateSuffix)
-	testutil.Equal(t, strings.Join(f.exec.Lines(), "\n"), strings.Join([]string{candidate, version, syncCmd}, "\n"))
+	testutil.Equal(t, strings.Join(f.exec.Lines(), "\n"), strings.Join([]string{candidate, version, syncCmd, runnerCmd}, "\n"))
 	testutil.Contains(t, f.journal(t), "deploy-hub@2222222 self-update ok")
 	testutil.Contains(t, f.out.String(), "self-update: installed "+newTag)
 	testutil.Equal(t, f.metrics.value(obs.MetricSelfUpdateSuccess), 1.0)
@@ -164,10 +169,18 @@ func TestInstallsTheLatestGatedRelease(t *testing.T) {
 	testutil.Contains(t, strings.Join(f.hub.queries, "&"), "head_sha="+newCommit, "branch=main", "event=push", "status=success")
 }
 
-func TestUpToDateOnlyKeepsTheSudoersRule(t *testing.T) {
+func TestUpToDateKeepsTheSudoersRuleAndTheRunnerFiles(t *testing.T) {
 	f := newFixture(t)
 	f.u.Current = newCommit
 	testutil.NoErr(t, f.u.Run(context.Background(), ""))
+	testutil.Contains(t, f.journal(t), "deploy-hub@2222222 self-update ok")
+	testutil.Equal(t, f.metrics.value(obs.MetricSelfUpdateInstalled), 1.0)
+	testutil.Equal(t, f.exec.Count(setupCmd), 1)
+	testutil.NoErr(t, os.Remove(f.u.Journal.Path))
+	f.metrics.samples = nil
+	f.out.Reset()
+	testutil.NoErr(t, f.u.Run(context.Background(), ""))
+	testutil.Equal(t, f.exec.Count(setupCmd), 1)
 	testutil.Equal(t, testutil.Read(t, f.u.Binary), oldBinary)
 	testutil.Equal(t, testutil.Read(t, f.u.Sudo.Path), f.u.Sudo.Render())
 	testutil.Equal(t, f.journal(t), "")

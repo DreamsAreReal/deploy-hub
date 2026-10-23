@@ -38,3 +38,10 @@ func TestSudoersSyncWritesTheRuleFromThePolicy(t *testing.T) {
 	testutil.Contains(t, rule, "deploy ALL=(root) NOPASSWD: /opt/deploy-hub/bin/deploy-hub host-sync *\n", "self-update \"\"\n", "caddy-sync \"\"\n")
 	testutil.Equal(t, h.exec.Count("visudo -cf"), 1)
 }
+
+func TestRunnerSyncRunsOnlyFromTheInstalledBinary(t *testing.T) {
+	h := newHarness(t)
+	testutil.Equal(t, h.run(CmdRunnerSync), ExitFail)
+	testutil.Contains(t, h.err.String(), "ci-runner-sync: "+ErrNotInstalled.Error())
+	testutil.Equal(t, len(h.exec.Lines()), 0)
+}

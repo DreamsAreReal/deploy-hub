@@ -94,6 +94,9 @@ var known = map[string]builder{
 	"deploy-hub-candidate": func(ctx context.Context, a []string) *exec.Cmd {
 		return exec.CommandContext(ctx, "/opt/deploy-hub/bin/deploy-hub.new", a...)
 	},
+	"ci-runner-setup": func(ctx context.Context, a []string) *exec.Cmd {
+		return exec.CommandContext(ctx, "/opt/deploy-hub/ci-runner/ci-runner-setup", a...)
+	},
 	"systemd-analyze": func(ctx context.Context, a []string) *exec.Cmd {
 		return exec.CommandContext(ctx, "systemd-analyze", a...)
 	},

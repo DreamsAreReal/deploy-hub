@@ -42,6 +42,7 @@ type Updater struct {
 	Current string
 	Exec    procexec.Runner
 	Sudo    Sudoers
+	Runner  RunnerFiles
 	Journal journal.Journal
 	Metrics obs.Pusher
 	Now     func() time.Time
@@ -91,7 +92,8 @@ func (u Updater) update(ctx context.Context, tag string) (Release, bool, error) 
 		return Release{}, false, err
 	}
 	if r.Commit == u.Current {
-		return r, false, u.Sudo.Sync(ctx)
+		changed, cerr := u.keep(ctx)
+		return r, changed, cerr
 	}
 	if gerr := u.Source.Gated(ctx, r.Commit); gerr != nil {
 		return r, false, gerr
@@ -101,6 +103,13 @@ func (u Updater) update(ctx context.Context, tag string) (Release, bool, error) 
 		return r, false, err
 	}
 	return r, true, u.install(ctx, r, bin)
+}
+
+func (u Updater) keep(ctx context.Context) (bool, error) {
+	if err := u.Sudo.Sync(ctx); err != nil {
+		return false, err
+	}
+	return u.Runner.Sync(ctx)
 }
 
 func (u Updater) install(ctx context.Context, r Release, bin []byte) error {
@@ -122,7 +131,7 @@ func (u Updater) install(ctx context.Context, r Release, bin []byte) error {
 	}
 	err := u.reports(ctx, InstalledCommand, r.Commit)
 	if err == nil {
-		_, err = u.Exec.Run(ctx, procexec.Command{Name: InstalledCommand, Args: []string{VerbSudoersSync}})
+		err = u.apply(ctx)
 	}
 	if err != nil {
 		return u.restore(ctx, err)
@@ -134,7 +143,7 @@ func (u Updater) restore(ctx context.Context, cause error) error {
 	started := u.Now()
 	err := copyFile(u.Binary+previousSuffix, u.Binary)
 	if err == nil {
-		_, err = u.Exec.Run(context.WithoutCancel(ctx), procexec.Command{Name: InstalledCommand, Args: []string{VerbSudoersSync}})
+		err = u.apply(context.WithoutCancel(ctx))
 	}
 	state := journal.ResultOK
 	if err != nil {
@@ -143,6 +152,15 @@ func (u Updater) restore(ctx context.Context, cause error) error {
 	}
 	u.record(registry.Sha7(u.Current), err == nil, started, fmt.Sprintf(restoredFormat, state))
 	return fmt.Errorf("%w: %w", ErrUpdate, cause)
+}
+
+func (u Updater) apply(ctx context.Context) error {
+	for _, verb := range []string{VerbSudoersSync, VerbRunnerSync} {
+		if _, err := u.Exec.Run(ctx, procexec.Command{Name: InstalledCommand, Args: []string{verb}}); err != nil {
+			return fmt.Errorf("%s: %w: %s", verb, err, procexec.Output(err))
+		}
+	}
+	return nil
 }
 
 func (u Updater) reports(ctx context.Context, command, commit string) error {
@@ -157,12 +175,16 @@ func (u Updater) reports(ctx context.Context, command, commit string) error {
 }
 
 func writeFile(path string, data []byte) error {
-	f, err := os.OpenFile(filepath.Clean(path), os.O_WRONLY|os.O_CREATE|os.O_EXCL, binaryPerm)
+	return writeMode(path, data, binaryPerm)
+}
+
+func writeMode(path string, data []byte, perm os.FileMode) error {
+	f, err := os.OpenFile(filepath.Clean(path), os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
 	if err != nil {
 		return err
 	}
 	_, werr := f.Write(data)
-	return errors.Join(werr, f.Sync(), f.Close())
+	return errors.Join(werr, f.Chmod(perm), f.Sync(), f.Close())
 }
 
 func copyFile(src, dst string) error {

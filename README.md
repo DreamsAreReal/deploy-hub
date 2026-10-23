@@ -377,6 +377,7 @@ commands:
 | `host-sync <app> <tag>` | root (via a narrow sudoers rule, called by `runner`) | installs the host files of an app's gated image, as listed in the policy (see [Host files](#host-files-host-sync)) |
 | `self-update [sha-<commit>]` | root (systemd timer every 10 minutes) | replaces the binary with the newest gated release of this repo (see [Releases and self-update](#releases-and-self-update)) |
 | `sudoers-sync` | root (called by `self-update`) | writes `/etc/sudoers.d/deploy-hub` from `hub:` in the policy |
+| `ci-runner-sync` | root (called by `self-update`) | installs the embedded `server/ci-runner` into `/opt/deploy-hub/ci-runner` and runs `ci-runner-setup host` when it changed |
 | `version` | anyone | prints the commit the binary was built from |
 | `prune` | root (systemd timer) | keeps the running image + 2 previous per app |
 | `provision --app … ` | root (from `onboard`) | prepares `/opt/<app>/` and the allowlist line |
@@ -405,8 +406,7 @@ root SSH to. `<vps>` is the server address.
 3. **Caddy** installed as the systemd service `caddy`, owning `:80`/`:443`.
 4. **Deploy key** — one ed25519 key for all repos, bound to the forced command:
 
-   ```
-   ssh-keygen -t ed25519 -f ~/.ssh/deploy_hub_key -N '' -C deploy-hub
+      ssh-keygen -t ed25519 -f ~/.ssh/deploy_hub_key -N '' -C deploy-hub
    PUB=$(cat ~/.ssh/deploy_hub_key.pub)
    ssh vpn bash -s <<EOF
    id deploy >/dev/null 2>&1 || useradd -m -s /bin/bash -G docker deploy
@@ -533,13 +533,25 @@ that passed the full gate on `main`:
    - the candidate (`/opt/deploy-hub/bin/deploy-hub.new`) reports that commit
      from `version`.
 4. It keeps the current binary as `deploy-hub.prev`, renames the candidate into
-   place, then checks the installed binary: `version` must print the commit and
-   `sudoers-sync` (from the new binary's policy) must pass `visudo -cf`. If
-   either fails, it copies `deploy-hub.prev` back and runs its `sudoers-sync`.
+   place, then checks the installed binary: `version` must print the commit,
+   `sudoers-sync` (from the new binary's policy) must pass `visudo -cf` and
+   `ci-runner-sync` must install the binary's CI runner files. If any of them
+   fails, it copies `deploy-hub.prev` back and runs its `sudoers-sync` and
+   `ci-runner-sync`.
+5. `ci-runner-sync`: the binary embeds `server/ci-runner` of its commit (hooks
+   `ci-job-started`, `ci-runner-clean`, units, `ci-runner-setup`), so the runner
+   files ship in the same gated release. When `/opt/deploy-hub/ci-runner`
+   differs from the embedded tree (content, mode, an extra or a symlinked file),
+   it writes the tree to `ci-runner.new`, keeps the current one as
+   `ci-runner.prev`, swaps them and runs `ci-runner-setup host` from the new
+   tree. If `host` fails, it puts `ci-runner.prev` back and runs its `host`
+   again. `host` restarts the runners (`try-restart`), so a job running at that
+   moment fails; this happens only when the runner files change.
 
 Every installed or refused release is journaled (`deploy-hub@<sha7> self-update
 ok|fail`, a restore adds `restored=ok|fail`); a run that finds the installed
-commit only rewrites the sudoers rule if it drifted. Metrics:
+commit only rewrites the sudoers rule and the CI runner files if they drifted
+(an installed runner tree is journaled like a release). Metrics:
 `deploy_hub_self_update_success` and `deploy_hub_self_update_installed`; the
 alert `DeployHubSelfUpdateFailed` fires when no run succeeded for 40 minutes.
 To pin an older gated release, run `sudo /opt/deploy-hub/bin/deploy-hub
@@ -821,13 +833,15 @@ registry login uses a job-local `DOCKER_CONFIG`. The production path does not
 change: the job reaches the hub only as `deploy@<vps>` through the forced
 command, with the OIDC token and the image digest.
 
-Install or update (root on the VPS, from a copy of `server/ci-runner`):
+Install and update: `deploy-hub self-update` installs `server/ci-runner` of the
+released commit into `/opt/deploy-hub/ci-runner` and runs `ci-runner-setup host`
+(see [Releases and self-update](#releases-and-self-update)); do not copy these
+files to the server by hand. Registering a repo needs a token, so it stays a
+command, run with the installed script:
 
 ```
-scp -r server/ci-runner vpn:/root/ci-runner-src
-ssh vpn /root/ci-runner-src/ci-runner-setup host
 gh api -X POST repos/DreamsAreReal/<app>/actions/runners/registration-token --jq .token \
-  | ssh vpn /root/ci-runner-src/ci-runner-setup register <app>
+  | ssh vpn /opt/deploy-hub/ci-runner/ci-runner-setup register <app>
 ```
 
 `host` is idempotent: `uidmap`/`slirp4netns`, the AppArmor profile that lets

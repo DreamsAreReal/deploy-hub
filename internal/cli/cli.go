@@ -52,6 +52,7 @@ const (
 	CmdSudoers    = "sudoers-sync"
 	CmdVersion    = "version"
 	CmdEngine     = "engine-version"
+	CmdRunnerSync = "ci-runner-sync"
 
 	binDocker    = "docker"
 	binSudo      = "sudo"
@@ -69,6 +70,7 @@ commands:
   host-sync <app> <tag>            install the app's gated host files as root (policy host spec)
   self-update [sha-<commit>]       replace this binary with a released, gated build (root)
   sudoers-sync                     write the sudoers rule of the runner from the policy (root)
+  ci-runner-sync                   install the CI runner host files of this build (root)
   version                          print the commit this binary was built from
   prune                            delete old app images (keep running + 2 previous)
   provision --app NAME ...         prepare /opt/<app> on the VPS (root)
@@ -117,7 +119,8 @@ var handlers = map[string]handler{
 	CmdGate:       {run: runGate, binaries: gateBinaries, verbose: true},
 	CmdTools:      {run: runTools, binaries: []string{tools.GoBinary, tools.TarBinary}, verbose: true},
 	CmdMCP:        {run: runMCP, binaries: []string{binSSH}},
-	CmdSelfUpdate: {run: runSelfUpdate, binaries: []string{selfupdate.InstalledCommand, selfupdate.CandidateCommand, selfupdate.VisudoCommand}, onServer: true},
+	CmdSelfUpdate: {run: runSelfUpdate, binaries: []string{selfupdate.InstalledCommand, selfupdate.CandidateCommand, selfupdate.VisudoCommand, selfupdate.SetupCommand}, onServer: true},
+	CmdRunnerSync: {run: runRunnerSync, binaries: []string{selfupdate.SetupCommand}, onServer: true},
 	CmdSudoers:    {run: runSudoersSync, binaries: []string{selfupdate.VisudoCommand}, onServer: true},
 	CmdVersion:    {run: runVersion},
 	CmdHostSync:   {run: runHostSync, binaries: []string{hostsync.DockerBinary, hostsync.SystemctlBinary, hostsync.AnalyzeBinary, hostsync.CaddyBinary}, onServer: true},

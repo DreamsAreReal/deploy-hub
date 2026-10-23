@@ -9,6 +9,7 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
 	"github.com/DreamsAreReal/deploy-hub/internal/selfupdate"
 	embedded "github.com/DreamsAreReal/deploy-hub/policy"
+	cirunner "github.com/DreamsAreReal/deploy-hub/server/ci-runner"
 )
 
 var Commit = "dev"
@@ -17,9 +18,10 @@ const (
 	usageSelfUpdate  = "usage: deploy-hub self-update [sha-<40 hex>]"
 	selfUpdatePrefix = "self-update: "
 	sudoersPrefix    = "sudoers-sync: "
+	runnerSyncPrefix = "ci-runner-sync: "
 )
 
-var ErrNotInstalled = errors.New("self-update only replaces " + selfupdate.DefaultBinary)
+var ErrNotInstalled = errors.New("only the binary installed as " + selfupdate.DefaultBinary + " updates the server")
 
 func runVersion(_ context.Context, a *App, _ procexec.Runner, _ []string) int {
 	a.Out.Println(Commit)
@@ -60,11 +62,29 @@ func runSelfUpdate(ctx context.Context, a *App, ex procexec.Runner, args []strin
 	}
 	u := selfupdate.Updater{
 		Source: selfupdate.Source{API: selfupdate.DefaultAPI, Download: selfupdate.DefaultDownload, Repo: defaultHubRepo, Client: &http.Client{}},
-		Binary: selfupdate.DefaultBinary, Current: Commit, Exec: ex, Sudo: sudo,
+		Binary: selfupdate.DefaultBinary, Current: Commit, Exec: ex, Sudo: sudo, Runner: runnerFiles(ex),
 		Journal: a.journal(), Metrics: a.metrics(), Now: a.Now, Out: a.Out, Log: a.Log,
 	}
 	if err := u.Run(ctx, tag); err != nil {
 		return a.failWith(selfUpdatePrefix, err)
+	}
+	return ExitOK
+}
+
+func runnerFiles(ex procexec.Runner) selfupdate.RunnerFiles {
+	return selfupdate.RunnerFiles{Files: cirunner.Files(), Dir: selfupdate.DefaultRunnerDir, Exec: ex}
+}
+
+func runRunnerSync(ctx context.Context, a *App, ex procexec.Runner, _ []string) int {
+	if a.Config.Paths.Binary() != selfupdate.DefaultBinary {
+		return a.failWith(runnerSyncPrefix, ErrNotInstalled)
+	}
+	changed, err := runnerFiles(ex).Sync(ctx)
+	if err != nil {
+		return a.failWith(runnerSyncPrefix, err)
+	}
+	if changed {
+		a.Out.Println(runnerSyncPrefix + "installed " + selfupdate.DefaultRunnerDir)
 	}
 	return ExitOK
 }
