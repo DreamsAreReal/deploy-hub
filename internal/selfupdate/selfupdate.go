@@ -98,6 +98,11 @@ func (u Updater) update(ctx context.Context, tag string) (Release, bool, error) 
 	if gerr := u.Source.Gated(ctx, r.Commit); gerr != nil {
 		return r, false, gerr
 	}
+	if tag == "" {
+		if derr := u.Source.Descends(ctx, u.Current, r.Commit); derr != nil {
+			return r, false, derr
+		}
+	}
 	bin, err := u.Source.Fetch(ctx, r)
 	if err != nil {
 		return r, false, err
