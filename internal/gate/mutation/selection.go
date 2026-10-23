@@ -198,7 +198,7 @@ func runAll(ctx context.Context, jobs []Job, workers int) error {
 	close(queue)
 	wg.Wait()
 	if ctx.Err() != nil {
-		return fmt.Errorf("%w: %w", ErrIncomplete, ctx.Err())
+		return fmt.Errorf("%w: %w", ErrIncomplete, context.Cause(ctx))
 	}
 	if slices.Contains(statuses, StatusErrored) {
 		return fmt.Errorf("%w: the test index is incomplete", ErrIncomplete)

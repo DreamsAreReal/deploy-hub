@@ -205,6 +205,17 @@ CPUs, at least two, where the CPUs are `NumCPU` capped by the tightest
 `cpu.max` quota. On the self-hosted runner the repo's slice (9G, 6 CPUs) sets
 both, not the host.
 
+Disk: the baseline runs and the test index build into one Go build cache in the
+report directory. Each mutation worker then gets its own copy made of hard
+links to it (no extra space), and after every mutant everything that mutant
+added to the worker's cache is deleted, so the build cache stays at its
+baseline size however many mutants run. Every 15 seconds, and once before it
+starts, the run measures its report directory (hard links counted once) and
+the free space of that disk; above `mutation_disk_gib` (20) or below
+`mutation_free_gib` (10 GiB free) it stops with `mutation testing stopped to
+protect the disk` and the numbers, keeps the verdicts it finished, and the
+check fails as incomplete.
+
 **Verdict cache (incremental mutation, Go).** Every Go mutant gets a key: the
 sha256 of everything its verdict depends on. That is the mutant itself (file,
 line, operator, edits); the build closure of every test binary that links its

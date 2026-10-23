@@ -160,6 +160,10 @@ func (e *engine) incremental(ctx context.Context, pkgs golang.Packages) (Report,
 		return Report{}, err
 	}
 	defer func() { _ = os.RemoveAll(e.dir) }()
+	defer e.dropWorkerCaches()
+	if e.workers, err = e.workerCaches(Workers()); err != nil {
+		return Report{}, fmt.Errorf("cannot seed the worker build caches: %w", err)
+	}
 	rep, err := e.execute(ctx, targets)
 	if len(rep.Entries) == len(targets) {
 		err = errors.Join(err, e.saveVerdicts(d.base, targets, rep))

@@ -16,6 +16,8 @@ limits:
   mutant_timeout_factor: 3
   findings_listed: 40
   stage_ready_timeout: 90s
+  mutation_disk_gib: 20
+  mutation_free_gib: 10
 licenses:
   - 0BSD
   - Apache-2.0
