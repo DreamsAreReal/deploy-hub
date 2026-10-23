@@ -31,7 +31,7 @@ quota=$(df -B1G --output=used,size,pcent "${HOME:-/nonexistent}" 2>/dev/null | a
 echo "ci-job-started: disk quota of $(id -un): ${quota:-unknown}"
 case "$quota" in
   *"(9"[5-9]"%)" | *"(100%)")
-    echo "ci-job-started: the disk quota of $(id -un) is full even after the last cleanup, refusing the job; free $HOME or raise its line in server/ci-runner/disk-quota of deploy-hub"
+    echo "ci-job-started: the disk quota of $(id -un) is full even after the last cleanup, refusing the job; free $HOME or raise its line in server/ci-runner/ci-disk-quota of deploy-hub"
     exit 1
     ;;
 esac

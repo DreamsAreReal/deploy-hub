@@ -13,7 +13,7 @@ LEGACY_USER=ci
 DISK_IMAGE=/srv/ci.img
 DISK_SIZE=${CI_DISK_SIZE:-120G}
 SUBID_COUNT=65536
-QUOTAS=$HERE/disk-quota
+QUOTAS=$HERE/ci-disk-quota
 DEPLOY_LOCK=/opt/deploy-hub/deploy.lock
 HIDDEN="/opt /root /home /etc/srv-backup /etc/wireguard /etc/deploy-hub /var/backups /var/lib/docker /var/lib/containerd -/var/lib/app-backup -/run/docker.sock -/var/run/docker.sock -/run/containerd"
 

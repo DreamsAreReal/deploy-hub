@@ -121,7 +121,7 @@ groups:
         expr: max by (runner) (max_over_time(deploy_hub_ci_quota_used_ratio[15m])) > 0.85
         annotations:
           summary: "CI disk quota of {{ $labels.runner }} is {{ $value | humanizePercentage }} full"
-          description: "Each CI user has a hard quota on /var/lib/ci (server/ci-runner/disk-quota of deploy-hub); at 100% its jobs fail with 'Disk quota exceeded' and ci-job-started refuses new ones above 95%. The job hook drops the caches above 70%. On the VPS: du -xsh /var/lib/ci/{{ $labels.runner }}/*; to raise the quota change its line in disk-quota and let self-update run ci-runner-setup host."
+          description: "Each CI user has a hard quota on /var/lib/ci (server/ci-runner/ci-disk-quota of deploy-hub); at 100% its jobs fail with 'Disk quota exceeded' and ci-job-started refuses new ones above 95%. The job hook drops the caches above 70%. On the VPS: du -xsh /var/lib/ci/{{ $labels.runner }}/*; to raise the quota change its line in ci-disk-quota and let self-update run ci-runner-setup host."
 
       - alert: DeployHubCIQuotaOff
         expr: min by (runner) (min_over_time(deploy_hub_ci_quota_on[15m])) == 0
