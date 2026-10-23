@@ -28,7 +28,7 @@ usage() {
 /usr/local/lib/ci-runner/ci-runner-reap
 log "disk before: $(used_percent)%"
 if [ "$(used_percent)" -ge "$QUOTA_FULL_PERCENT" ]; then
-  echo "::error::ci-runner-clean: the disk quota of $(id -un) is exhausted ($(usage)): writes failed with 'Disk quota exceeded'. The cleanup below drops the caches; the quotas live in server/ci-runner/disk-quota of deploy-hub."
+  echo "::error::ci-runner-clean: the disk quota of $(id -un) is exhausted ($(usage)): writes failed with 'Disk quota exceeded'. The cleanup below drops the caches; the quotas live in server/ci-runner/ci-disk-quota of deploy-hub."
 fi
 docker ps -aq | xargs -r docker rm -f >/dev/null
 docker network prune -f >/dev/null
