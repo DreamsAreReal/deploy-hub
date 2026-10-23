@@ -165,3 +165,53 @@ func TestStoredCacheNeverExceedsItsByteLimit(t *testing.T) {
 	_, err = e.svc.saveCache(appName, mutation.Verdicts{Version: 1, Bases: bases})
 	testutil.True(t, errors.Is(err, errCacheTooBig), "a cache over the byte limit is not stored")
 }
+
+func TestMutationCacheLimitsAreInclusive(t *testing.T) {
+	e := newEnv(t)
+	exact := make(map[string]mutation.Status, MaxCacheEntries)
+	for i := range MaxCacheEntries {
+		exact[mutation.Digest([]byte{byte(i), byte(i >> 8), byte(i >> 16), 9})] = mutation.StatusKilled
+	}
+	merged := e.svc.mergedCache(appName, mutation.Verdicts{Version: 1, Entries: exact})
+	testutil.Equal(t, len(merged.Entries), MaxCacheEntries)
+	sum, err := e.svc.saveCache(appName, mutation.Verdicts{Version: 1, Entries: map[string]mutation.Status{cacheKeyA: mutation.StatusKilled}})
+	testutil.NoErr(t, err)
+	data := testutil.Read(t, filepath.Join(e.svc.Paths.MutationCache(appName), cacheFile))
+	testutil.Equal(t, sum, mutation.Digest([]byte(data)))
+	testutil.Equal(t, testutil.Read(t, filepath.Join(e.svc.Paths.MutationCache(appName), cacheSumFile)), sum+"\n")
+	pad := MaxCacheBytes - len(`{"version":1,"bases":[""],"entries":null}`)
+	_, err = e.svc.saveCache(appName, mutation.Verdicts{Version: 1, Bases: []string{strings.Repeat("a", pad)}})
+	testutil.NoErr(t, err)
+	_, err = e.svc.saveCache(appName, mutation.Verdicts{Version: 1, Bases: []string{strings.Repeat("a", pad+1)}})
+	testutil.True(t, errors.Is(err, errCacheTooBig), "one byte over the limit is refused")
+}
+
+func TestMutationCacheRequestsAreLoggedAndCounted(t *testing.T) {
+	e := newEnv(t)
+	testutil.Equal(t, e.dispatch(getCmd, ""), ExitOK)
+	e.expectLog("no mutation cache yet")
+	testutil.Equal(t, e.dispatch(putCmd, verdictsMeta(t, map[string]mutation.Status{cacheKeyA: mutation.StatusKilled})), ExitOK)
+	e.expectLog("mutation cache stored")
+	testutil.Contains(t, e.logs.String(), `"received":1,"verdicts":1`)
+	testutil.Equal(t, e.dispatch(putCmd, "verdicts=\n"), ExitFail)
+	e.expectOut(e.err, msgBadCache)
+	e2 := newEnv(t)
+	testutil.Write(t, filepath.Join(e2.hubDir, "mutation-cache"), "a file where the directory belongs")
+	testutil.Equal(t, e2.dispatch(putCmd, verdictsMeta(t, map[string]mutation.Status{cacheKeyA: mutation.StatusKilled})), ExitFail)
+	e2.expectLog("mutation cache not stored")
+}
+
+func TestUnreadableStoredCacheIsReportedNotEmpty(t *testing.T) {
+	e := newEnv(t)
+	testutil.Equal(t, e.dispatch(putCmd, verdictsMeta(t, map[string]mutation.Status{cacheKeyA: mutation.StatusKilled})), ExitOK)
+	dir := e.svc.Paths.MutationCache(appName)
+	testutil.NoErr(t, os.Remove(filepath.Join(dir, cacheSumFile)))
+	testutil.Equal(t, e.dispatch(getCmd, ""), ExitFail)
+	e.expectOut(e.err, msgCacheCorrupt)
+	testutil.NoErr(t, os.Remove(filepath.Join(dir, cacheFile)))
+	testutil.NoErr(t, os.Mkdir(filepath.Join(dir, cacheFile), 0o700))
+	_, _, err := e.svc.loadCache(appName)
+	testutil.True(t, err != nil && !errors.Is(err, os.ErrNotExist), "a cache that cannot be read is an error")
+	testutil.Equal(t, e.dispatch(putCmd, verdictsMeta(t, map[string]mutation.Status{cacheKeyB: mutation.StatusKilled})), ExitFail)
+	e.expectLog("stored mutation cache replaced")
+}

@@ -79,3 +79,20 @@ func TestBuiltVersioned(t *testing.T) {
 		testutil.Equal(t, ok, c.want != "")
 	}
 }
+
+func TestDecodeClosureFoldsVariantsAndSortsDeps(t *testing.T) {
+	listing := `{"ImportPath":"m/q [m/q.test]","Dir":"/variant","GoFiles":["q.go","q_test.go"]}
+{"ImportPath":"m/q","Dir":"/plain","GoFiles":["q.go"]}
+{"ImportPath":"m/q [m/q.test]","Dir":"/again","GoFiles":["q.go"]}
+{"ImportPath":"m/x_test [m/x.test]","Dir":"/x","GoFiles":["x_test.go"]}
+{"ImportPath":"m/q.test","Deps":["z/b","m/q [m/q.test]","a/c","z/b"]}`
+	c, err := DecodeClosure([]byte(listing))
+	testutil.NoErr(t, err)
+	testutil.Equal(t, c.Packages["m/q"].Dir, "/plain")
+	testutil.Equal(t, c.Packages["m/x_test"].Dir, "/x")
+	testutil.Equal(t, c.Packages["m/x_test"].ImportPath, "m/x_test")
+	testutil.Equal(t, c.Tests["m/q"], []string{"a/c", "m/q", "z/b"})
+	const first, second, third, data = "f1.go", "f2.go", "f3_test.go", "f0.txt"
+	b := Built{GoFiles: []string{second, first}, TestGoFiles: []string{first, third}, EmbedFiles: []string{data}}
+	testutil.Equal(t, b.Files(), []string{data, first, second, third})
+}
