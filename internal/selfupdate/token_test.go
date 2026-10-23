@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/testutil"
@@ -55,6 +56,29 @@ func TestReadTokenRefusesOpenOrOddFiles(t *testing.T) {
 	testutil.Is(t, err, ErrTokenFile)
 	_, err = ReadToken(tokenFile(t, strings.Repeat("a", maxToken), 0o600), os.Geteuid())
 	testutil.NoErr(t, err)
+}
+
+func refused(t *testing.T, path string, owner int, want error) {
+	t.Helper()
+	got, err := ReadToken(path, owner)
+	testutil.Is(t, err, want)
+	testutil.Equal(t, got, "")
+}
+
+func TestReadTokenReturnsNothingOnEveryRefusal(t *testing.T) {
+	dir := t.TempDir()
+	refused(t, filepath.Join(dir, "missing"), os.Geteuid(), ErrNoToken)
+	refused(t, tokenFile(t, " \n", 0o600), os.Geteuid(), ErrNoToken)
+	refused(t, tokenFile(t, pat, 0o644), os.Geteuid(), ErrTokenFile)
+	file := tokenFile(t, pat, 0o600)
+	got, err := ReadToken(filepath.Join(file, "inside"), os.Geteuid())
+	testutil.Is(t, err, syscall.ENOTDIR)
+	testutil.Equal(t, got, "")
+	if os.Geteuid() != 0 {
+		got, err = ReadToken(tokenFile(t, pat, 0o000), os.Geteuid())
+		testutil.Is(t, err, os.ErrPermission)
+		testutil.Equal(t, got, "")
+	}
 }
 
 func TestReadTokenRefusesAFileOfAnotherUser(t *testing.T) {

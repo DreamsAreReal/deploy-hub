@@ -58,13 +58,13 @@ func mainWaits(runs []Run) bool {
 	return false
 }
 
-func RunnerRepos(root string) ([]string, error) {
-	found, err := filepath.Glob(filepath.Join(root, "*", runnerMarker))
+func RunnerRepos(root string) []string {
+	found, _ := filepath.Glob(filepath.Join(root, "*", runnerMarker))
 	repos := make([]string, 0, len(found))
 	for _, f := range found {
 		repos = append(repos, filepath.Base(filepath.Dir(filepath.Dir(f))))
 	}
-	return repos, err
+	return repos
 }
 
 func (p Preempter) Run(ctx context.Context) error {

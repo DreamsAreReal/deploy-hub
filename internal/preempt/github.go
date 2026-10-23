@@ -60,11 +60,7 @@ func (g GitHub) do(ctx context.Context, method, path string, ok int, out any) er
 	if out == nil {
 		return nil
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxDocument))
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(data, out)
+	return json.NewDecoder(io.LimitReader(resp.Body, maxDocument)).Decode(out)
 }
 
 func (g GitHub) runsPath(repo string) string {

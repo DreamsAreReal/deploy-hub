@@ -24,10 +24,7 @@ func runPreempt(ctx context.Context, a *App, _ procexec.Runner, args []string) i
 	if err != nil {
 		return a.failWith(preemptPrefix, err)
 	}
-	repos, err := preempt.RunnerRepos(a.CIRoot)
-	if err != nil {
-		return a.failWith(preemptPrefix, err)
-	}
+	repos := preempt.RunnerRepos(a.CIRoot)
 	p := preempt.Preempter{
 		GitHub: preempt.GitHub{API: selfupdate.DefaultAPI, Owner: a.Config.RepoOwner, Token: token, Client: &http.Client{}},
 		Repos:  repos, State: a.PreemptState, Keep: preempt.DefaultKeep,

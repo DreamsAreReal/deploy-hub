@@ -68,6 +68,10 @@ func (h *hub) handle(w http.ResponseWriter, r *http.Request) {
 	defer h.mu.Unlock()
 	h.queries = append(h.queries, r.URL.RawQuery)
 	h.auth = append(h.auth, r.Header.Get("Authorization"))
+	if r.Header.Get("X-GitHub-Api-Version") != apiVersion {
+		http.Error(w, "no API version", http.StatusBadRequest)
+		return
+	}
 	if r.Header.Get("Authorization") != "Bearer "+pat {
 		http.Error(w, "Bad credentials", http.StatusUnauthorized)
 		return
@@ -241,11 +245,19 @@ func TestRefusesReleasesThatAreNotGatedBuilds(t *testing.T) {
 		"run of another commit": {func(f *fixture) {
 			f.hub.routes[runsPath] = runsJSON(oldCommit, mainBranch, pushEvent, success, ".github/workflows/ci.yml")
 		}, ErrNotGated},
-		"substituted binary":         {func(f *fixture) { f.hub.routes[binaryPath] = forged }, ErrChecksum},
-		"checksum not a sha256":      {func(f *fixture) { f.hub.routes[sumPath] = "nope" }, ErrSumFormat},
-		"binary missing":             {func(f *fixture) { delete(f.hub.routes, binaryPath) }, ErrHTTP},
-		"checksum missing":           {func(f *fixture) { delete(f.hub.routes, sumPath) }, ErrHTTP},
-		"no release":                 {func(f *fixture) { delete(f.hub.routes, latest) }, ErrHTTP},
+		"substituted binary":    {func(f *fixture) { f.hub.routes[binaryPath] = forged }, ErrChecksum},
+		"checksum not a sha256": {func(f *fixture) { f.hub.routes[sumPath] = "nope" }, ErrSumFormat},
+		"binary missing":        {func(f *fixture) { delete(f.hub.routes, binaryPath) }, ErrHTTP},
+		"checksum missing":      {func(f *fixture) { delete(f.hub.routes, sumPath) }, ErrHTTP},
+		"no release":            {func(f *fixture) { delete(f.hub.routes, latest) }, ErrHTTP},
+		"no run list":           {func(f *fixture) { delete(f.hub.routes, runsPath) }, ErrHTTP},
+		"no compare":            {func(f *fixture) { delete(f.hub.routes, comparePath) }, ErrHTTP},
+		"only the binary": {func(f *fixture) {
+			f.hub.routes[latest] = strings.Replace(f.hub.routes[latest], `"name":"deploy-hub-linux-amd64.sha256"`, `"name":"other"`, 1)
+		}, ErrAsset},
+		"asset url of digits": {func(f *fixture) {
+			f.hub.routes[latest] = strings.Replace(f.hub.routes[latest], f.hub.srv.URL+assets+"12", "12", 1)
+		}, ErrAsset},
 		"main was rewritten":         {func(f *fixture) { f.hub.routes[comparePath] = `{"status":"diverged"}` }, ErrRewritten},
 		"release is older":           {func(f *fixture) { f.hub.routes[comparePath] = behind }, ErrRewritten},
 		"no token":                   {func(f *fixture) { f.u.Source.Token = "" }, ErrNoToken},
@@ -263,6 +275,11 @@ func TestRefusesReleasesThatAreNotGatedBuilds(t *testing.T) {
 			testutil.Equal(t, f.exec.Count(syncCmd), 0)
 			testutil.Contains(t, f.journal(t), "self-update fail")
 			testutil.Equal(t, f.metrics.value(obs.MetricSelfUpdateSuccess), 0.0)
+			installed := 0.0
+			if errors.Is(tc.want, ErrVersion) {
+				installed = 1
+			}
+			testutil.Equal(t, f.metrics.value(obs.MetricSelfUpdateInstalled), installed)
 		})
 	}
 }
@@ -313,7 +330,7 @@ func TestOversizedOrBrokenDocumentsFail(t *testing.T) {
 	h := newFixture(t)
 	h.hub.routes[latest] = strings.Repeat(" ", maxDocument+1)
 	testutil.Is(t, h.u.Run(context.Background(), ""), ErrTooLarge)
-	bad := Source{API: "http://\x7f", Client: http.DefaultClient}
+	bad := Source{API: "http://\x7f", Token: pat, Client: http.DefaultClient}
 	_, err := bad.Find(context.Background(), "")
 	testutil.Fails(t, err)
 }
@@ -434,4 +451,19 @@ func TestEndlessAssetRedirectsFail(t *testing.T) {
 	f.hub.srv.Config.Handler = mux
 	testutil.Is(t, f.u.Run(context.Background(), ""), ErrRedirects)
 	testutil.Equal(t, hops, maxRedirects)
+}
+
+func TestADocumentOfExactlyTheLimitIsRead(t *testing.T) {
+	f := newFixture(t)
+	doc := f.hub.routes[latest]
+	f.hub.routes[latest] = doc + strings.Repeat(" ", maxDocument-len(doc))
+	testutil.NoErr(t, f.u.Run(context.Background(), ""))
+	testutil.Equal(t, f.metrics.value(obs.MetricSelfUpdateInstalled), 1.0)
+}
+
+func TestABrokenCompareFails(t *testing.T) {
+	f := newFixture(t)
+	f.hub.routes[comparePath] = "{"
+	testutil.Fails(t, f.u.Run(context.Background(), ""))
+	testutil.Equal(t, testutil.Read(t, f.u.Binary), oldBinary)
 }

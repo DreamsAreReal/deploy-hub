@@ -3,6 +3,7 @@ package preempt
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -29,6 +31,8 @@ const (
 	done     = "completed"
 	gateFlow = 7
 	prBranch = "feature"
+	dispatch = "workflow_dispatch"
+	passed   = "success"
 )
 
 type fakeGitHub struct {
@@ -38,6 +42,9 @@ type fakeGitHub struct {
 	reruns    []string
 	failGet   bool
 	failPost  bool
+	failRun   int64
+	gets      []string
+	notPR     int64
 	srv       *httptest.Server
 }
 
@@ -78,6 +85,10 @@ func (f *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Bad credentials", http.StatusUnauthorized)
 		return
 	}
+	if r.Header.Get("Accept") != acceptJSON || r.Header.Get("X-GitHub-Api-Version") != apiVersion {
+		http.Error(w, "bad headers", http.StatusBadRequest)
+		return
+	}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/repos/"+owner+"/"), "/")
 	runs, ok := f.runs[parts[0]]
 	if !ok || len(parts) < 3 || parts[1] != "actions" || parts[2] != "runs" {
@@ -114,7 +125,16 @@ func (f *fakeGitHub) one(w http.ResponseWriter, r *http.Request, parts []string,
 	key := parts[0] + "/" + parts[3]
 	switch {
 	case len(parts) == 4 && r.Method == http.MethodGet:
-		_ = json.NewEncoder(w).Encode(run)
+		f.gets = append(f.gets, key)
+		if run.ID == f.failRun {
+			http.Error(w, "boom", http.StatusBadGateway)
+			return
+		}
+		out := *run
+		if run.ID == f.notPR {
+			out.Event = eventPush
+		}
+		_ = json.NewEncoder(w).Encode(out)
 	case f.failPost:
 		http.Error(w, "boom", http.StatusInternalServerError)
 	case len(parts) == 5 && parts[4] == "cancel" && r.Method == http.MethodPost:
@@ -178,7 +198,7 @@ func TestAWaitingMainDeployCancelsOnlyPullRequestRuns(t *testing.T) {
 	f.gh.add(repoA, pr(3, prBranch, running))
 	f.gh.add(repoA, pr(4, "other", queued))
 	f.gh.add(repoA, pr(5, "old", done))
-	f.gh.add(repoA, Run{ID: 6, Event: "workflow_dispatch", HeadBranch: mainBranch, Status: running})
+	f.gh.add(repoA, Run{ID: 6, Event: dispatch, HeadBranch: mainBranch, Status: running})
 	f.gh.add(repoA, Run{ID: 8, Event: "schedule", HeadBranch: mainBranch, Status: queued})
 	f.gh.add(repoB, pr(9, prBranch, running))
 	testutil.NoErr(t, f.p.Run(context.Background()))
@@ -276,7 +296,7 @@ func TestARunFinishedOtherwiseIsNotRerun(t *testing.T) {
 	f.p.GitHub.Client = f.gh.srv.Client()
 	testutil.NoErr(t, f.p.Run(context.Background()))
 	f.gh.mu.Lock()
-	f.gh.runs[repoA][2].Conclusion = "success"
+	f.gh.runs[repoA][2].Conclusion = passed
 	f.gh.runs[repoA][1].Status = done
 	f.gh.mu.Unlock()
 	testutil.NoErr(t, f.p.Run(context.Background()))
@@ -367,8 +387,144 @@ func TestRunnerRepos(t *testing.T) {
 	}
 	testutil.Write(t, filepath.Join(root, "tasks", "runner", ".runner"), "{}")
 	testutil.Write(t, filepath.Join(root, "router-bot", "runner", ".runner"), "{}")
-	repos, err := RunnerRepos(root)
-	testutil.NoErr(t, err)
+	repos := RunnerRepos(root)
 	sort.Strings(repos)
 	testutil.Equal(t, strings.Join(repos, " "), "router-bot tasks")
+}
+
+func logged(f *fixture) *strings.Builder {
+	var b strings.Builder
+	f.p.Log = slog.New(slog.NewTextHandler(&b, nil))
+	return &b
+}
+
+func TestOnlyActivePullRequestRunsAreLookedAtAgain(t *testing.T) {
+	f := newFixture(t)
+	f.gh.add(repoA, push(1, queued))
+	f.gh.add(repoA, pr(2, prBranch, done))
+	f.gh.add(repoA, Run{ID: 3, Event: dispatch, HeadBranch: mainBranch, Status: running})
+	f.gh.add(repoA, pr(4, prBranch, running))
+	log := logged(f)
+	testutil.NoErr(t, f.p.Run(context.Background()))
+	testutil.Equal(t, strings.Join(f.gh.gets, " "), "tasks/4")
+	testutil.Contains(t, log.String(), "pull request gate preempted by a main deploy", "run=4")
+}
+
+func TestARunThatIsNoLongerAPullRequestIsNotCancelled(t *testing.T) {
+	f := newFixture(t)
+	f.gh.add(repoA, push(1, queued))
+	f.gh.add(repoA, pr(2, prBranch, running))
+	f.gh.notPR = 2
+	testutil.NoErr(t, f.p.Run(context.Background()))
+	testutil.Equal(t, len(f.gh.cancelled), 0)
+	testutil.Equal(t, f.metrics.value(obs.MetricPreemptCancelled, repoA), 0.0)
+}
+
+func TestAFailedLookupOrCancelCountsNothing(t *testing.T) {
+	f := newFixture(t)
+	f.gh.add(repoA, push(1, queued))
+	f.gh.add(repoA, pr(2, prBranch, running))
+	f.gh.failRun = 2
+	testutil.Is(t, f.p.Run(context.Background()), ErrHTTP)
+	testutil.Equal(t, f.metrics.value(obs.MetricPreemptCancelled, repoA), 0.0)
+	f.gh.failRun = 0
+	f.gh.failPost = true
+	testutil.Is(t, f.p.Run(context.Background()), ErrHTTP)
+	testutil.Equal(t, f.metrics.value(obs.MetricPreemptCancelled, repoA), 0.0)
+	st, err := Load(f.p.State)
+	testutil.NoErr(t, err)
+	testutil.Equal(t, len(st.Runs), 0)
+}
+
+func TestRequeueCountsOnlyRealReruns(t *testing.T) {
+	f := newFixture(t)
+	f.gh.add(repoA, push(1, queued))
+	f.gh.add(repoA, pr(2, prBranch, running))
+	f.gh.add(repoA, pr(3, "other", running))
+	testutil.NoErr(t, f.p.Run(context.Background()))
+	f.gh.set(1, done)
+	f.gh.add(repoA, pr(4, "other", queued))
+	f.gh.set(2, running)
+	testutil.NoErr(t, f.p.Run(context.Background()))
+	testutil.Equal(t, f.metrics.value(obs.MetricPreemptRerun, repoA), 0.0)
+	f.gh.failRun = 2
+	f.gh.set(2, done)
+	testutil.Is(t, f.p.Run(context.Background()), ErrHTTP)
+	testutil.Equal(t, f.metrics.value(obs.MetricPreemptRerun, repoA), 0.0)
+	f.gh.failRun = 0
+	f.gh.failPost = true
+	testutil.Is(t, f.p.Run(context.Background()), ErrHTTP)
+	testutil.Equal(t, f.metrics.value(obs.MetricPreemptRerun, repoA), 0.0)
+	f.gh.failPost = false
+	log := logged(f)
+	testutil.NoErr(t, f.p.Run(context.Background()))
+	testutil.Equal(t, f.metrics.value(obs.MetricPreemptRerun, repoA), 1.0)
+	testutil.Contains(t, log.String(), "pull request gate re-run after a main deploy", "run=2")
+	testutil.Equal(t, strings.Join(f.gh.reruns, " "), "tasks/2")
+}
+
+func TestARunFinishedOtherwiseCountsNoRerun(t *testing.T) {
+	f := newFixture(t)
+	f.gh.add(repoA, push(1, queued))
+	f.gh.add(repoA, pr(2, prBranch, running))
+	testutil.NoErr(t, f.p.Run(context.Background()))
+	f.gh.mu.Lock()
+	f.gh.runs[repoA][2].Conclusion = passed
+	f.gh.runs[repoA][1].Status = done
+	f.gh.mu.Unlock()
+	testutil.NoErr(t, f.p.Run(context.Background()))
+	testutil.Equal(t, f.metrics.value(obs.MetricPreemptRerun, repoA), 0.0)
+	f.gh.notPR = 2
+	f.gh.mu.Lock()
+	f.gh.runs[repoA][2].Conclusion = conclusionCancel
+	f.gh.mu.Unlock()
+	st, err := Load(f.p.State)
+	testutil.NoErr(t, err)
+	st.Runs[0].Pending = true
+	testutil.NoErr(t, st.Save(f.p.State))
+	testutil.NoErr(t, f.p.Run(context.Background()))
+	testutil.Equal(t, len(f.gh.reruns), 0)
+}
+
+func TestRunForgetsOldSettledRuns(t *testing.T) {
+	f := newFixture(t)
+	old := State{Runs: []Entry{{Repo: repoA, ID: 9, Reruns: 5, Changed: f.p.Now().Add(-48 * time.Hour)}}}
+	testutil.NoErr(t, old.Save(f.p.State))
+	testutil.NoErr(t, f.p.Run(context.Background()))
+	st, err := Load(f.p.State)
+	testutil.NoErr(t, err)
+	testutil.Equal(t, len(st.Runs), 0)
+}
+
+func TestTheClientFailsWithoutAServerOrWithABadURL(t *testing.T) {
+	f := newFixture(t)
+	f.gh.srv.Close()
+	_, err := f.p.GitHub.Recent(context.Background(), repoA)
+	testutil.Fails(t, err)
+	testutil.True(t, !errors.Is(err, ErrHTTP), err.Error())
+	bad := GitHub{API: "http://\x7f", Owner: owner, Token: pat, Client: http.DefaultClient}
+	_, err = bad.Get(context.Background(), repoA, 1)
+	testutil.Fails(t, err)
+}
+
+func TestStateMarksTheRunOfTheRightRepo(t *testing.T) {
+	now := time.Now()
+	st := State{Runs: []Entry{{Repo: repoB, ID: 2}, {Repo: repoA, ID: 3}}}
+	st.cancelled(repoA, pr(2, prBranch, running), now)
+	testutil.Equal(t, len(st.Runs), 3)
+	testutil.Equal(t, st.Runs[0].Pending, false)
+	testutil.Equal(t, st.Runs[1].Pending, false)
+	st.cancelled(repoA, pr(2, prBranch, running), now)
+	testutil.Equal(t, len(st.Runs), 3)
+}
+
+func TestStateFileErrors(t *testing.T) {
+	dir := t.TempDir()
+	_, err := Load(dir)
+	testutil.Is(t, err, syscall.EISDIR)
+	path := filepath.Join(dir, "preempt.json")
+	testutil.Mkdir(t, path+".tmp")
+	st := State{}
+	testutil.Fails(t, st.Save(path))
+	testutil.Missing(t, path)
 }

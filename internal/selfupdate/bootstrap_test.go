@@ -153,5 +153,40 @@ func TestBootstrapStopsWhenTheTokenCannotBeRead(t *testing.T) {
 	h.set(readToken, procexectest.Reply{Err: errors.New("Permission denied")})
 	_, err := h.b.Run(context.Background(), "")
 	testutil.Fails(t, err)
+	testutil.True(t, !errors.Is(err, ErrNoToken), err.Error())
+	testutil.Contains(t, err.Error(), "Permission denied")
 	testutil.Equal(t, len(h.hub.auth), 0)
+}
+
+func TestBootstrapTokenIsEmptyOnEveryRefusal(t *testing.T) {
+	cases := map[string]struct {
+		cmd   string
+		reply procexectest.Reply
+	}{
+		"no file":    {statToken, procexectest.Reply{Err: errors.New("No such file")}},
+		"group read": {statToken, procexectest.Reply{Res: procexec.Result{Stdout: "root:640"}}},
+		"unreadable": {readToken, procexectest.Reply{Res: procexec.Result{Stdout: pat}, Err: errors.New("Permission denied")}},
+		"two words":  {readToken, procexectest.Reply{Res: procexec.Result{Stdout: "a b"}}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newHost(t)
+			h.set(tc.cmd, tc.reply)
+			got, err := h.b.token(context.Background())
+			testutil.Fails(t, err)
+			testutil.Equal(t, got, "")
+		})
+	}
+	h := newHost(t)
+	got, err := h.b.token(context.Background())
+	testutil.NoErr(t, err)
+	testutil.Equal(t, got, pat)
+}
+
+func TestBootstrapRemoteReturnsNothingOnFailure(t *testing.T) {
+	h := newHost(t)
+	h.set(readToken, procexectest.Reply{Res: procexec.Result{Stdout: pat}, Err: errors.New("exit status 1")})
+	got, err := h.b.remote(context.Background(), "", readToken)
+	testutil.Fails(t, err)
+	testutil.Equal(t, got, "")
 }
