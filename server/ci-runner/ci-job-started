@@ -4,22 +4,27 @@ set +e
   echo "ci-job-started: a process of an earlier job survived, refusing the job"
   exit 1
 }
-case "${GITHUB_EVENT_NAME:-}" in
-  push | workflow_dispatch | schedule) ;;
-  *)
-    echo "ci-job-started: this runner takes no ${GITHUB_EVENT_NAME:-unknown} events"
-    exit 1
-    ;;
-esac
-if [ "${GITHUB_REF:-}" != refs/heads/main ]; then
-  echo "ci-job-started: this runner takes only refs/heads/main, got ${GITHUB_REF:-?}"
+refuse() {
+  echo "ci-job-started: $1"
   exit 1
-fi
-case "${GITHUB_WORKFLOW_REF:-}" in
-  "${GITHUB_REPOSITORY:-?}/.github/workflows/"*"@refs/heads/main") ;;
-  *)
-    echo "ci-job-started: workflow ${GITHUB_WORKFLOW_REF:-?} is not from main of ${GITHUB_REPOSITORY:-?}"
-    exit 1
+}
+case "${GITHUB_EVENT_NAME:-}" in
+  push | workflow_dispatch | schedule) ref=refs/heads/main ;;
+  pull_request)
+    [ "${GITHUB_BASE_REF:-}" = main ] || refuse "pull request into ${GITHUB_BASE_REF:-?}, not main"
+    head="$(jq -r '.pull_request.head.repo.full_name // empty' "${GITHUB_EVENT_PATH:-/nonexistent}" 2>/dev/null)"
+    [ -n "$head" ] && [ "$head" = "${GITHUB_REPOSITORY:-}" ] || refuse "pull request from ${head:-an unknown repo}, not ${GITHUB_REPOSITORY:-?}"
+    ref="${GITHUB_REF:-}"
+    case "$ref" in
+      refs/pull/*/merge) ;;
+      *) refuse "pull request ref ${ref:-?} is not refs/pull/<n>/merge" ;;
+    esac
     ;;
+  *) refuse "this runner takes no ${GITHUB_EVENT_NAME:-unknown} events" ;;
+esac
+[ "${GITHUB_REF:-}" = "$ref" ] || refuse "this runner takes only $ref, got ${GITHUB_REF:-?}"
+case "${GITHUB_WORKFLOW_REF:-}" in
+  "${GITHUB_REPOSITORY:-?}/.github/workflows/"*"@$ref") ;;
+  *) refuse "workflow ${GITHUB_WORKFLOW_REF:-?} is not from $ref of ${GITHUB_REPOSITORY:-?}" ;;
 esac
 exit 0

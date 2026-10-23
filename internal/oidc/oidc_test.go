@@ -169,6 +169,9 @@ func TestVerifyRejectsClaims(t *testing.T) {
 		"own workflow": func(c map[string]any) {
 			c["job_workflow_ref"] = testRepo + "/.github/workflows/deploy.yml@refs/heads/main"
 		},
+		"pull request": func(c map[string]any) {
+			c["ref"], c["event_name"] = "refs/pull/7/merge", "pull_request"
+		},
 		"repository": func(c map[string]any) { c["repository"] = "DreamsAreReal/other" },
 		"commit":     func(c map[string]any) { c["sha"] = strings.Repeat("f", 40) },
 	}

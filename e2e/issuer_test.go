@@ -51,9 +51,14 @@ func newIssuer(t *testing.T) *issuer {
 
 func (i *issuer) token(t *testing.T, repo, tagName string) string {
 	t.Helper()
+	return i.tokenOn(t, repo, tagName, oidc.DeployRef)
+}
+
+func (i *issuer) tokenOn(t *testing.T, repo, tagName, ref string) string {
+	t.Helper()
 	return i.sign(t, map[string]any{
 		"iss": oidc.Issuer, "aud": "deploy-hub", "exp": time.Now().Add(tokenTTL).Unix(), "iat": time.Now().Unix(), "nbf": time.Now().Unix(),
-		"repository": repo, "job_workflow_ref": hubWorkflow, "sha": strings.TrimPrefix(tagName, "sha-"), "run_id": "1", "actor": "ci",
+		"repository": repo, "job_workflow_ref": hubWorkflow, "ref": ref, "sha": strings.TrimPrefix(tagName, "sha-"), "run_id": "1", "actor": "ci",
 	})
 }
 

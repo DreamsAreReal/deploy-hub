@@ -48,18 +48,24 @@ const (
 	repoVarHost       = "VPS_HOST"
 	repoVarHostKey    = "VPS_HOST_KEY"
 	errNoHostKey      = "error: no known_hosts entry for %s — connect once with ssh to record the host key"
-	stubTemplate      = `name: %s
+	stubTemplate      = `name: %[1]s
 on:
-  push: {branches: [%s]}
+  push: {branches: [%[2]s]}
+  pull_request: {branches: [%[2]s]}
 permissions: {}
-concurrency: {group: %s, cancel-in-progress: false}
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('%[1]s-gate-{0}', github.event.pull_request.number) || '%[1]s' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   deploy:
     name: deploy
-    permissions: {contents: read, packages: write, id-token: write}
-    uses: %s/.github/workflows/deploy.yml@main
-    with: {app: %s%s}
-    secrets: {VPS_SSH_KEY: "${{ secrets.VPS_SSH_KEY }}", VPS_HOST: "${{ secrets.VPS_HOST }}", VPS_HOST_KEY: "${{ secrets.VPS_HOST_KEY }}"}`
+    permissions: {contents: read, packages: write, id-token: write, actions: write}
+    uses: %[3]s/.github/workflows/deploy.yml@main
+    with: {app: %[4]s%[5]s}
+    secrets:
+      VPS_SSH_KEY: ${{ github.event_name != 'pull_request' && secrets.VPS_SSH_KEY || '' }}
+      VPS_HOST: ${{ github.event_name != 'pull_request' && secrets.VPS_HOST || '' }}
+      VPS_HOST_KEY: ${{ github.event_name != 'pull_request' && secrets.VPS_HOST_KEY || '' }}`
 	stubDockerfileInput = ", dockerfile: %s"
 	stubComposeInput    = ", compose: %s"
 )

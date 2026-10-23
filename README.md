@@ -33,7 +33,8 @@ push to default branch
         ssh deploy@vps "deploy <app> <tag>"   (GitHub OIDC token + digest on stdin)
           → deploy-hub runner (forced command on the VPS):
               verify the OIDC token: signed by GitHub, issued to the hub's
-              deploy.yml@main, for the app's own repository and this commit
+              deploy.yml@main, for the app's own repository, its main branch
+              (ref refs/heads/main) and this commit
               lock → docker login (ephemeral job token) → pull <image>@<digest> → logout
               → blue-green: start a standby, health gate (90s), recreate the main
                 service (the standby carries the work; for web apps Caddy fails
@@ -48,6 +49,46 @@ repos CI runs on an isolated self-hosted runner on the same host (a user `ci-<re
 rootless Docker, its own network namespace, CPU/memory/disk caps; see
 [Self-hosted CI runner](#self-hosted-ci-runner)); there is no GitHub-hosted
 fallback. Load tests never touch the production apps (see below).
+
+## Pull request gate
+
+The same `deploy.yml` runs on `pull_request` into `main` in **gate-only
+mode**: the same toolchain, policy and checks as on `main`, on the same runner,
+but the job (check name `deploy / gate`) stops after the gate. It receives no
+deploy secrets, does not report to the hub, does not push the image and does
+not deploy; the hub itself refuses an OIDC token whose `ref` is not
+`refs/heads/main`. The verdict is the PR check status, a table of every check
+in the job summary and the `gate-reports` artifact.
+
+```
+pull request into main
+  → caller stub (concurrency group <stub name>-gate-<PR number>, a new push cancels the old run)
+    → deploy.yml, job "gate": toolchain → render → docker build → deploy-hub gate
+      → job summary + gate-reports; nothing is pushed, reported or deployed
+push to main
+  → job "preempt pull request gates" (GitHub-hosted, seconds): cancels every
+    queued or running pull request gate of the repo (any stub, they share the
+    runner) until the deploy job holds the runner
+  → job "gate and deploy" (the deploy above)
+  → job "requeue pull request gates": re-runs the latest cancelled gate of
+    each pull request
+```
+
+A main deploy therefore never waits behind a pull request gate; a gate that a
+deploy interrupted starts again from scratch after it.
+
+**Merge only on a green gate.** Merge a pull request only when every gate
+check (`deploy / gate`, and `deploy-<app> / gate` for a second app) passed for its latest commit, and only by merging the pull request (no direct
+pushes to `main`):
+
+```
+gh pr checks <n> -R DreamsAreReal/<app> --watch --fail-fast && gh pr merge <n> -R DreamsAreReal/<app> --squash
+```
+
+Branch protection and rulesets are not available for private repos on GitHub
+Free (the API answers 403), so the rule is enforced by this command in agents'
+and people's workflow, not by GitHub. When the repo moves to a plan with
+protection, make `deploy / gate` a required status check of `main`.
 
 ## The quality gate
 
@@ -560,16 +601,28 @@ The caller stub that ends up in the app repo:
 name: deploy
 on:
   push: {branches: [main]}
+  pull_request: {branches: [main]}
 permissions: {}
-concurrency: {group: deploy, cancel-in-progress: false}
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('deploy-gate-{0}', github.event.pull_request.number) || 'deploy' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   deploy:
     name: deploy
-    permissions: {contents: read, packages: write, id-token: write}
+    permissions: {contents: read, packages: write, id-token: write, actions: write}
     uses: DreamsAreReal/deploy-hub/.github/workflows/deploy.yml@main
     with: {app: myapp}
-    secrets: {VPS_SSH_KEY: "${{ secrets.VPS_SSH_KEY }}", VPS_HOST: "${{ secrets.VPS_HOST }}", VPS_HOST_KEY: "${{ secrets.VPS_HOST_KEY }}"}
+    secrets:
+      VPS_SSH_KEY: ${{ github.event_name != 'pull_request' && secrets.VPS_SSH_KEY || '' }}
+      VPS_HOST: ${{ github.event_name != 'pull_request' && secrets.VPS_HOST || '' }}
+      VPS_HOST_KEY: ${{ github.event_name != 'pull_request' && secrets.VPS_HOST_KEY || '' }}
 ```
+
+The caller grants one permission set to the whole reusable workflow; inside
+it each job takes only what it needs: `actions: write` only the GitHub-hosted
+preempt and requeue jobs, `packages: write` and `id-token: write` only the gate
+job, whose push and deploy steps do not run on a pull request. Pull requests
+get no deploy secrets (see [Pull request gate](#pull-request-gate)).
 
 Reusable workflows and actions of a private repo are shared only with other
 private repos of the same owner (repo settings → Actions → Access), so an app
@@ -711,7 +764,7 @@ Isolation, all in [`server/ci-runner`](server/ci-runner):
 | Docker | rootless `dockerd` per repository (`ci-docker@<repo>`, user `ci-<repo>`), data in `/var/lib/ci/<repo>/docker`, socket `/run/ci/<repo>/docker.sock` (directory 700); the system socket is hidden and not accessible |
 | files | `ci-runner@<repo>`: `ProtectSystem=strict`, `ProtectHome`, `NoNewPrivileges`, empty capability set; `/opt`, `/etc/deploy-hub`, `/etc/srv-backup`, `/etc/wireguard`, `/var/lib/docker`, backups are inaccessible. The rootless daemon and the user manager of `ci-<repo>` (it holds the container scopes) are jailed the same way, minus `NoNewPrivileges` for `dockerd` (rootlesskit needs the setuid `newuidmap`) |
 | network | one namespace per repository, `ci-<repo>` (`ci-netns@<repo>`): the runner, its rootless `dockerd` and the user manager of `ci-<repo>` all run in it. Its own veth pair (`cih<uid>` on the host, `cin<uid>` inside) and a /30 out of `10.79.0.0/16` picked by the uid of `ci-<repo>` (host side `.1`, namespace `.2` of the block `10.79.0.0 + 4 × uid`); NAT to the internet only. The host loopback (Caddy admin, VictoriaMetrics/Logs, Bugsink), the `shared` and other Docker networks, private ranges and the metadata address are dropped; of the host only SSH/HTTP/HTTPS on the public address answer. The drops live in the nftables table `inet ci_netns`, which neither Docker nor an iptables reload touches, and a drop there is final whatever Docker puts first in `FORWARD`; its rules match every host-side veth by the name prefix `cih*`, so a new repo needs no rule change. Ports published by gate containers (rootlesskit's builtin port driver) live on the repo's own namespace, so a job of one repo cannot connect to the app, database or DAST target of another, take its port first, or reach its abstract unix sockets; the other namespace's addresses are in `10.0.0.0/8` and dropped |
-| which jobs | job-started hook `ci-job-started`: only workflows of the repo's own `main` (push, `workflow_dispatch` or `schedule`); other branches, pull requests and other events fail before their first step |
+| which jobs | job-started hook `ci-job-started`: workflows of the repo's own `main` (push, `workflow_dispatch` or `schedule`) and pull requests into `main` from the repo itself (`refs/pull/<n>/merge`, head repo checked in the event payload); other branches, fork pull requests and other events fail before their first step. Pull request jobs get no deploy secrets, and a main deploy cancels them ([Pull request gate](#pull-request-gate)) |
 | CPU, memory | every repo has its slice `user-<uid of ci-<repo>>.slice` (its runner, its `dockerd` and its user manager with the containers), each with `ci-limits.conf`: 6 of 8 CPUs, CPU and IO weight 20 (production keeps priority), `MemoryHigh` 8G, `MemoryMax` 9G, no swap. Two jobs at once take at most 18G of the host's 23G; the gate sizes its mutation workers from the cgroup limit |
 | disk | `/var/lib/ci` is the ext4 image `/srv/ci.img` (120G): CI can never fill `/` |
 | leftover processes | `ci-runner-reap`, run by both job hooks: SIGKILL to every process in the runner's cgroup that is not a descendant of the runner itself (`runsvc.sh` → `RunnerService.js` → `Runner.Listener` → `Runner.Worker` → steps). A step that forks into the background or daemonizes is reparented away from the runner and dies when the job ends, and again before the first step of the next job, so it cannot read the environment (`SSH_KEY`, `GH_TOKEN`) of a later job. A stop or restart of `ci-runner@<repo>` kills the whole cgroup (`KillMode=control-group`) |
