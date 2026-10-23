@@ -10,7 +10,6 @@ import (
 
 const statePerm = 0o600
 
-// Entry is a pull_request run that preempt cancelled at least once.
 type Entry struct {
 	Repo       string    `json:"repo"`
 	ID         int64     `json:"id"`
@@ -69,8 +68,6 @@ func (s *State) maxReruns(repo string) int {
 	return most
 }
 
-// prune forgets settled runs older than the cutoff; pending ones stay until
-// they are re-run or replaced.
 func (s *State) prune(cutoff time.Time) {
 	kept := s.Runs[:0]
 	for _, e := range s.Runs {

@@ -9,8 +9,6 @@ import (
 	"syscall"
 )
 
-// DefaultPATFile holds a fine-grained PAT of the hub host (shared with the
-// history-guard dispatch): Contents and Actions read on deploy-hub at least.
 const (
 	DefaultPATFile = "/etc/deploy-hub/github.token"
 	tokenOpenBits  = 0o077

@@ -1,9 +1,3 @@
-// Package preempt lets a main deploy overtake pull request gates on the one
-// self-hosted runner of a repo. A systemd timer on the hub host runs it: while
-// a push run of main waits for the runner, it cancels the repo's active
-// pull_request runs; once no main run waits, it re-runs the cancelled ones that
-// no newer push of the same pull request replaced. It never cancels anything
-// but a pull_request run.
 package preempt
 
 import (
@@ -30,7 +24,6 @@ const (
 	labelRepo        = "repo"
 )
 
-// waiting are the statuses of a run that has not got a runner yet.
 var waiting = map[string]bool{"queued": true, "waiting": true, "pending": true, "requested": true}
 
 type Preempter struct {
@@ -65,7 +58,6 @@ func mainWaits(runs []Run) bool {
 	return false
 }
 
-// RunnerRepos lists the repos that have a runner registered on this host.
 func RunnerRepos(root string) ([]string, error) {
 	found, err := filepath.Glob(filepath.Join(root, "*", runnerMarker))
 	repos := make([]string, 0, len(found))
@@ -110,29 +102,6 @@ func (p Preempter) repo(ctx context.Context, repo string, st *State) (tally, err
 	return p.requeue(ctx, repo, runs, st)
 }
 
-func (p Preempter) cancel(ctx context.Context, repo string, runs []Run, st *State) (tally, error) {
-	var t tally
-	var errs []error
-	for _, r := range runs {
-		if !isPR(r) || !active(r) {
-			continue
-		}
-		// Look again right before cancelling: only a pull_request run that is
-		// still active is ever cancelled.
-		fresh, err := p.GitHub.Get(ctx, repo, r.ID)
-		if err == nil && isPR(fresh) && active(fresh) {
-			err = p.GitHub.Cancel(ctx, repo, fresh.ID)
-			if err == nil {
-				st.cancelled(repo, fresh, p.Now())
-				t.cancelled++
-				p.Log.Info("pull request gate preempted by a main deploy", "repo", repo, "run", fresh.ID, "branch", fresh.HeadBranch)
-			}
-		}
-		errs = append(errs, err)
-	}
-	return t, errors.Join(errs...)
-}
-
 func superseded(runs []Run, e Entry) bool {
 	for _, r := range runs {
 		if isPR(r) && r.WorkflowID == e.WorkflowID && r.HeadBranch == e.Branch && r.ID > e.ID {
@@ -140,6 +109,35 @@ func superseded(runs []Run, e Entry) bool {
 		}
 	}
 	return false
+}
+
+func (p Preempter) cancel(ctx context.Context, repo string, runs []Run, st *State) (tally, error) {
+	var t tally
+	var errs []error
+	for _, r := range runs {
+		if !isPR(r) || !active(r) {
+			continue
+		}
+		done, err := p.cancelOne(ctx, repo, r.ID, st)
+		if done {
+			t.cancelled++
+		}
+		errs = append(errs, err)
+	}
+	return t, errors.Join(errs...)
+}
+
+func (p Preempter) cancelOne(ctx context.Context, repo string, id int64, st *State) (bool, error) {
+	fresh, err := p.GitHub.Get(ctx, repo, id)
+	if err != nil || !isPR(fresh) || !active(fresh) {
+		return false, err
+	}
+	if err := p.GitHub.Cancel(ctx, repo, fresh.ID); err != nil {
+		return false, err
+	}
+	st.cancelled(repo, fresh, p.Now())
+	p.Log.Info("pull request gate preempted by a main deploy", "repo", repo, "run", fresh.ID, "branch", fresh.HeadBranch)
+	return true, nil
 }
 
 func (p Preempter) requeue(ctx context.Context, repo string, runs []Run, st *State) (tally, error) {
@@ -150,26 +148,32 @@ func (p Preempter) requeue(ctx context.Context, repo string, runs []Run, st *Sta
 		if e.Repo != repo || !e.Pending {
 			continue
 		}
-		if superseded(runs, *e) {
-			e.Pending = false
-			continue
-		}
-		r, err := p.GitHub.Get(ctx, repo, e.ID)
-		switch {
-		case err != nil:
-			errs = append(errs, err)
-		case r.Status != statusCompleted:
-		case !isPR(r) || r.Conclusion != conclusionCancel:
-			e.Pending = false
-		default:
-			if err := p.GitHub.Rerun(ctx, repo, e.ID); err != nil {
-				errs = append(errs, err)
-				continue
-			}
-			e.Pending, e.Reruns, e.Changed = false, e.Reruns+1, p.Now()
+		rerun, err := p.settle(ctx, repo, runs, e)
+		if rerun {
 			t.rerun++
-			p.Log.Info("pull request gate re-run after a main deploy", "repo", repo, "run", e.ID, "reruns", e.Reruns)
 		}
+		errs = append(errs, err)
 	}
 	return t, errors.Join(errs...)
+}
+
+func (p Preempter) settle(ctx context.Context, repo string, runs []Run, e *Entry) (bool, error) {
+	if superseded(runs, *e) {
+		e.Pending = false
+		return false, nil
+	}
+	r, err := p.GitHub.Get(ctx, repo, e.ID)
+	if err != nil || r.Status != statusCompleted {
+		return false, err
+	}
+	if !isPR(r) || r.Conclusion != conclusionCancel {
+		e.Pending = false
+		return false, nil
+	}
+	if err := p.GitHub.Rerun(ctx, repo, e.ID); err != nil {
+		return false, err
+	}
+	e.Pending, e.Reruns, e.Changed = false, e.Reruns+1, p.Now()
+	p.Log.Info("pull request gate re-run after a main deploy", "repo", repo, "run", e.ID, "reruns", e.Reruns)
+	return true, nil
 }
