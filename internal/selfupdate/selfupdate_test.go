@@ -60,7 +60,7 @@ func (h *hub) handle(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	_, _ = w.Write([]byte(body))
+	http.ServeContent(w, r, "", time.Time{}, strings.NewReader(body))
 }
 
 func sum(data string) string {
