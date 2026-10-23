@@ -47,8 +47,8 @@ push to default branch
 Images are built only in CI, never by the hub on the VPS. For private app
 repos CI runs on an isolated self-hosted runner on the same host (a user `ci-<repo>` per repo,
 rootless Docker, its own network namespace, CPU/memory/disk caps; see
-[Self-hosted CI runner](#self-hosted-ci-runner)); public repos and forks use a
-GitHub-hosted runner. Load tests never touch the production apps (see below).
+[Self-hosted CI runner](#self-hosted-ci-runner)); there is no GitHub-hosted
+fallback. Load tests never touch the production apps (see below).
 
 ## Pull request gate
 
@@ -555,7 +555,8 @@ root SSH to. `<vps>` is the server address.
    own repo, [DreamsAreReal/observability](https://github.com/DreamsAreReal/observability).
    Load the hub's alert rules into it (see "Alerts" under Observability).
 
-10. **Self-hosted CI runner** (optional, private app repos): see
+10. **Self-hosted CI runner** (every repo, deploy-hub included; there is no
+    GitHub-hosted fallback): see
     [Self-hosted CI runner](#self-hosted-ci-runner).
 
 Verify the hub answers: `VPS_ADDR=<vps> go run ./cmd/deploy-hub onboard status`
@@ -804,16 +805,12 @@ change to it reaches the server only with a new binary release.
 
 ## Self-hosted CI runner
 
-`deploy.yml` runs its job on `[self-hosted, linux, eu]`: a GitHub Actions runner
-on the hub host, one per private app repo. It falls back to `ubuntu-latest`
-when the calling repo is public or a fork, when the event is a pull request
-from a fork, or when the app repo sets the variable
-`DEPLOY_HUB_RUNNER=github-hosted` — the switch back for one repo:
-
-```
-gh variable set DEPLOY_HUB_RUNNER -R DreamsAreReal/<app> -b github-hosted   # GitHub-hosted
-gh variable delete DEPLOY_HUB_RUNNER -R DreamsAreReal/<app>                 # self-hosted again
-```
+`deploy.yml` runs its only job on `[self-hosted, linux, eu]`: a GitHub Actions
+runner on the hub host, one per app repo, including deploy-hub itself (its
+`ci.yml` calls `deploy.yml`). All repos are private and GitHub-hosted runners are
+not paid for, so there is no fallback runner: while a runner is down, jobs wait
+in the queue (alert `DeployHubCIRunnerOffline`). Pull requests from forks reach
+the runner only to be refused by the job-started hook.
 
 zizmor reports this `runs-on` as `self-hosted-runner`; it is the one finding
 the hub's gate accepts (see
