@@ -60,7 +60,7 @@ concurrency:
 jobs:
   deploy:
     name: deploy
-    permissions: {contents: read, packages: write, id-token: write, actions: write}
+    permissions: {contents: read, packages: write, id-token: write}
     uses: %[3]s/.github/workflows/deploy.yml@main
     with: {app: %[4]s%[5]s}
     secrets:

@@ -24,87 +24,16 @@ on:
         required: false
       VPS_HOST_KEY:
         required: false
+      RELEASE_TOKEN:
+        description: Fine-grained PAT (Contents read and write, deploy-hub only) that publishes the hub release; only the hub passes it
+        required: false
 
 permissions: {}
 
 jobs:
-  preempt:
-    name: preempt pull request gates
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    permissions:
-      actions: write
-    outputs:
-      runs: ${{ steps.cancel.outputs.runs }}
-    env:
-      GH_TOKEN: ${{ github.token }}
-      REPO: ${{ github.repository }}
-    steps:
-      - name: Cancel pull request gates until the deploy job holds the runner
-        id: cancel
-        run: |
-          set -euo pipefail
-          cancelled=()
-          deadline=$(( $(date +%s) + 1200 ))
-          while :; do
-            for status in in_progress queued waiting pending requested; do
-              for id in $(gh api -X GET "repos/$REPO/actions/runs" -f event=pull_request \
-                  -f status="$status" -F per_page=100 --jq '.workflow_runs[].id'); do
-                echo "cancelling pull request gate run $id ($status)"
-                gh api -X POST "repos/$REPO/actions/runs/$id/cancel" > /dev/null || true
-                cancelled+=("$id")
-              done
-            done
-            state="$(gh api "repos/$REPO/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs" \
-              --jq '[.jobs[] | select(.name | endswith("gate and deploy")) | .status][0] // "queued"')"
-            case "$state" in
-              queued | waiting | pending | requested) ;;
-              *) break ;;
-            esac
-            if [ "$(date +%s)" -ge "$deadline" ]; then
-              echo "::warning::the deploy job is still $state; pull request gates may take the runner first"
-              break
-            fi
-            sleep 10
-          done
-          echo "runs=$(printf '%s\n' "${cancelled[@]}" | sort -u | xargs)" >> "$GITHUB_OUTPUT"
-
-  requeue:
-    name: requeue pull request gates
-    needs: [preempt, deploy]
-    if: always() && needs.preempt.outputs.runs != ''
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      actions: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-      REPO: ${{ github.repository }}
-      RUNS: ${{ needs.preempt.outputs.runs }}
-    steps:
-      - name: Re-run the latest cancelled gate of each pull request
-        run: |
-          set -euo pipefail
-          for id in $RUNS; do
-            printf '%s' "$id" | grep -Eq '^[0-9]+$' || continue
-            read -r workflow branch conclusion < <(gh api "repos/$REPO/actions/runs/$id" \
-              --jq '[.workflow_id, .head_branch, .conclusion] | @tsv')
-            latest="$(gh api -X GET "repos/$REPO/actions/workflows/$workflow/runs" -f event=pull_request \
-              -f branch="$branch" -F per_page=1 --jq '.workflow_runs[0].id')"
-            if [ "$conclusion" = cancelled ] && [ "$latest" = "$id" ]; then
-              echo "re-running pull request gate run $id ($branch)"
-              gh api -X POST "repos/$REPO/actions/runs/$id/rerun" > /dev/null \
-                || echo "::warning::could not re-run $id; re-run it from the pull request"
-            fi
-          done
-
   deploy:
-    name: ${{ github.event_name == 'pull_request' && 'gate' || 'gate and deploy' }}
-    runs-on: >-
-      ${{ (vars.DEPLOY_HUB_RUNNER == 'github-hosted' || !github.event.repository.private || github.event.repository.fork
-      || (github.event.pull_request && github.event.pull_request.head.repo.full_name != github.repository))
-      && 'ubuntu-latest' || fromJSON('["self-hosted", "linux", "eu"]') }}
+    name: ${{ (github.event_name == 'pull_request' || (github.repository == 'DreamsAreReal/deploy-hub' && inputs.app == 'deploy-hub')) && 'gate' || 'gate and deploy' }}
+    runs-on: ${{ fromJSON('["self-hosted", "linux", "eu"]') }}
     timeout-minutes: 330
     permissions:
       contents: read
@@ -112,7 +41,8 @@ jobs:
       id-token: write
     env:
       APP: ${{ inputs.app }}
-      GATE_ONLY: ${{ github.event_name == 'pull_request' }}
+      HUB: ${{ github.repository == 'DreamsAreReal/deploy-hub' && inputs.app == 'deploy-hub' }}
+      GATE_ONLY: ${{ github.event_name == 'pull_request' || (github.repository == 'DreamsAreReal/deploy-hub' && inputs.app == 'deploy-hub') }}
       VPS_USER: deploy
       OIDC_AUDIENCE: deploy-hub
     steps:
@@ -145,16 +75,6 @@ jobs:
         id: start
         run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
 
-      - name: Free disk space
-        if: runner.environment == 'github-hosted'
-        run: |
-          df -m / "$RUNNER_TEMP"
-          # Preinstalled SDKs the gate never uses; its own toolchain is pinned in policy/tools.yaml.
-          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
-            /usr/share/swift /usr/local/share/boost /usr/local/share/powershell /usr/local/julia*
-          docker system prune -af --volumes > /dev/null
-          df -m / "$RUNNER_TEMP"
-
       - name: Check out
         id: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -164,14 +84,33 @@ jobs:
 
       - name: Toolchain
         id: hub
+        if: env.HUB != 'true'
         uses: DreamsAreReal/deploy-hub/.github/actions/hub@6cb282c83d4f5c122ed32350a8c8ff014945f8f8
+
+      - name: Set up Go for the hub commit under test
+        if: env.HUB == 'true'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      # The hub gates itself with the gate and the policy of the commit under test.
+      - name: Toolchain of the hub commit under test
+        id: own
+        if: env.HUB == 'true'
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/deploy-hub-toolchain"
+          make toolchain TOOLS_DIR="$bin"
+          { echo "bin=$bin"; echo "policy=$GITHUB_WORKSPACE/policy/gate.yaml"; } >> "$GITHUB_OUTPUT"
 
       - name: Resolve build inputs
         id: ctx
+        if: env.HUB != 'true'
         env:
           DOCKERFILE: ${{ inputs.dockerfile }}
           COMPOSE: ${{ inputs.compose }}
-          TOOLCHAIN: ${{ steps.hub.outputs.bin }}
+          TOOLCHAIN: ${{ steps.hub.outputs.bin || steps.own.outputs.bin }}
         run: |
           export PATH="$TOOLCHAIN:$PATH"
           compose="$COMPOSE"
@@ -195,6 +134,7 @@ jobs:
 
       - name: Build image
         id: image
+        if: env.HUB != 'true'
         env:
           DOCKERFILE: ${{ steps.ctx.outputs.dockerfile }}
           CONTEXT: ${{ steps.ctx.outputs.context }}
@@ -212,20 +152,19 @@ jobs:
       - name: Quality gate
         id: gate
         env:
-          POLICY: ${{ steps.hub.outputs.policy }}
+          POLICY: ${{ steps.hub.outputs.policy || steps.own.outputs.policy }}
           IMAGE: ${{ steps.image.outputs.image }}:${{ steps.image.outputs.tag }}
-          FORK: ${{ github.event.repository.fork }}
-          TOOLCHAIN: ${{ steps.hub.outputs.bin }}
+          TOOLCHAIN: ${{ steps.hub.outputs.bin || steps.own.outputs.bin }}
         run: |
           set -o pipefail
           export PATH="$TOOLCHAIN:$PATH"
           extra=()
-          if [ "$FORK" = "true" ]; then extra+=(--fork); fi
+          if [ "$HUB" != true ]; then extra+=(--image "$IMAGE"); fi
           while sleep 30; do
             echo "resources: $(free -m | awk '/^Mem:/ {print "mem_available_mb=" $7}') $(df -m / "$RUNNER_TEMP" | awk 'NR > 1 {print $6 "_free_mb=" $4}' | tr '\n' ' ')top_dirs_mb=$(du -xsm "$RUNNER_TEMP"/gate/* /tmp 2>/dev/null | sort -rn | head -3 | awk '{printf "%s:%s,", $2, $1}')"
           done &
           deploy-hub gate --app "$APP" --repo "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" \
-            --policy "$POLICY" --src "$GITHUB_WORKSPACE" --out "$RUNNER_TEMP/gate" --image "$IMAGE" "${extra[@]}"
+            --policy "$POLICY" --src "$GITHUB_WORKSPACE" --out "$RUNNER_TEMP/gate" "${extra[@]}"
 
       - name: Keep gate reports
         if: always()
@@ -251,8 +190,44 @@ jobs:
             (.results[] | "| \(.check) | \(.status) | \(.seconds | floor) | \(.reason // "" | gsub("[|\n]"; " ")) |")' \
             "$verdict" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Build the hub binary
+        id: binary
+        if: env.HUB == 'true'
+        run: |
+          set -euo pipefail
+          make build OUT_DIR="$RUNNER_TEMP/dist" COMMIT="$GITHUB_SHA"
+          test "$("$RUNNER_TEMP/dist/deploy-hub" version)" = "$GITHUB_SHA"
+
+      - name: Keep the hub binary
+        if: env.HUB == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: deploy-hub-linux-amd64
+          path: ${{ runner.temp }}/dist/deploy-hub
+          if-no-files-found: error
+
+      # The only step that publishes a hub release, and the only one that sees
+      # RELEASE_TOKEN: the hub repo, a push to main, after a passed gate. App
+      # repos never get here (e2e TestOnlyTheHubPublishesReleases).
+      - name: Publish the hub release
+        if: >-
+          github.repository == 'DreamsAreReal/deploy-hub' && inputs.app == 'deploy-hub'
+          && github.event_name == 'push' && github.ref == 'refs/heads/main'
+          && steps.gate.outcome == 'success' && steps.binary.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          [ -n "$GH_TOKEN" ] || { echo "the hub release needs the secret RELEASE_TOKEN"; exit 1; }
+          cd "$RUNNER_TEMP/dist"
+          mv deploy-hub deploy-hub-linux-amd64
+          sha256sum deploy-hub-linux-amd64 > deploy-hub-linux-amd64.sha256
+          gh release create "sha-$GITHUB_SHA" deploy-hub-linux-amd64 deploy-hub-linux-amd64.sha256 \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "deploy-hub $GITHUB_SHA" \
+            --notes "Built by deploy.yml after the gate passed on main at $GITHUB_SHA."
+
       - name: Connect to the VPS
-        if: always() && github.event_name != 'pull_request'
+        if: always() && env.GATE_ONLY != 'true'
         env:
           SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
           HOST_KEY: ${{ secrets.VPS_HOST_KEY }}
@@ -263,7 +238,7 @@ jobs:
           printf '%s\n' "$HOST_KEY" > "$RUNNER_TEMP/ssh/known_hosts"
 
       - name: Report the verdict to the hub
-        if: always() && steps.inputs.outcome == 'success' && github.event_name != 'pull_request'
+        if: always() && steps.inputs.outcome == 'success' && env.GATE_ONLY != 'true'
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           CHECKOUT: ${{ steps.checkout.outcome }}
@@ -295,7 +270,7 @@ jobs:
 
       - name: Push the gated image
         id: push
-        if: github.event_name != 'pull_request'
+        if: env.GATE_ONLY != 'true'
         env:
           IMAGE: ${{ steps.image.outputs.image }}
           TAG: ${{ steps.image.outputs.tag }}
@@ -311,7 +286,7 @@ jobs:
           echo "digest=${ref##*@}" >> "$GITHUB_OUTPUT"
 
       - name: Deploy on the VPS
-        if: github.event_name != 'pull_request'
+        if: env.GATE_ONLY != 'true'
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

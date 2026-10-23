@@ -66,12 +66,10 @@ pull request into main
     → deploy.yml, job "gate": toolchain → render → docker build → deploy-hub gate
       → job summary + gate-reports; nothing is pushed, reported or deployed
 push to main
-  → job "preempt pull request gates" (GitHub-hosted, seconds): cancels every
-    queued or running pull request gate of the repo (any stub, they share the
-    runner) until the deploy job holds the runner
-  → job "gate and deploy" (the deploy above)
-  → job "requeue pull request gates": re-runs the latest cancelled gate of
-    each pull request
+  → job "gate and deploy" (the deploy above); while it waits for the runner,
+    deploy-hub-preempt.timer on the hub host cancels the queued or running
+    pull request gates of the repo (any stub, they share the runner) and
+    re-runs them once the deploy holds the runner (see Self-hosted CI runner)
 ```
 
 A main deploy therefore never waits behind a pull request gate; a gate that a
@@ -679,7 +677,7 @@ concurrency:
 jobs:
   deploy:
     name: deploy
-    permissions: {contents: read, packages: write, id-token: write, actions: write}
+    permissions: {contents: read, packages: write, id-token: write}
     uses: DreamsAreReal/deploy-hub/.github/workflows/deploy.yml@main
     with: {app: myapp}
     secrets:
@@ -688,10 +686,11 @@ jobs:
       VPS_HOST_KEY: ${{ github.event_name != 'pull_request' && secrets.VPS_HOST_KEY || '' }}
 ```
 
-The caller grants one permission set to the whole reusable workflow; inside
-it each job takes only what it needs: `actions: write` only the GitHub-hosted
-preempt and requeue jobs, `packages: write` and `id-token: write` only the gate
-job, whose push and deploy steps do not run on a pull request. Pull requests
+The caller grants one permission set to the reusable workflow; its only job
+uses `packages: write` and `id-token: write` in the push and deploy steps,
+which do not run on a pull request. The GITHUB_TOKEN never gets `contents: write`
+or `actions: write`: the hub release uses its own secret (see Releases and
+self-update) and preemption runs on the hub host. Pull requests
 get no deploy secrets (see [Pull request gate](#pull-request-gate)).
 
 Reusable workflows and actions of a private repo are shared only with other

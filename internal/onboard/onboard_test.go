@@ -241,7 +241,7 @@ concurrency:
 jobs:
   deploy:
     name: deploy
-    permissions: {contents: read, packages: write, id-token: write, actions: write}
+    permissions: {contents: read, packages: write, id-token: write}
     uses: H/R/.github/workflows/deploy.yml@main
     with: {app: web, dockerfile: docker/Dockerfile}
     secrets:
@@ -453,7 +453,7 @@ concurrency:
 jobs:
   deploy:
     name: deploy
-    permissions: {contents: read, packages: write, id-token: write, actions: write}
+    permissions: {contents: read, packages: write, id-token: write}
     uses: H/R/.github/workflows/deploy.yml@main
     with: {app: stt, dockerfile: stt/Dockerfile, compose: stt/docker-compose.yml}
     secrets:
