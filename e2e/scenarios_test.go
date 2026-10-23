@@ -1,7 +1,9 @@
 package e2e
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -210,4 +212,24 @@ func TestRollbackCannotReachUngatedImages(t *testing.T) {
 	testutil.Equal(t, res.code, 1)
 	testutil.Contains(t, res.stderr, "never deployed successfully")
 	testutil.Equal(t, h.served(), imageName+":"+goodA)
+}
+
+func TestMutationCacheIsStoredAndServedOnlyToTheHubWorkflow(t *testing.T) {
+	t.Parallel()
+	h := newHub(t)
+	key := strings.Repeat("a", 64)
+	verdicts := `{"version":1,"bases":["` + key + `"],"entries":{"` + key + `":"killed"}}`
+	payload := "\nverdicts=" + base64.StdEncoding.EncodeToString([]byte(verdicts)) + "\n"
+	foreign := h.ssh("mutation-cache-put web "+goodA, "oidc="+h.issuer.token(t, "owner/api", goodA)+payload)
+	testutil.Equal(t, foreign.code, 1)
+	testutil.Equal(t, h.file("deploy-hub/mutation-cache/web/verdicts.json"), "")
+	put := h.ssh("mutation-cache-put web "+goodA, "oidc="+h.issuer.token(t, appRepo, goodA)+payload)
+	testutil.Equal(t, put.code, 0)
+	testutil.Contains(t, put.stdout, "mutation cache: 1 verdicts, sha256 ")
+	got := h.ssh("mutation-cache-get web "+goodB, "oidc="+h.issuer.token(t, appRepo, goodB)+"\n")
+	testutil.Equal(t, got.code, 0)
+	sum := sha256.Sum256([]byte(h.file("deploy-hub/mutation-cache/web/verdicts.json")))
+	testutil.Contains(t, got.stdout, "sha256="+hex.EncodeToString(sum[:]), "verdicts="+base64.StdEncoding.EncodeToString([]byte(h.file("deploy-hub/mutation-cache/web/verdicts.json"))))
+	testutil.Equal(t, h.ssh("mutation-cache-get web "+goodB, "").code, 1)
+	testutil.Contains(t, h.metrics.all(), `deploy_hub_mutation_cache_intact{app="web"} 1`)
 }

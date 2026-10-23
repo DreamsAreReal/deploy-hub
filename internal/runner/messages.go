@@ -1,7 +1,7 @@
 package runner
 
 const (
-	msgRefused          = "refused: only 'deploy <app> <tag>', 'rollback <app> [tag]', 'status', 'history <app>' are accepted"
+	msgRefused          = "refused: only 'deploy <app> <tag>', 'report <app> <tag>', 'rollback <app> [tag]', 'status', 'history <app>', 'mutation-cache-get <app> <tag>', 'mutation-cache-put <app> <tag>' are accepted"
 	msgUnknownApp       = "refused: app not in allowlist"
 	msgBadTag           = "refused: tag must match ^sha-[0-9a-f]{7,40}$"
 	msgBadMain          = "refused: bad main service"
@@ -59,6 +59,12 @@ const (
 	msgBadVerdict       = "refused: gate verdict missing, malformed or for another commit"
 	msgGateRecorded     = "gate %s@%s: %s %s\n"
 	msgHostSyncFail     = "error: host files not installed, previous ones kept: %s\n"
+	msgBadCache         = "refused: mutation verdicts missing or malformed"
+	msgCacheCorrupt     = "error: the stored mutation cache does not match its sha256"
+	msgCacheBusy        = "error: another upload holds the mutation cache lock"
+	msgCacheWrite       = "error: the mutation cache could not be stored"
+	msgCacheServed      = "sha256=%s\nverdicts=%s\n"
+	msgCacheStored      = "mutation cache: %d verdicts, sha256 %s\n"
 	wordPassed          = "passed"
 	wordBlocked         = "blocked"
 	labelYes            = "true"
@@ -76,6 +82,7 @@ const (
 	reasonNotGated   = "not-gated"
 	reasonBadDigest  = "bad-digest"
 	reasonBadVerdict = "bad-verdict"
+	reasonBadCache   = "bad-cache"
 )
 
 var refusalReasons = map[string]string{
@@ -93,4 +100,5 @@ var refusalReasons = map[string]string{
 	msgNotGated:       reasonNotGated,
 	msgBadDigest:      reasonBadDigest,
 	msgBadVerdict:     reasonBadVerdict,
+	msgBadCache:       reasonBadCache,
 }
