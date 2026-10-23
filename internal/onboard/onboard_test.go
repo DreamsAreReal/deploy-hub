@@ -34,6 +34,7 @@ const (
 	alpine        = "FROM alpine\n"
 	flagDryRun    = "--dry-run"
 	flagProfile   = "--profile"
+	flagRef       = "--ref"
 )
 
 const (
@@ -481,5 +482,43 @@ func TestComposeOptionDrivesDetectionAndKeepsTheFirstAppStub(t *testing.T) {
 	testutil.Excludes(t, w.out.String(), "ROOT_ONLY")
 	if w.exec.Count("add "+sttStub) != 1 {
 		t.Fatalf("stub must go to its own file: %v", w.exec.Lines())
+	}
+}
+
+func TestRefReadsTheBranchAndNeverCommitsTheStub(t *testing.T) {
+	w := newWorld(t)
+	w.secrets = allRepoKeys
+	w.repo[stubPath] = Stub("main", "DreamsAreReal/deploy-hub", Options{App: appWeb, Dockerfile: defaultDockerfile}) + "\n"
+	if code := w.run(appWeb, flagRef, "hub-deploy"); code != ExitOK {
+		t.Fatalf("exit %d\n%s", code, w.err)
+	}
+	testutil.Equal(t, w.exec.Count("git clone -q --depth 1 -b hub-deploy https://github.com/DreamsAreReal/web.git"), 1)
+	testutil.Equal(t, len(w.provisions), 1)
+	testutil.Excludes(t, w.out.String(), "commit caller stub")
+	if w.exec.Count("commit") != 0 || w.exec.Count("push") != 0 || w.exec.Count("gh pr create") != 0 {
+		t.Fatalf("--ref must not touch the repo: %v", w.exec.Lines())
+	}
+}
+
+func TestRefWithoutTheStubStopsBeforeChanges(t *testing.T) {
+	for name, stub := range map[string]string{"missing": "", "differs": "uses: DreamsAreReal/deploy-hub/.github/workflows/deploy.yml@v0\n"} {
+		t.Run(name, func(t *testing.T) {
+			w := newWorld(t)
+			if stub != "" {
+				w.repo[stubPath] = stub
+			}
+			testutil.Equal(t, w.run(appWeb, flagRef, "hub-deploy", flagDryRun), ExitFail)
+			w.expect(w.err, ".github/workflows/deploy.yml on hub-deploy is missing or differs")
+			testutil.Equal(t, len(w.provisions), 0)
+			testutil.Equal(t, w.exec.Count("secret set"), 0)
+		})
+	}
+}
+
+func TestRefMustBeABranchName(t *testing.T) {
+	for _, ref := range []string{"--upload-pack=x", "a..b", "a b"} {
+		w := newWorld(t)
+		testutil.Equal(t, w.run(appWeb, flagRef, ref), ExitFail)
+		testutil.Equal(t, w.exec.Count("git clone"), 0)
 	}
 }

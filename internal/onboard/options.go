@@ -9,8 +9,9 @@ import (
 )
 
 const (
-	Usage = `usage: deploy-hub onboard <repo> [--profile <static|bot|service>] [--port N] [--cport N] [--mem LIMIT] [--health-path P] [--app NAME] [--dockerfile PATH] [--compose PATH] [--dry-run]
+	Usage = `usage: deploy-hub onboard <repo> [--profile <static|bot|service>] [--port N] [--cport N] [--mem LIMIT] [--health-path P] [--app NAME] [--dockerfile PATH] [--compose PATH] [--ref BRANCH] [--dry-run]
        (--profile is optional: omitted => auto-detect from the repo)
+       (--ref reads the repo from BRANCH instead of the default one; the caller stub must already be there)
        deploy-hub onboard status | history <app>     # read-only, over the deploy channel`
 	defaultDockerfile = "Dockerfile"
 	flagPrefix        = "-"
@@ -33,6 +34,7 @@ type Options struct {
 	App        string
 	Dockerfile string
 	Compose    string
+	Ref        string
 	DryRun     bool
 }
 
@@ -40,7 +42,7 @@ func ParseOptions(args []string, owner string) (Options, error) {
 	o := Options{HealthPath: "/", Dockerfile: defaultDockerfile}
 	values := map[string]*string{
 		"--profile": &o.Profile, "--port": &o.Port, "--cport": &o.CPort, "--mem": &o.Mem,
-		"--health-path": &o.HealthPath, "--app": &o.App, "--dockerfile": &o.Dockerfile, "--compose": &o.Compose,
+		"--health-path": &o.HealthPath, "--app": &o.App, "--dockerfile": &o.Dockerfile, "--compose": &o.Compose, "--ref": &o.Ref,
 	}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -86,6 +88,9 @@ func (o Options) validate() error {
 	}
 	if o.Compose != "" {
 		errs = errors.Join(errs, validate.RelPath(o.Compose))
+	}
+	if o.Ref != "" {
+		errs = errors.Join(errs, validate.GitRef(o.Ref))
 	}
 	return errs
 }

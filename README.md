@@ -619,7 +619,13 @@ allowlist line) and changes nothing — run it first. Without `--profile` the
 profile is detected: `EXPOSE` in the Dockerfile or a published port in the repo
 compose → `service`, otherwise `bot` (no URL). `--port` is optional: onboard
 picks the first free `127.0.0.1` port from 9001 up. Other options: `--cport`,
-`--mem`, `--health-path`, `--app`, `--dockerfile`, `--compose`.
+`--mem`, `--health-path`, `--app`, `--dockerfile`, `--compose`, `--ref`.
+
+`--ref <branch>` reads the Dockerfile, compose and caller stub from that branch
+instead of the default one — for a repo whose hub files are still in an unmerged
+PR (merging deploys). The stub must already be on the branch, byte-for-byte as
+below (triggering on the default branch); `--ref` never commits it and stops
+before any change when it is missing or differs.
 
 Without `--dry-run` it does everything itself: commits the caller stub to the
 default branch (opens a PR when the branch is protected), sets the repo secrets
