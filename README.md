@@ -246,9 +246,10 @@ both, not the host.
 
 Disk: the baseline runs and the test index build into one Go build cache in the
 report directory. Each mutation worker then gets its own copy made of hard
-links to it (no extra space), and after every mutant everything that mutant
-added to the worker's cache is deleted, so the build cache stays at its
-baseline size however many mutants run. Every 15 seconds, and once before it
+links to it (no extra space); once the builds a worker added pass 1 GiB they are
+deleted after its current mutant, so the build cache stays within its baseline
+size plus 1 GiB per worker however many mutants run, while consecutive mutants
+of a worker still reuse each other's builds. Every 15 seconds, and once before it
 starts, the run measures its report directory (hard links counted once) and
 the free space of that disk; above `mutation_disk_gib` (20) or below
 `mutation_free_gib` (10 GiB free) it stops with `mutation testing stopped to
