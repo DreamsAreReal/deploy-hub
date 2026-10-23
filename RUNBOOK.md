@@ -124,10 +124,9 @@ already deployed; the runner's checks do not apply here):
 
 ## The self-hosted CI runner is offline or a job hangs in "Waiting for a runner"
 
-Alert `DeployHubCIRunnerOffline` / `DeployHubCIDiskFull`. Deploy meanwhile
-from a GitHub-hosted runner:
-`gh variable set DEPLOY_HUB_RUNNER -R DreamsAreReal/<app> -b github-hosted`
-(delete the variable to switch back).
+Alert `DeployHubCIRunnerOffline` / `DeployHubCIDiskFull` / `DeployHubCIQuotaHigh`.
+There is no GitHub-hosted fallback (private repos, no paid minutes): jobs wait
+until the runner is back.
 
 ```
 ssh vpn 'systemctl status ci-netns@<app> ci-docker@<app> ci-runner@<app>'
