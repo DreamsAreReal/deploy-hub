@@ -1054,7 +1054,8 @@ and every check becomes log lines and metrics.
 the gate wrote). Only final verdicts with sha256 keys are accepted; they are
 merged into the stored cache under its own lock, written atomically and their
 sha256 recorded next to them. Over 100,000 verdicts, only the latest upload is
-kept. One upload is limited by the 8 MiB stdin line to about 75,000 verdicts.
+kept, and a file over 16 MiB is never written, so an app's directory under
+`/opt/deploy-hub/mutation-cache` stays within a few tens of MiB. One upload is limited by the 8 MiB stdin line to about 75,000 verdicts.
 `mutation-cache-get` prints `sha256=<hex>` and `verdicts=<base64>`, or nothing
 when there is no cache yet. The runner serves the file only if its sha256 still
 matches the recorded one, so a cache changed on disk outside the runner is not
