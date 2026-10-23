@@ -40,6 +40,8 @@ const (
 	MetricHostFilesChanged     = "deploy_hub_host_files_changed"
 	MetricSelfUpdateSuccess    = "deploy_hub_self_update_success"
 	MetricSelfUpdateInstalled  = "deploy_hub_self_update_installed"
+	MetricHistorySweepSuccess  = "deploy_hub_history_sweep_success"
+	MetricHistorySweepDeleted  = "deploy_hub_history_sweep_deleted_refs"
 
 	LabelApp     = "app"
 	LabelAction  = "action"

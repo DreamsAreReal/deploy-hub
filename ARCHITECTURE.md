@@ -270,7 +270,8 @@ internal/smoke/     ports from smoke.conf that a deploy must not break
 internal/compose/   `render`: repo compose -> server compose (BYOC)
 internal/provision/ `provision` and `facts`: prepare /opt/<app>/ as root
 internal/hostsync/  `host-sync`: install an app's host files from its gated image as root
-internal/selfupdate/ `self-update` and `sudoers-sync`: install a gated release of the hub, write the sudoers rule
+internal/selfupdate/ `self-update`, `sudoers-sync`, `ci-runner-sync`, `systemd-sync`: install a gated release of the hub, its sudoers rule, CI runner files and units
+internal/historysweep/ `history-sweep`: delete refs of a repo not rooted at its public snapshot
 internal/onboard/   `onboard` on the operator machine: stub, secrets, provision
 internal/mcp/       `mcp`: JSON-RPC over stdio, tool schemas, argument checks before SSH
 internal/prune/     keep running image + 2 previous per app
@@ -284,7 +285,7 @@ internal/testutil/  assertions for tests
 internal/gate/      the quality gate (below)
 e2e/                end-to-end tests of the real binary with fake docker/caddy/sudo
 policy/             gate.yaml, tools.yaml, golangci.yml, workflow-audit.yml, per-language tool locks
-server/systemd/     timers: status every minute, prune daily, history-guard every 5 min
+server/systemd/     units (embedded, installed by systemd-sync): status every minute, prune daily, self-update every 10 min, history-sweep every 5 min
 server/vmalert/     alert rules for the hub's metrics
 .github/            ci.yml, deploy.yml (reusable), history-guard.yml, actions/hub
 ```
@@ -483,8 +484,9 @@ mutant runs in its own process group with a memory budget and is killed
 repo, 330 minutes for app deploys.
 
 **History is guarded.** The repo was recreated public on 2026-10-20;
-`history-guard.yml` deletes every branch and tag whose root is not the public
-snapshot. A clone from before that date cannot push: check
+`deploy-hub history-sweep` (server timer every 5 minutes, repos and roots in
+`history_sweep=` of hub.conf) deletes every branch and tag of tasks and
+deploy-hub whose root is not the public snapshot. A clone from before that date cannot push: check
 `git merge-base HEAD origin/main` and cherry-pick onto the new `main`.
 
 **Secrets never go in argv or logs.** `onboard` passes secrets to `gh` via

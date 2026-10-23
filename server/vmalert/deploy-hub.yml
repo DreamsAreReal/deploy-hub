@@ -75,6 +75,18 @@ groups:
           summary: "deploy-hub cannot update itself"
           description: "Every self-update run in the last 40 minutes failed (no gated release found, checksum or version mismatch, or a failed check after the install, which restored the previous binary). Journal: grep self-update /opt/deploy-hub/deploys.log; log: /opt/deploy-hub/logs/self-update.log on the VPS."
 
+      - alert: DeployHubHistorySweepFailed
+        expr: max by (repo) (max_over_time(deploy_hub_history_sweep_success[30m])) == 0
+        annotations:
+          summary: "Old history of {{ $labels.repo }} was not swept for 30 minutes"
+          description: "Every history-sweep run of the last 30 minutes failed for {{ $labels.repo }}, so branches and tags carrying history from before the public snapshot may stay on GitHub. Common causes: the token /etc/deploy-hub/github.token expired or lacks Contents: Read and write on the repo, GitHub is unreachable. Journal: grep history-sweep /opt/deploy-hub/deploys.log; log: /opt/deploy-hub/logs/history-sweep.log on the VPS."
+
+      - alert: DeployHubHistorySweepSilent
+        expr: absent_over_time(deploy_hub_history_sweep_success[30m])
+        annotations:
+          summary: "history-sweep pushed no result for 30 minutes"
+          description: "deploy-hub-history-guard.timer runs history-sweep every 5 minutes and every run pushes a result per repo. A run that stops before (no history_sweep in /opt/deploy-hub/hub.conf, unreadable token) or a stopped timer shows here. On the VPS: systemctl status deploy-hub-history-guard.timer deploy-hub-history-guard.service, /opt/deploy-hub/logs/history-sweep.log."
+
       - alert: DeployHubLockContention
         expr: max by (app) (max_over_time(deploy_hub_lock_wait_seconds[15m])) > 120
         annotations:
