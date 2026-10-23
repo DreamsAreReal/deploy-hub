@@ -169,6 +169,7 @@ func TestOnlyTheHubWorkflowCanDeploy(t *testing.T) {
 		"foreign key":      "oidc=" + other.token(t, appRepo, goodA) + "\ndigest=" + digestFor(goodA) + "\n",
 		"other repository": "oidc=" + h.issuer.token(t, "owner/api", goodA) + "\ndigest=" + digestFor(goodA) + "\n",
 		"other commit":     "oidc=" + h.issuer.token(t, appRepo, goodB) + "\ndigest=" + digestFor(goodA) + "\n",
+		"pull request":     "oidc=" + h.issuer.tokenOn(t, appRepo, goodA, "refs/pull/7/merge") + "\ndigest=" + digestFor(goodA) + "\n",
 		"no digest":        "oidc=" + h.issuer.token(t, appRepo, goodA) + "\n",
 	}
 	for name, stdin := range attempts {
@@ -178,7 +179,7 @@ func TestOnlyTheHubWorkflowCanDeploy(t *testing.T) {
 	testutil.Excludes(t, h.file("fake/calls.log"), "pull")
 	testutil.Equal(t, h.served(), "")
 	testutil.Equal(t, h.file("web/.deploy-state"), "")
-	testutil.True(t, strings.Count(h.file("deploy-hub/deploys.log"), " refuse denied(") == 3, h.file("deploy-hub/deploys.log"))
+	testutil.True(t, strings.Count(h.file("deploy-hub/deploys.log"), " refuse denied(") == 4, h.file("deploy-hub/deploys.log"))
 	testutil.Contains(t, h.metrics.all(), `deploy_hub_identity_verified{app="web",verb="deploy"} 0`)
 }
 

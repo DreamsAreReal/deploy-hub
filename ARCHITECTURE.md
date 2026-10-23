@@ -129,6 +129,7 @@ not, so search for the name.
 5. **Identity** (`identity.go`, `verifyIdentity`, and `internal/oidc`): the
    token must be signed by GitHub, carry audience `deploy-hub`, have
    `job_workflow_ref` equal to this repo's `deploy.yml@refs/heads/main`,
+   `ref` equal to `refs/heads/main` (a pull request gate run cannot deploy),
    `repository` equal to `repo=` in `app.conf` and `sha` equal to the
    requested commit. GitHub's signing keys are cached on disk, so a GitHub
    outage does not block a deploy.
@@ -239,7 +240,7 @@ sudoers rule allows exactly that one command.
 |---|---|
 | Images are built and tested only in CI, never on the VPS | The VPS has 1 CPU and under 1 GiB RAM; a build or load test there would starve the running apps. |
 | SSH with a forced command instead of an HTTP API or agent | No extra daemon or open port. The deploy key can do nothing except call the runner, and the runner accepts five strictly parsed verbs. |
-| GitHub OIDC token on every `deploy`/`report` | A leaked SSH key alone is not enough to deploy. The token proves the request comes from this repo's `deploy.yml@main`, for the app's own repo and this exact commit, so nobody can skip the gate with a workflow of their own. |
+| GitHub OIDC token on every `deploy`/`report` | A leaked SSH key alone is not enough to deploy. The token proves the request comes from this repo's `deploy.yml@main`, for the app's own repo, its `main` branch and this exact commit, so nobody can skip the gate with a workflow of their own. |
 | Pull by digest, not by tag | A tag can be moved after the gate ran; the digest cannot. |
 | Policy lives only in this repo | App repos cannot lower thresholds or add ignore files (`forbidden_files` in `policy/gate.yaml` bans local scanner configs). Changing the rules is a reviewed commit here. |
 | The gate toolchain is pinned by SHA | A gate or policy change reaches app CI only when someone moves the pin on purpose, after it passed CI here. A broken gate commit on `main` cannot block every app at once. |

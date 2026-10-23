@@ -19,17 +19,88 @@ on:
         default: ""
     secrets:
       VPS_SSH_KEY:
-        required: true
+        required: false
       VPS_HOST:
-        required: true
+        required: false
       VPS_HOST_KEY:
-        required: true
+        required: false
 
 permissions: {}
 
 jobs:
+  preempt:
+    name: preempt pull request gates
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      actions: write
+    outputs:
+      runs: ${{ steps.cancel.outputs.runs }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Cancel pull request gates until the deploy job holds the runner
+        id: cancel
+        run: |
+          set -euo pipefail
+          cancelled=()
+          deadline=$(( $(date +%s) + 1200 ))
+          while :; do
+            for status in in_progress queued waiting pending requested; do
+              for id in $(gh api -X GET "repos/$REPO/actions/runs" -f event=pull_request \
+                  -f status="$status" -F per_page=100 --jq '.workflow_runs[].id'); do
+                echo "cancelling pull request gate run $id ($status)"
+                gh api -X POST "repos/$REPO/actions/runs/$id/cancel" > /dev/null || true
+                cancelled+=("$id")
+              done
+            done
+            state="$(gh api "repos/$REPO/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs" \
+              --jq '[.jobs[] | select(.name | endswith("gate and deploy")) | .status][0] // "queued"')"
+            case "$state" in
+              queued | waiting | pending | requested) ;;
+              *) break ;;
+            esac
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::warning::the deploy job is still $state; pull request gates may take the runner first"
+              break
+            fi
+            sleep 10
+          done
+          echo "runs=$(printf '%s\n' "${cancelled[@]}" | sort -u | xargs)" >> "$GITHUB_OUTPUT"
+
+  requeue:
+    name: requeue pull request gates
+    needs: [preempt, deploy]
+    if: always() && needs.preempt.outputs.runs != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      RUNS: ${{ needs.preempt.outputs.runs }}
+    steps:
+      - name: Re-run the latest cancelled gate of each pull request
+        run: |
+          set -euo pipefail
+          for id in $RUNS; do
+            printf '%s' "$id" | grep -Eq '^[0-9]+$' || continue
+            read -r workflow branch conclusion < <(gh api "repos/$REPO/actions/runs/$id" \
+              --jq '[.workflow_id, .head_branch, .conclusion] | @tsv')
+            latest="$(gh api -X GET "repos/$REPO/actions/workflows/$workflow/runs" -f event=pull_request \
+              -f branch="$branch" -F per_page=1 --jq '.workflow_runs[0].id')"
+            if [ "$conclusion" = cancelled ] && [ "$latest" = "$id" ]; then
+              echo "re-running pull request gate run $id ($branch)"
+              gh api -X POST "repos/$REPO/actions/runs/$id/rerun" > /dev/null \
+                || echo "::warning::could not re-run $id; re-run it from the pull request"
+            fi
+          done
+
   deploy:
-    name: gate and deploy
+    name: ${{ github.event_name == 'pull_request' && 'gate' || 'gate and deploy' }}
     runs-on: >-
       ${{ (vars.DEPLOY_HUB_RUNNER == 'github-hosted' || !github.event.repository.private || github.event.repository.fork
       || (github.event.pull_request && github.event.pull_request.head.repo.full_name != github.repository))
@@ -41,6 +112,7 @@ jobs:
       id-token: write
     env:
       APP: ${{ inputs.app }}
+      GATE_ONLY: ${{ github.event_name == 'pull_request' }}
       VPS_USER: deploy
       OIDC_AUDIENCE: deploy-hub
     steps:
@@ -49,7 +121,11 @@ jobs:
         env:
           DOCKERFILE: ${{ inputs.dockerfile }}
           COMPOSE: ${{ inputs.compose }}
+          HAS_SECRETS: ${{ secrets.VPS_SSH_KEY != '' && secrets.VPS_HOST != '' && secrets.VPS_HOST_KEY != '' }}
         run: |
+          if [ "$GATE_ONLY" != true ] && [ "$HAS_SECRETS" != true ]; then
+            echo "a deploy needs the secrets VPS_SSH_KEY, VPS_HOST and VPS_HOST_KEY"; exit 1
+          fi
           printf '%s' "$APP" | grep -Eq '^[a-z0-9][a-z0-9._-]{0,40}$' \
             || { echo "invalid app name: $APP"; exit 1; }
           printf '%s' "$DOCKERFILE" | grep -Eq '^[A-Za-z0-9._/-]{1,200}$' \
@@ -162,8 +238,21 @@ jobs:
             ${{ runner.temp }}/gate/sbom-*.cdx.json
           if-no-files-found: ignore
 
-      - name: Connect to the VPS
+      - name: Summarize the verdict
         if: always()
+        run: |
+          verdict="$RUNNER_TEMP/gate/verdict.json"
+          if [ ! -s "$verdict" ]; then
+            echo "No gate verdict: a step before the gate failed." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          jq -r '"## Gate \(if .passed then "passed" else "failed" end): \(.app) \(.commit[0:7]), \(.seconds | floor) s",
+            "", "| check | status | seconds | reason |", "|---|---|---|---|",
+            (.results[] | "| \(.check) | \(.status) | \(.seconds | floor) | \(.reason // "" | gsub("[|\n]"; " ")) |")' \
+            "$verdict" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Connect to the VPS
+        if: always() && github.event_name != 'pull_request'
         env:
           SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
           HOST_KEY: ${{ secrets.VPS_HOST_KEY }}
@@ -174,7 +263,7 @@ jobs:
           printf '%s\n' "$HOST_KEY" > "$RUNNER_TEMP/ssh/known_hosts"
 
       - name: Report the verdict to the hub
-        if: always() && steps.inputs.outcome == 'success'
+        if: always() && steps.inputs.outcome == 'success' && github.event_name != 'pull_request'
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           CHECKOUT: ${{ steps.checkout.outcome }}
@@ -206,6 +295,7 @@ jobs:
 
       - name: Push the gated image
         id: push
+        if: github.event_name != 'pull_request'
         env:
           IMAGE: ${{ steps.image.outputs.image }}
           TAG: ${{ steps.image.outputs.tag }}
@@ -221,6 +311,7 @@ jobs:
           echo "digest=${ref##*@}" >> "$GITHUB_OUTPUT"
 
       - name: Deploy on the VPS
+        if: github.event_name != 'pull_request'
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

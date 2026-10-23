@@ -22,6 +22,7 @@ import (
 
 const (
 	Issuer       = "https://token.actions.githubusercontent.com"
+	DeployRef    = "refs/heads/main"
 	JWKSURL      = Issuer + "/.well-known/jwks"
 	algRS256     = "RS256"
 	keyTypeRSA   = "RSA"
@@ -193,6 +194,8 @@ func (c Claims) checkSubject(want Expect) error {
 	switch {
 	case c.JobWorkflowRef != want.WorkflowRef:
 		return fmt.Errorf("%w: workflow %q is not the hub deploy workflow", ErrClaims, c.JobWorkflowRef)
+	case c.Ref != DeployRef:
+		return fmt.Errorf("%w: ref %q is not the deploy branch", ErrClaims, c.Ref)
 	case !strings.EqualFold(c.Repository, want.Repository):
 		return fmt.Errorf("%w: repository %q is not bound to this app", ErrClaims, c.Repository)
 	case want.Commit == "" || !strings.HasPrefix(c.Sha, want.Commit):
