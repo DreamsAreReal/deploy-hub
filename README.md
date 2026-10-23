@@ -697,6 +697,7 @@ Isolation, all in [`server/ci-runner`](server/ci-runner):
 | which jobs | job-started hook `ci-job-started`: only workflows of the repo's own `main` (push, `workflow_dispatch` or `schedule`); other branches, pull requests and other events fail before their first step |
 | CPU, memory | every repo has its slice `user-<uid of ci-<repo>>.slice` (its runner, its `dockerd` and its user manager with the containers), each with `ci-limits.conf`: 6 of 8 CPUs, CPU and IO weight 20 (production keeps priority), `MemoryHigh` 8G, `MemoryMax` 9G, no swap. Two jobs at once take at most 18G of the host's 23G; the gate sizes its mutation workers from the cgroup limit |
 | disk | `/var/lib/ci` is the ext4 image `/srv/ci.img` (120G): CI can never fill `/` |
+| disk quota | each repo has a hard ext4 project quota on `/var/lib/ci` (project id = uid of `ci-<repo>`, limits in GiB in `server/ci-runner/disk-quota`: tasks 45, router-bot 25, observability 10, deploy-hub 15), so one repo cannot fill the disk of the others; `register` refuses a repo without a line there. Writes over the quota fail with `Disk quota exceeded`; the job hook prints an error with the usage, and `ci-job-started` refuses jobs while the quota is 95% full |
 | leftover processes | `ci-runner-reap`, run by both job hooks: SIGKILL to every process in the runner's cgroup that is not a descendant of the runner itself (`runsvc.sh` → `RunnerService.js` → `Runner.Listener` → `Runner.Worker` → steps). A step that forks into the background or daemonizes is reparented away from the runner and dies when the job ends, and again before the first step of the next job, so it cannot read the environment (`SSH_KEY`, `GH_TOKEN`) of a later job. A stop or restart of `ci-runner@<repo>` kills the whole cgroup (`KillMode=control-group`) |
 | cleanup | job-completed hook `ci-runner-clean`: removes the job's containers, networks, volumes and pushed images, trims the build cache to 15 GB, empties the workspace, `RUNNER_TEMP`, `TMPDIR`, the tool cache and the downloaded actions; above 70% disk it drops all images and the language caches |
 | fail-safe | `ci-runner-status` stops every runner when the CI disk is not mounted or the nftables table is missing, and stops the runner of a repo whose namespace is gone, whose veth is down or whose runner, `dockerd` or user manager runs outside `/run/netns/ci-<repo>` (`deploy_hub_ci_isolation_ok` 0) |
@@ -781,7 +782,8 @@ gh api -X POST repos/DreamsAreReal/<app>/actions/runners/registration-token --jq
 ```
 
 `host` is idempotent: `uidmap`/`slirp4netns`, the AppArmor profile that lets
-`rootlesskit` create user namespaces on Ubuntu 24.04, the disk image, the
+`rootlesskit` create user namespaces on Ubuntu 24.04, the disk image, `quota` and `linux-image-extra-virtual` (the module `quota_v2`
+that ext4 project quotas need), the
 nftables table, the units, and for every repo already registered its user,
 subordinate ids, home, drop-ins, network namespace and linger (a user manager
 still running in another namespace is restarted). `register` does the same for one
@@ -791,6 +793,16 @@ name), downloads the pinned runner (sha256-checked), configures it as
 itself. To remove one: `systemctl disable --now ci-runner@<app> ci-docker@<app>`,
 `systemctl stop ci-netns@<app>`, `loginctl disable-linger ci-<app>`, delete the runner in the repo settings,
 `/var/lib/ci/<app>` and the user `ci-<app>`.
+
+Disk quotas: the image needs the ext4 features `quota` and `project` once, which
+`tune2fs` sets only on an unmounted image. `ci-runner-setup quota-enable` does
+it: it refuses while a job runs (`Runner.Worker`) or a deploy holds
+`/opt/deploy-hub/deploy.lock`, stops the runners, their `dockerd` and user
+managers, unmounts `/var/lib/ci`, runs `tune2fs -O quota,project -Q prjquota`,
+mounts it with `prjquota`, sets every registered repo's project id and limit and
+starts the runners again, printing both times. A new image gets the features at
+`mkfs`. After that `host` re-applies the limits of `disk-quota` on every run;
+without the features it only warns. `df /var/lib/ci/<repo>` shows the quota.
 
 Moving from the shared user `ci` of the first version: `host` stops every runner,
 removes the user `ci`, its drop-ins and its files on the CI disk, then each
@@ -820,9 +832,10 @@ Logs: the runner and the job hook write to the journal, so they are in
 VictoriaLogs as `unit:"ci-runner@<app>.service"` (the rootless daemon:
 `unit:"ci-docker@<app>.service"`). State: `ci-runner-status.timer` pushes
 `deploy_hub_ci_runner_up{runner}` (1 while the runner holds its connection to
-GitHub) and `deploy_hub_ci_disk_used_ratio` every minute; the alerts
-`DeployHubCIRunnerOffline`, `DeployHubCIRunnerSilent` and `DeployHubCIDiskFull`
-watch them, `DeployHubCIIsolationBroken` the fail-safe above.
+GitHub), `deploy_hub_ci_disk_used_ratio`, `deploy_hub_ci_quota_used_ratio{runner}`
+and `deploy_hub_ci_quota_on{runner}` every minute; the alerts
+`DeployHubCIRunnerOffline`, `DeployHubCIRunnerSilent`, `DeployHubCIDiskFull`,
+`DeployHubCIQuotaHigh` (over 85% of a quota) and `DeployHubCIQuotaOff` watch them, `DeployHubCIIsolationBroken` the fail-safe above.
 
 ## Server layout
 

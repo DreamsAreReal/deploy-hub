@@ -29,6 +29,20 @@ netns_ok() {
     in_netns "user@$uid.service" "/run/netns/ci-$1"
 }
 
+# Project quota of each runner: df of a directory under a project quota
+# reports that quota; deploy_hub_ci_quota_on says the quota really applies.
+quota_metrics() {
+  on=0
+  uid=$(id -u "ci-$1" 2>/dev/null) &&
+    findmnt -no OPTIONS /var/lib/ci | tr ',' '\n' | grep -qx prjquota &&
+    [ "$(lsattr -pd "/var/lib/ci/$1" 2>/dev/null | awk '{print $1}')" = "$uid" ] &&
+    on=1
+  printf 'deploy_hub_ci_quota_on{runner="%s"} %s\n' "$1" "$on"
+  [ "$on" = 1 ] || return 0
+  df -B1 --output=used,size "/var/lib/ci/$1" |
+    awk -v r="$1" 'NR == 2 {printf "deploy_hub_ci_quota_used_ratio{runner=\"%s\"} %.4f\n", r, $1 / $2}'
+}
+
 metrics() {
   base=0
   if isolated; then
@@ -51,6 +65,8 @@ metrics() {
       up=1
     fi
     runners="${runners}deploy_hub_ci_runner_up{runner=\"$repo\"} $up
+"
+    runners="${runners}$(quota_metrics "$repo")
 "
   done
   printf 'deploy_hub_ci_isolation_ok %s\n%s' "$iso" "$runners"

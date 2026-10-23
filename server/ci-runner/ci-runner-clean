@@ -4,6 +4,7 @@ set +o pipefail
 set -u
 BUILD_CACHE_KEEP=${CI_BUILD_CACHE_KEEP:-15gb}
 DISK_MAX_PERCENT=${CI_DISK_MAX_PERCENT:-70}
+QUOTA_FULL_PERCENT=98
 
 log() {
   echo "ci-runner-clean: $*"
@@ -15,12 +16,20 @@ wipe() {
   find "$1" -mindepth 1 -delete
 }
 
+# Under the project quota of the CI user, df of its home reports the quota.
 used_percent() {
-  df --output=pcent /var/lib/ci | tail -1 | tr -dc '0-9'
+  df --output=pcent "$HOME" | tail -1 | tr -dc '0-9'
+}
+
+usage() {
+  df -B1G --output=used,size "$HOME" | awk 'NR == 2 {print $1 " of " $2 " GiB"}'
 }
 
 /usr/local/lib/ci-runner/ci-runner-reap
 log "disk before: $(used_percent)%"
+if [ "$(used_percent)" -ge "$QUOTA_FULL_PERCENT" ]; then
+  echo "::error::ci-runner-clean: the disk quota of $(id -un) is exhausted ($(usage)): writes failed with 'Disk quota exceeded'. The cleanup below drops the caches; the quotas live in server/ci-runner/disk-quota of deploy-hub."
+fi
 docker ps -aq | xargs -r docker rm -f >/dev/null
 docker network prune -f >/dev/null
 docker volume prune -af >/dev/null
@@ -44,5 +53,5 @@ if [ "$(used_percent)" -ge "$DISK_MAX_PERCENT" ]; then
     wipe "$HOME/$d"
   done
 fi
-log "disk after: $(used_percent)%"
+log "disk after: $(used_percent)% ($(usage))"
 exit 0

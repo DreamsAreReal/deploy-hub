@@ -13,6 +13,8 @@ LEGACY_USER=ci
 DISK_IMAGE=/srv/ci.img
 DISK_SIZE=${CI_DISK_SIZE:-120G}
 SUBID_COUNT=65536
+QUOTAS=$HERE/disk-quota
+DEPLOY_LOCK=/opt/deploy-hub/deploy.lock
 HIDDEN="/opt /root /home /etc/srv-backup /etc/wireguard /etc/deploy-hub /var/backups /var/lib/docker /var/lib/containerd -/var/lib/app-backup -/run/docker.sock -/var/run/docker.sock -/run/containerd"
 
 next_subid() {
@@ -148,13 +150,94 @@ legacy() {
 disk() {
   if [ ! -f "$DISK_IMAGE" ]; then
     truncate -s "$DISK_SIZE" "$DISK_IMAGE"
-    mkfs.ext4 -q -m 0 -L ci "$DISK_IMAGE"
+    mkfs.ext4 -q -m 0 -L ci -O quota,project -E quotatype=prjquota "$DISK_IMAGE"
   fi
   chmod 600 "$DISK_IMAGE"
+  mount_unit
+  systemctl daemon-reload
   install -d -m 755 "$CI_ROOT"
   systemctl enable --now var-lib-ci.mount
   chown root:root "$CI_ROOT"
   chmod 755 "$CI_ROOT"
+}
+
+# The prjquota mount option fails to mount an image without the project
+# feature, so the unit gets it only once quota-enable has run.
+mount_unit() {
+  if tune2fs -l "$DISK_IMAGE" 2>/dev/null | grep -q '^Filesystem features:.* project'; then
+    install -m 644 "$HERE/var-lib-ci.mount" "$UNITS/var-lib-ci.mount"
+  else
+    sed 's/,prjquota//' "$HERE/var-lib-ci.mount" >"$UNITS/var-lib-ci.mount"
+    chmod 644 "$UNITS/var-lib-ci.mount"
+  fi
+}
+
+quota_gib() {
+  awk -v r="$1" '$1 == r && $2 ~ /^[0-9]+$/ {print $2}' "$QUOTAS"
+}
+
+quota_enabled() {
+  tune2fs -l "$DISK_IMAGE" | grep -q '^Filesystem features:.* project' &&
+    findmnt -no OPTIONS "$CI_ROOT" | tr ',' '\n' | grep -qx prjquota
+}
+
+# Project quotas need the image unmounted once: only when no job runs.
+quota_enable() {
+  quota_enabled && return 0
+  if pgrep -f 'Runner.Worker' >/dev/null; then
+    echo "a CI job is running: enable the quotas when the runners are idle" >&2
+    exit 1
+  fi
+  if [ -e "$DEPLOY_LOCK" ] && ! flock -n "$DEPLOY_LOCK" true; then
+    echo "a deploy holds $DEPLOY_LOCK: enable the quotas when it is done" >&2
+    exit 1
+  fi
+  echo "stopping the runners to enable project quotas on $DISK_IMAGE: $(date -u +%FT%TZ)" >&2
+  systemctl stop 'ci-runner@*.service' 'ci-docker@*.service'
+  for repo in $(registered); do
+    systemctl stop "user@$(id -u "ci-$repo").service"
+  done
+  systemctl stop var-lib-ci.mount
+  tune2fs -O quota,project -Q prjquota "$DISK_IMAGE" >/dev/null
+  install -m 644 "$HERE/var-lib-ci.mount" "$UNITS/var-lib-ci.mount"
+  systemctl daemon-reload
+  systemctl start var-lib-ci.mount
+  quota_enabled || {
+    echo "project quotas are still off on $CI_ROOT" >&2
+    exit 1
+  }
+  for repo in $(registered); do
+    repo_quota "$repo"
+    systemctl start "user@$(id -u "ci-$repo").service"
+  done
+  for link in "$WANTS"/ci-runner@*.service; do
+    [ -L "$link" ] && systemctl start "$(basename "$link")"
+  done
+  echo "runners started again: $(date -u +%FT%TZ)" >&2
+}
+
+quota_ready() {
+  [ -n "$(quota_gib "$1")" ] || {
+    echo "no disk quota for $1 in $QUOTAS: add a line '$1 <GiB>' first" >&2
+    exit 1
+  }
+  quota_enabled || {
+    echo "project quotas are off on $CI_ROOT: run '$0 quota-enable' while no job runs" >&2
+    exit 1
+  }
+}
+
+repo_quota() {
+  quota_ready "$1"
+  gib=$(quota_gib "$1")
+  uid=$(id -u "ci-$1")
+  home=$CI_ROOT/$1
+  if [ "$(lsattr -pd "$home" | awk '{print $1}')" != "$uid" ]; then
+    find "$home" -xdev -type d -exec chattr +P -p "$uid" {} + &&
+      find "$home" -xdev -type f -exec chattr -p "$uid" {} + ||
+      echo "warning: some files of $home keep another project and count outside the quota of $1" >&2
+  fi
+  setquota -P "$uid" 0 $((gib * 1048576)) 0 0 "$CI_ROOT"
 }
 
 registered() {
@@ -166,7 +249,9 @@ registered() {
 }
 
 host() {
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -q uidmap slirp4netns nftables \
+  # quota_v2 (ext4 project quotas) ships in modules-extra, which linux-virtual
+  # lacks; the meta package keeps it in step with every new kernel.
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -q uidmap slirp4netns nftables quota linux-image-extra-virtual \
     libicu74 libkrb5-3 liblttng-ust1t64 libssl3t64 zlib1g >/dev/null
   install -m 644 "$HERE/rootlesskit.apparmor" /etc/apparmor.d/rootlesskit
   apparmor_parser -r /etc/apparmor.d/rootlesskit
@@ -179,7 +264,7 @@ host() {
   install -m 755 "$HERE/ci-job-started" "$LIB/ci-job-started.sh"
   install -m 755 "$HERE/ci-runner-clean" "$LIB/ci-runner-clean.sh"
   rm -f "$LIB/ci-runner-clean"
-  for f in var-lib-ci.mount ci-netns@.service ci-docker@.service ci-runner@.service \
+  for f in ci-netns@.service ci-docker@.service ci-runner@.service \
     ci-runner-status.service ci-runner-status.timer; do
     install -m 644 "$HERE/$f" "$UNITS/$f"
   done
@@ -190,6 +275,11 @@ host() {
   systemctl enable --now ci-runner-status.timer
   for repo in $(registered); do
     prepare "$repo"
+    if quota_enabled; then
+      repo_quota "$repo"
+    else
+      echo "warning: no disk quota for $repo until '$0 quota-enable' runs" >&2
+    fi
   done
   systemctl try-restart 'ci-docker@*.service' 'ci-runner@*.service'
 }
@@ -198,6 +288,7 @@ register() {
   repo=$1
   check_repo "$repo"
   read -r token
+  quota_ready "$repo"
   user=ci-$repo
   dir=$CI_ROOT/$repo/runner
   tarball=$CACHE/actions-runner-$RUNNER_VERSION.tar.gz
@@ -209,6 +300,7 @@ register() {
   fi
   echo "$RUNNER_SHA256  $tarball" | sha256sum -c --quiet
   prepare "$repo"
+  repo_quota "$repo"
   if [ ! -f "$dir/.runner" ]; then
     runuser -u "$user" -- tar -xzf - -C "$dir" <"$tarball"
     ip netns exec "ci-$repo" runuser -u "$user" -- env HOME="$CI_ROOT/$repo" "$dir/config.sh" --unattended \
@@ -221,8 +313,9 @@ register() {
 case "${1:-}" in
   host) host ;;
   register) register "${2:?repository}" ;;
+  quota-enable) quota_enable ;;
   *)
-    echo "usage: $0 host | register <repo> < registration-token" >&2
+    echo "usage: $0 host | quota-enable | register <repo> < registration-token" >&2
     exit 2
     ;;
 esac
