@@ -76,9 +76,12 @@ func (h *harness) run(args ...string) int {
 		Owner: func(string) func(string) error {
 			return func(p string) error { h.owned = append(h.owned, p); return nil }
 		},
-		Now:     time.Now,
-		Checks:  h.checks,
-		Sudoers: filepath.Join(h.hubDir, "sudoers.d", "deploy-hub"),
+		Now:          time.Now,
+		Checks:       h.checks,
+		Sudoers:      filepath.Join(h.hubDir, "sudoers.d", "deploy-hub"),
+		Token:        filepath.Join(h.hubDir, "github.token"),
+		CIRoot:       filepath.Join(h.hubDir, "ci"),
+		PreemptState: filepath.Join(h.hubDir, "preempt.json"),
 	}
 	return Run(context.Background(), args, h.lookup, IO{Stdin: strings.NewReader(""), Stdout: h.out, Stderr: h.err}, deps)
 }
