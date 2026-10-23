@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -23,11 +24,13 @@ const (
 	cacheDirPerm    = 0o700
 	tmpSuffix       = ".tmp"
 	MaxCacheEntries = 100000
+	MaxCacheBytes   = 16 << 20
 )
 
 var (
 	errBadCache     = errors.New(msgBadCache)
 	errCacheCorrupt = errors.New(msgCacheCorrupt)
+	errCacheTooBig  = errors.New("mutation cache over its size limit")
 )
 
 func (s *Service) cacheRequest(ctx context.Context, raw, verb string, entry registry.Entry, tag string, stdin io.Reader) (Meta, int, bool) {
@@ -143,6 +146,9 @@ func (s *Service) mergedCache(app string, incoming mutation.Verdicts) mutation.V
 func (s *Service) saveCache(app string, v mutation.Verdicts) (string, error) {
 	dir := s.Paths.MutationCache(app)
 	data, err := v.Encode()
+	if err == nil && len(data) > MaxCacheBytes {
+		err = fmt.Errorf("%w: %d bytes, the limit is %d", errCacheTooBig, len(data), MaxCacheBytes)
+	}
 	if err == nil {
 		err = os.MkdirAll(dir, cacheDirPerm)
 	}
