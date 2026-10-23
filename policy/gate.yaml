@@ -171,6 +171,23 @@ apps:
           secrets; deploy-hub preempt on the host cancels it for a main deploy and re-runs it after, #679).
           This is the only accepted workflow finding.
     scenarios:
+      - id: only-the-hub-publishes-releases
+        category: security
+        tests:
+          - e2e.TestOnlyTheHubPublishesReleases
+          - e2e.TestDeployRunsOnlyOnTheEURunner
+      - id: preempt-cancels-only-pull-request-runs
+        category: security
+        tests:
+          - internal/preempt.TestAWaitingMainDeployCancelsOnlyPullRequestRuns
+          - internal/preempt.TestARunThatTurnsIntoAnotherEventIsNotCancelled
+      - id: self-update-needs-the-host-token
+        category: security
+        tests:
+          - internal/selfupdate.TestNoTokenRefusesBeforeAnyRequest
+          - internal/selfupdate.TestWrongTokenIsReportedAsUnauthorized
+          - internal/selfupdate.TestBootstrapRefusesWithoutAUsableToken
+          - internal/selfupdate.TestBootstrapRefusesWithAWrongToken
       - id: forced-command-allows-only-runner-verbs
         category: security
         tests:
