@@ -73,6 +73,9 @@ func (s *Service) deployLocked(ctx context.Context, op *operation, conf registry
 	s.upSidecars(ctx, op.dir, conf, ref)
 	t := targetFor(conf)
 	healthy, oldAlive := s.blueGreen(ctx, op, conf, ref, t)
+	if healthy && !s.syncHost(ctx, op) {
+		return s.hostFailed(ctx, op, conf, prev, t)
+	}
 	if healthy {
 		return s.deploySucceeded(ctx, op, conf, prev)
 	}
@@ -183,6 +186,17 @@ func (s *Service) deployFailed(ctx context.Context, op *operation, conf registry
 	default:
 		s.stopFirstDeploy(ctx, op, conf)
 	}
+	return ExitFail
+}
+
+func (s *Service) hostFailed(ctx context.Context, op *operation, conf registry.AppConf, prev string, t health.Target) int {
+	s.record(journal.Entry{App: op.app, Sha7: op.sha7, Action: journal.ActionDeploy, Result: journal.ResultFail, Seconds: s.since(op.t0)})
+	s.Log.Error("deploy failed host sync", "app", op.app, "sha", op.sha7, "previous", prev)
+	if prev == "" {
+		s.stopFirstDeploy(ctx, op, conf)
+		return ExitFail
+	}
+	s.rollbackAfterFailure(ctx, op, conf, prev, t)
 	return ExitFail
 }
 

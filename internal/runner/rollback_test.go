@@ -3,6 +3,7 @@ package runner
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -114,6 +115,20 @@ func TestBYOCRollbackBringsSidecars(t *testing.T) {
 	if e.exec.Count("--no-recreate") != 1 {
 		t.Fatal("sidecars must be ensured")
 	}
+	testutil.Equal(t, e.exec.Count("--no-deps"), 0)
+}
+
+func TestBYOCDeployRecreatesChangedSidecarsButNotTheMainService(t *testing.T) {
+	e := newEnv(t)
+	e.sim.mainName = appName
+	stack := "services:\n  web:\n    image: ${DEPLOY_IMAGE}\n  vm:\n    image: vm:1\n  vector:\n    image: vector:1\n"
+	stdin := meta("compose="+base64.StdEncoding.EncodeToString([]byte(stack)), "main=web", "hport=", "hmode=process")
+	testutil.Equal(t, e.dispatch("deploy web "+goodTag, stdin), ExitOK)
+	testutil.Equal(t, e.exec.Count("up -d --pull missing --no-deps vm vector"), 1)
+	testutil.Equal(t, e.exec.Count("--no-deps web"), 0)
+	e.sim.upErr = errSim
+	e.dispatch("deploy web "+good2Tag, stdin)
+	e.expectLog("changed sidecars not recreated")
 }
 
 func TestCancelledContextStillCleansUpStandby(t *testing.T) {

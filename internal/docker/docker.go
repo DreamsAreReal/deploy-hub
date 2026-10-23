@@ -71,6 +71,7 @@ type UpOptions struct {
 	Image      string
 	Pull       string
 	NoRecreate bool
+	NoDeps     bool
 	Services   []string
 }
 
@@ -78,6 +79,9 @@ func (c Client) ComposeUp(ctx context.Context, o UpOptions) error {
 	args := []string{verbCompose, flagFile, o.File, "up", flagDetach, "--pull", o.Pull}
 	if o.NoRecreate {
 		args = append(args, "--no-recreate")
+	}
+	if o.NoDeps {
+		args = append(args, "--no-deps")
 	}
 	args = append(args, o.Services...)
 	_, err := c.run(ctx, imageEnv(o.Image), "", "", args...)

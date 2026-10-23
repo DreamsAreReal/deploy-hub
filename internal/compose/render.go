@@ -369,6 +369,20 @@ func fieldErr(err, kind error) error {
 	return nil
 }
 
+func Sidecars(data []byte, main string) []string {
+	doc, err := parse(data)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, s := range doc.services {
+		if s.name != main {
+			out = append(out, s.name)
+		}
+	}
+	return out
+}
+
 func OverlapLabel(data []byte, service string) (string, bool) {
 	doc, err := parse(data)
 	if err != nil {

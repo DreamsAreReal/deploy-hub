@@ -270,6 +270,32 @@ apps:
         tests:
           - internal/gate.TestRunnerCollectsResults
           - internal/gate.TestUnfinishedCheckFails
+      - id: host-sync-writes-only-listed-paths
+        category: security
+        tests:
+          - internal/gate/policy.TestHostSpecRefusesPathsOutsideTheList
+          - internal/gate/policy.TestParseModeAllowsOnlyPlainModes
+          - internal/hostsync.TestRefusesBundlesOutsideTheList
+      - id: host-sync-refuses-symlinks
+        category: security
+        tests:
+          - internal/hostsync.TestRefusesSymlinkedOrIrregularDestinations
+          - internal/hostsync.TestEnvFileMustNotBeASymlink
+      - id: host-sync-installs-only-gated-digests
+        category: security
+        tests:
+          - internal/hostsync.TestRefusesASubstitutedOrUngatedImage
+      - id: host-sync-placeholders-cannot-inject
+        category: security
+        tests:
+          - internal/hostsync.TestPlaceholdersNeedSafeValues
+      - id: host-sync-restores-on-failure
+        category: business
+        tests:
+          - internal/hostsync.TestFailedHealthCheckRestoresThePreviousFiles
+          - internal/hostsync.TestEveryActivationStepFailureRestores
+          - internal/runner.TestHostSyncFailureRollsTheContainersBack
+          - internal/runner.TestRollbackReinstallsTheTargetsHostFiles
   tasks:
     repo: DreamsAreReal/tasks
     kind: service

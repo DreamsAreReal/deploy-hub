@@ -23,6 +23,8 @@ const (
 	ActionRefuse   = "refuse"
 	ActionPrune    = "prune"
 	ActionGate     = "gate"
+	ActionHostSync = "host-sync"
+	ActionHostBack = "host-restore"
 
 	ResultOK   = "ok"
 	ResultFail = "fail"

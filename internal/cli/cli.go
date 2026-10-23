@@ -24,6 +24,7 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/scan"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/shell"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/source"
+	"github.com/DreamsAreReal/deploy-hub/internal/hostsync"
 	"github.com/DreamsAreReal/deploy-hub/internal/obs"
 	"github.com/DreamsAreReal/deploy-hub/internal/onboard"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
@@ -45,6 +46,7 @@ const (
 	CmdGate      = "gate"
 	CmdTools     = "tools"
 	CmdMCP       = "mcp"
+	CmdHostSync  = "host-sync"
 
 	binDocker    = "docker"
 	binSudo      = "sudo"
@@ -59,6 +61,7 @@ commands:
   runner [request]                 SSH forced command (request from SSH_ORIGINAL_COMMAND)
   render <app> <in> <out>          render a repo compose into a deploy-ready one
   caddy-sync                       regenerate the Caddyfile from apps.list
+  host-sync <app> <tag>            install the app's gated host files as root (policy host spec)
   prune                            delete old app images (keep running + 2 previous)
   provision --app NAME ...         prepare /opt/<app> on the VPS (root)
   facts <app>                      print server facts for onboarding
@@ -104,6 +107,7 @@ var handlers = map[string]handler{
 	CmdGate:      {run: runGate, binaries: gateBinaries, verbose: true},
 	CmdTools:     {run: runTools, binaries: []string{tools.GoBinary, tools.TarBinary}, verbose: true},
 	CmdMCP:       {run: runMCP, binaries: []string{binSSH}},
+	CmdHostSync:  {run: runHostSync, binaries: []string{hostsync.DockerBinary, hostsync.SystemctlBinary, hostsync.AnalyzeBinary, hostsync.CaddyBinary}, onServer: true},
 }
 
 var gateBinaries = []string{

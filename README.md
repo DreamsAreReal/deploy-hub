@@ -324,6 +324,7 @@ commands:
 | `gate …` | CI | the quality gate |
 | `tools --manifest … --dir …` | CI | installs the pinned scanners, checksums verified |
 | `caddy-sync` | root (via a narrow sudoers rule) | regenerates the Caddyfile from `apps.list` |
+| `host-sync <app> <tag>` | root (via a narrow sudoers rule, called by `runner`) | installs the host files of an app's gated image, as listed in the policy (see [Host files](#host-files-host-sync)) |
 | `prune` | root (systemd timer) | keeps the running image + 2 previous per app |
 | `provision --app … ` | root (from `onboard`) | prepares `/opt/<app>/` and the allowlist line |
 | `facts <app>` | root (from `onboard`) | reports what already exists on the server |
@@ -382,12 +383,19 @@ root SSH to. `<vps>` is the server address.
    gate verdict, deploy and rollback to the task tracker as delivery steps
    (see [Delivery steps](#delivery-steps)); `DEPLOY_HUB_DELIVERY_URL` overrides it.
 
-6. **sudoers rule** — the runner (user `deploy`) may refresh routes, nothing else:
+6. **sudoers rules** — the runner (user `deploy`) may refresh routes and
+   install the host files the policy lists for an app, nothing else:
 
    ```
-   ssh vpn "printf '%s\n' 'deploy ALL=(root) NOPASSWD: /opt/deploy-hub/bin/deploy-hub caddy-sync' > /etc/sudoers.d/deploy-hub
+   ssh vpn "printf '%s\n' \
+       'deploy ALL=(root) NOPASSWD: /opt/deploy-hub/bin/deploy-hub caddy-sync' \
+       'deploy ALL=(root) NOPASSWD: /opt/deploy-hub/bin/deploy-hub host-sync *' > /etc/sudoers.d/deploy-hub
             chmod 440 /etc/sudoers.d/deploy-hub && visudo -cf /etc/sudoers.d/deploy-hub"
    ```
+
+   `host-sync` takes exactly `<app> <tag>`, both checked against the same
+   regexes as the runner's, and does nothing for an app without a `host:`
+   spec in the policy compiled into the binary.
 
 7. **Daily prune and the per-minute status refresh** (keeps the metrics
    continuous, see Observability):
@@ -507,6 +515,12 @@ If the repo ships `docker-compose.yml` (or `.yaml`, or `compose.yml`), CI runs
   is attached to the main service.
 - `deploy-hub.overlap: "false"` on the main service turns off the zero-downtime
   overlap of old and new instance (see Health gate and rollback).
+- sidecars are started with `--no-recreate` and then brought up once more with
+  `--no-deps` and the list of every service but the main one, so a sidecar
+  whose image or settings changed in the compose is recreated, an unchanged one
+  keeps running and the main service is never touched outside the blue-green
+  swap. A rollback runs the compose that is installed now (BYOC keeps no copy
+  of older composes).
 
 A second app of the same repo (for example `stt` next to `tasks`) brings its
 own compose anywhere in the repo and names it in the caller's `compose:` input
@@ -522,6 +536,72 @@ checks the whole repo for each of them. Onboard it with
 the profile and port come from that compose, and the stub goes to
 `.github/workflows/deploy-stt.yml` (workflow name and concurrency group
 `deploy-stt`) so the first app's `deploy.yml` stays as it is.
+
+
+### Host files (host-sync)
+
+Some apps need files on the host itself, owned by root: a systemd timer that
+collects host metrics, a backup script, a Caddy site in `/etc/caddy/extra/`.
+The hub installs them from the app's **gated image**, never from the network
+or git, and only to the paths the **policy of this repo** lists for the app:
+
+```yaml
+apps:
+  observability:
+    host:
+      files:
+        - {src: obs-host-metrics, dst: /usr/local/sbin/obs-host-metrics, owner: root, group: root, mode: "0755"}
+        - {src: obs-host-metrics.timer, dst: /etc/systemd/system/obs-host-metrics.timer, owner: root, group: root, mode: "0644"}
+        - {src: ingest.caddy, dst: /etc/caddy/extra/observability-ingest.caddy, owner: root, group: caddy, mode: "0640", env: ingest.env}
+      dirs:
+        - {path: /var/lib/node_exporter/textfile, owner: root, group: root, mode: "0755"}
+      timers: [obs-host-metrics.timer]
+      checks: [obs-host-metrics.service]
+```
+
+- `src` is a path inside `/deploy-hub/host/` of the image. The image must hold
+  exactly the listed files there: an unlisted file, a symlink, a FIFO or a
+  file over 1 MiB fails the sync.
+- `dst` must be a file name directly inside one of `/usr/local/sbin/`,
+  `/etc/systemd/system/`, `/etc/caddy/extra/` or `/var/lib/node_exporter/`
+  (the list is in code, `policy.HostRoots`); `mode` is four octal digits
+  without setuid/setgid/sticky bits and without group or other write.
+  `timers` and `checks` may only name units the same spec installs. The
+  policy loader rejects anything else, so the app repo cannot widen it.
+- `env` renders `@KEY@` placeholders from `/opt/<app>/<env>`; every value
+  must match `^[A-Za-z0-9._:/-]{1,256}$` (no spaces, braces or newlines) and
+  the env file may not be a symlink.
+
+When it runs: `runner` calls `sudo -n deploy-hub host-sync <app> <tag>` after
+the containers of a deploy, rollback or redeploy passed the health gate, for
+apps that have a `host:` spec in the policy compiled into the server binary.
+`host-sync` (root):
+
+1. refuses unless `deploys.log` has `<app>@<sha7> gate ok` and the local image
+   `<image>:<tag>` was pulled by digest from `image=` of `app.conf`; it then
+   reads the files from `<image>@<digest>` (`docker create` + `docker cp`, the
+   container never starts);
+2. refuses a destination that is a symlink or not a regular file, and a
+   destination directory that is a symlink or missing;
+3. copies the previous version of every file it is about to change to
+   `/var/lib/deploy-hub/host-backup/<app>/<UTC stamp>-<sha7>/` (`manifest`
+   lists mode, uid, gid and path; the newest 5 copies are kept);
+4. writes each file next to its destination (`O_EXCL|O_NOFOLLOW`), sets owner
+   and mode, and renames it into place;
+5. activates: `systemd-analyze verify` and `systemctl daemon-reload` when a
+   unit changed, `caddy validate` and `systemctl reload caddy` when a Caddy
+   site changed, `systemctl enable --now <timers>`, then `systemctl start
+   <checks>`, which must succeed: that is the health check of the host part.
+
+If any step of 4–5 fails, the previous files are put back (new ones are
+removed), systemd and Caddy are reloaded, the journal gets `host-restore`,
+and the runner treats the deploy as failed: it rolls the containers back to
+the previous tag (or stops a first deploy). Every run writes `<app>@<sha7>
+host-sync ok|fail Ns changed=<n>` to the journal and pushes
+`deploy_hub_host_sync_success{app}` and `deploy_hub_host_files_changed{app}`.
+
+The host spec ships with the binary (`policy/gate.yaml` is embedded), so a
+change to it reaches the server only with a new binary release.
 
 ## Self-hosted CI runner
 
@@ -698,6 +778,7 @@ watch them, `DeployHubCIIsolationBroken` the fail-safe above.
 | `/opt/<app>/app.conf` | `profile=`, `port=`, `health_path=`, `image=`, `repo=`, optional `bluegreen=on\|off` (BYOC: `mode=byoc`, `main=`, `hmode=`) |
 | `/opt/<app>/.env` | app secrets (600), referenced by compose, never in git |
 | `/opt/<app>/.deploy-state` | `current=`/`previous=` sha tags — rollback source of truth |
+| `/var/lib/deploy-hub/host-backup/<app>/` | root, 700: previous host files replaced by `host-sync`, newest 5 runs |
 
 ## Runner interface
 
@@ -927,7 +1008,8 @@ time quantiles are recording rules in the observability repo
 | `deploy_hub_prune_removed_images`, `deploy_hub_prune_kept_images` | app | last prune |
 | `deploy_hub_caddy_routes`, `deploy_hub_caddy_sync_success`, `deploy_hub_caddy_reload` | — | last route sync |
 | `deploy_hub_provision_created_resources` | app | files/lines created by the last provision |
-| `deploy_hub_command_exit_code` | command | exit code of a server command run (`runner`, `caddy-sync`, `prune`, `provision`, `facts`); one sample per run |
+| `deploy_hub_host_sync_success`, `deploy_hub_host_files_changed` | app | 1/0 and the number of replaced files for every `host-sync` run |
+| `deploy_hub_command_exit_code` | command | exit code of a server command run (`runner`, `caddy-sync`, `host-sync`, `prune`, `provision`, `facts`); one sample per run |
 | `deploy_hub_command_duration_seconds` | command, result | run time; result `ok`, `fail`, `usage` or `panic` |
 | `deploy_hub_command_panicked` | command | 1 when the run recovered a panic |
 | `deploy_hub_command_log_records` | command, level | warning and error log records of the run |
@@ -943,7 +1025,7 @@ vmalert rules over these metrics: a hub that pushed nothing for 5 minutes, a
 panic, error log records, a failed server command, a failed deploy, redeploy or
 rollback, a gate rejection (per check, `ci-<step>` included), a crashed gate
 check, any refused request, an app unhealthy for 5 minutes, a failed Caddy
-sync, a deploy waiting over 120 s for the lock, a failed tracker post and an
+sync, a failed host-sync, a deploy waiting over 120 s for the lock, a failed tracker post and an
 unreadable journal, a self-hosted CI runner offline for 10 minutes, its
 state not pushed, broken CI isolation, and the CI disk over 85%. `go test ./internal/obs` fails when a rule uses a metric
 that the code does not declare, or when a problem metric has no rule.
@@ -1030,8 +1112,15 @@ hand-managed vhosts that are not deploy-hub apps.
   digest that workflow pushed after the gate.
 - Separate `deploy` user; its key is bound to the forced command — a leaked key
   yields "deploy an allowlisted app with a valid GitHub identity", not a shell.
-  The runner never invokes a shell; it executes only `docker` and
-  `sudo -n deploy-hub caddy-sync`, from a fixed table of literal executables.
+  The runner never invokes a shell; it executes only `docker`,
+  `sudo -n deploy-hub caddy-sync` and `sudo -n deploy-hub host-sync <app> <tag>`,
+  from a fixed table of literal executables.
+- Root on the host is reached only through those two commands. `host-sync`
+  installs nothing but files of an image that passed the gate (journal) and was
+  pulled by digest, to the explicit per-app list of paths, owners and modes in
+  this repo's policy; see [Host files](#host-files-host-sync). The `deploy` user
+  is in the `docker` group, so this narrows what the runner does by design, not
+  what a full compromise of that user could do.
 - `deploy-hub mcp` holds no extra power: it uses the deploy key, so an agent
   gets exactly the runner's verbs minus `deploy`/`report` (no OIDC token), and
   validates arguments before they reach SSH.

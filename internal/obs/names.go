@@ -36,6 +36,8 @@ const (
 	MetricCIRunnerUp           = "deploy_hub_ci_runner_up"
 	MetricCIDiskUsedRatio      = "deploy_hub_ci_disk_used_ratio"
 	MetricCIIsolationOK        = "deploy_hub_ci_isolation_ok"
+	MetricHostSyncSuccess      = "deploy_hub_host_sync_success"
+	MetricHostFilesChanged     = "deploy_hub_host_files_changed"
 
 	LabelApp     = "app"
 	LabelAction  = "action"

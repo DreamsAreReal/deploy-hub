@@ -63,6 +63,12 @@ groups:
           summary: "Caddy routes were not updated"
           description: "deploy-hub caddy-sync could not validate, write or reload the Caddyfile, so new routes are not served. Log: /opt/deploy-hub/logs/caddy-sync.log on the VPS."
 
+      - alert: DeployHubHostSyncFailed
+        expr: min by (app) (min_over_time(deploy_hub_host_sync_success[15m])) == 0
+        annotations:
+          summary: "Host files of {{ $labels.app }} were not installed"
+          description: "deploy-hub host-sync refused the image or a check after the install failed, so the previous host files were restored and the deploy failed. Journal: grep '{{ $labels.app }}@' /opt/deploy-hub/deploys.log | grep host-; log: /opt/deploy-hub/logs/host-sync.log on the VPS."
+
       - alert: DeployHubLockContention
         expr: max by (app) (max_over_time(deploy_hub_lock_wait_seconds[15m])) > 120
         annotations:

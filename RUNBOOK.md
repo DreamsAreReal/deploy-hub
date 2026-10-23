@@ -144,6 +144,25 @@ Check a certificate issuer:
     echo | openssl s_client -connect <app>.<host-slug>.sslip.io:443 \
       -servername <app>.<host-slug>.sslip.io 2>/dev/null | openssl x509 -issuer -noout
 
+## Host files (host-sync failed)
+
+`DeployHubHostSyncFailed` or a deploy that printed `error: host files not
+installed`: the containers were rolled back and the previous host files are in
+place again. Find why:
+
+    ssh vpn "grep 'host-' /opt/deploy-hub/deploys.log | tail"
+    ssh vpn "tail -n 50 /opt/deploy-hub/logs/host-sync.log"
+
+`host-sync ... changed=0` with a fail and no `host-restore` line means it
+refused before touching anything (no `gate ok` for the commit, image not pulled
+by digest, a symlink or an unlisted file in the image). A `host-restore fail`
+line means the restore itself hit an error: compare the files with the copy in
+`/var/lib/deploy-hub/host-backup/<app>/<newest>/` (`manifest`: index, mode,
+uid, gid, path; `- - - -` = the file did not exist before) and put them back
+by hand, then `systemctl daemon-reload` / `systemctl reload caddy`. Re-run for
+the live tag after a fix: `ssh vpn 'sudo /opt/deploy-hub/bin/deploy-hub
+host-sync <app> sha-<sha>'`. Do not copy host files to the server any other way.
+
 ## Disk / images
 
 Prune runs daily (`deploy-hub-prune.timer`) and keeps running + 2 previous

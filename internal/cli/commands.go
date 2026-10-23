@@ -76,6 +76,8 @@ func runRunner(ctx context.Context, a *App, ex procexec.Runner, args []string) i
 		}},
 		Audience:    a.Config.Audience,
 		WorkflowRef: a.Config.WorkflowRef(),
+		Host:        runner.SudoHost{Exec: ex, Binary: a.Config.Paths.Binary()},
+		HostApps:    a.hostApps(),
 	}
 	return svc.Dispatch(ctx, raw, a.IO.Stdin)
 }

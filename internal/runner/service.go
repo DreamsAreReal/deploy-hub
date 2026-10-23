@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DreamsAreReal/deploy-hub/internal/compose"
 	"github.com/DreamsAreReal/deploy-hub/internal/console"
 	"github.com/DreamsAreReal/deploy-hub/internal/delivery"
 
@@ -61,6 +62,8 @@ type Service struct {
 	Audience    string
 	WorkflowRef string
 	Delivery    delivery.Notifier
+	Host        HostSyncer
+	HostApps    []string
 	samples     []obs.Sample
 	steps       []delivery.Step
 }
@@ -240,6 +243,15 @@ func (s *Service) upSidecars(ctx context.Context, dir string, conf registry.AppC
 	err := s.Docker.ComposeUp(ctx, docker.UpOptions{File: composePath(dir), Image: ref, Pull: docker.PullMissing, NoRecreate: true})
 	if err != nil {
 		s.Log.Warn("sidecars up failed", "dir", dir, "error", err.Error())
+	}
+	data, _ := os.ReadFile(composePath(dir))
+	sidecars := compose.Sidecars(data, conf.Main)
+	if len(sidecars) == 0 {
+		return
+	}
+	err = s.Docker.ComposeUp(ctx, docker.UpOptions{File: composePath(dir), Image: ref, Pull: docker.PullMissing, NoDeps: true, Services: sidecars})
+	if err != nil {
+		s.Log.Warn("changed sidecars not recreated", "dir", dir, "error", err.Error())
 	}
 }
 

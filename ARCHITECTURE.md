@@ -37,7 +37,7 @@ programs that subcommand may execute.
 | GitHub Actions runner of an **app** repo | `.github/workflows/deploy.yml` (reusable workflow from this repo) | `tools`, `render`, `gate` | install pinned scanners, render the app's compose file, run the quality gate |
 | GitHub Actions runner of **this** repo | `.github/workflows/ci.yml` | `tools`, `gate` | the same gate, run on deploy-hub itself |
 | **VPS**, user `deploy` | SSH forced command | `runner` | `deploy`, `report`, `rollback`, `status`, `history` |
-| **VPS**, root | sudo (narrow rule), systemd timers, `onboard` over root SSH | `caddy-sync`, `prune`, `provision`, `facts` | HTTPS routes, image cleanup, preparing `/opt/<app>/` |
+| **VPS**, root | sudo (narrow rules), systemd timers, `onboard` over root SSH | `caddy-sync`, `host-sync`, `prune`, `provision`, `facts` | HTTPS routes, host files from a gated image, image cleanup, preparing `/opt/<app>/` |
 | **Operator laptop** | you | `onboard` | connect a new app repo end to end |
 | **Operator laptop**, under an MCP client | Claude Code, Claude Desktop or any MCP client | `mcp` | MCP server on stdio: `status`, `history`, `rollback` tools, each one SSH request to the runner with the deploy key |
 
@@ -206,6 +206,17 @@ not, so search for the name.
     (`internal/delivery`). Both use `context.WithoutCancel`, so they still run
     after SIGTERM, and a failure there never fails the deploy.
 
+For an app with a `host:` spec in the policy, a healthy deploy, rollback or
+redeploy ends with `sudo -n deploy-hub host-sync <app> <tag>` (`host.go`,
+`syncHost`). The root side (`internal/hostsync`) re-checks that the commit
+passed the gate and the image was pulled by digest, installs only the files the
+policy lists (owner, mode, exact path), backs up what it replaces, activates
+units and Caddy and starts the check units. If anything fails it restores the
+previous files and the runner rolls the containers back as for an unhealthy
+release (`hostFailed`). Why a separate root command and not more rights for
+`deploy`: the policy, not the app repo, decides where root writes, and every
+write is tied to a gated digest. Details in README "Host files".
+
 `report` (`report.go`) runs the same identity check, decodes the verdict,
 checks it belongs to this app and commit, and records `gate ok|fail` plus
 per-check metrics. `rollback` (`rollback.go`) needs no OIDC but only accepts
@@ -258,6 +269,7 @@ internal/caddy/     Caddyfile rendering and sync, standby port rule
 internal/smoke/     ports from smoke.conf that a deploy must not break
 internal/compose/   `render`: repo compose -> server compose (BYOC)
 internal/provision/ `provision` and `facts`: prepare /opt/<app>/ as root
+internal/hostsync/  `host-sync`: install an app's host files from its gated image as root
 internal/onboard/   `onboard` on the operator laptop: stub, secrets, provision
 internal/mcp/       `mcp`: JSON-RPC over stdio, tool schemas, argument checks before SSH
 internal/prune/     keep running image + 2 previous per app
