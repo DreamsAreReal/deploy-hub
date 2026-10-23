@@ -140,14 +140,14 @@ func (o Onboarder) git(ctx context.Context, s *session, args ...string) error {
 }
 
 func (o Onboarder) commitStub(ctx context.Context, s *session) error {
-	path := s.repoPath(stubPath)
+	path := s.repoPath(s.stubPath)
 	if err := os.MkdirAll(filepath.Dir(path), stubDirPerm); err != nil {
 		return err
 	}
 	if err := os.WriteFile(path, []byte(s.stubWant+"\n"), stubFilePerm); err != nil {
 		return err
 	}
-	if err := o.git(ctx, s, "add", stubPath); err != nil {
+	if err := o.git(ctx, s, "add", s.stubPath); err != nil {
 		return err
 	}
 	err := o.git(ctx, s, gitConfigFlag, "user.name="+stubAuthorName, gitConfigFlag, "user.email="+stubAuthorEmail,

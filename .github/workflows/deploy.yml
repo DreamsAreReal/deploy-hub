@@ -12,6 +12,11 @@ on:
         required: false
         type: string
         default: Dockerfile
+      compose:
+        description: Path to the compose file inside the repo; empty means the first of docker-compose.yml, docker-compose.yaml, compose.yml in the repo root
+        required: false
+        type: string
+        default: ""
     secrets:
       VPS_SSH_KEY:
         required: true
@@ -43,6 +48,7 @@ jobs:
         id: inputs
         env:
           DOCKERFILE: ${{ inputs.dockerfile }}
+          COMPOSE: ${{ inputs.compose }}
         run: |
           printf '%s' "$APP" | grep -Eq '^[a-z0-9][a-z0-9._-]{0,40}$' \
             || { echo "invalid app name: $APP"; exit 1; }
@@ -51,6 +57,13 @@ jobs:
           case "$DOCKERFILE" in
             /*|..|../*|*/../*|*/..) echo "dockerfile must stay inside the repo"; exit 1 ;;
           esac
+          if [ -n "$COMPOSE" ]; then
+            printf '%s' "$COMPOSE" | grep -Eq '^[A-Za-z0-9._/-]{1,200}$' \
+              || { echo "invalid compose path"; exit 1; }
+            case "$COMPOSE" in
+              /*|..|../*|*/../*|*/..) echo "compose must stay inside the repo"; exit 1 ;;
+            esac
+          fi
 
       - name: Record start time
         id: start
@@ -81,12 +94,16 @@ jobs:
         id: ctx
         env:
           DOCKERFILE: ${{ inputs.dockerfile }}
+          COMPOSE: ${{ inputs.compose }}
           TOOLCHAIN: ${{ steps.hub.outputs.bin }}
         run: |
           export PATH="$TOOLCHAIN:$PATH"
-          compose=""
+          compose="$COMPOSE"
+          if [ -n "$compose" ] && [ ! -f "$compose" ]; then
+            echo "compose file not found: $compose"; exit 1
+          fi
           for f in docker-compose.yml docker-compose.yaml compose.yml; do
-            if [ -f "$f" ]; then compose="$f"; break; fi
+            if [ -z "$compose" ] && [ -f "$f" ]; then compose="$f"; fi
           done
           if [ -n "$compose" ]; then
             META="$(deploy-hub render "$APP" "$compose" "$RUNNER_TEMP/rendered-compose.yml")"

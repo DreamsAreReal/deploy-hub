@@ -20,6 +20,7 @@ const (
 	errNoRepo         = "error: repo not found on GitHub: %s"
 	errNoDockerfile   = "error: the repo has no Dockerfile (%s) — the app model is one built container per repo (add a Dockerfile first)"
 	errMultiBuild     = "error: the repo compose builds more than one service — multi-app repos are outside the app model (see README, 'Connecting a repo')"
+	errNoCompose      = "error: the repo has no compose file (%s)"
 	errNoKey          = "error: deploy key not found: %s"
 	errPortTaken      = "error: port already in use on the VPS: %s"
 	errOwnCI          = "error: %s already has a non-hub deploy.yml (own CI) — add the hub caller job manually (see README) instead of onboarding"
@@ -47,11 +48,11 @@ const (
 	repoVarHost       = "VPS_HOST"
 	repoVarHostKey    = "VPS_HOST_KEY"
 	errNoHostKey      = "error: no known_hosts entry for %s — connect once with ssh to record the host key"
-	stubTemplate      = `name: deploy
+	stubTemplate      = `name: %s
 on:
   push: {branches: [%s]}
 permissions: {}
-concurrency: {group: deploy, cancel-in-progress: false}
+concurrency: {group: %s, cancel-in-progress: false}
 jobs:
   deploy:
     name: deploy
@@ -60,4 +61,5 @@ jobs:
     with: {app: %s%s}
     secrets: {VPS_SSH_KEY: "${{ secrets.VPS_SSH_KEY }}", VPS_HOST: "${{ secrets.VPS_HOST }}", VPS_HOST_KEY: "${{ secrets.VPS_HOST_KEY }}"}`
 	stubDockerfileInput = ", dockerfile: %s"
+	stubComposeInput    = ", compose: %s"
 )

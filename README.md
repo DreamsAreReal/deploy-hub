@@ -412,7 +412,7 @@ prints a header (an empty app list is fine on a fresh hub).
 
 ## Connecting a repo — one command
 
-The app repo needs a `Dockerfile` (one built image per repo) and an entry in
+The app repo needs a `Dockerfile` (one built image per app) and an entry in
 `policy/gate.yaml` (see "Registering an app") released to app CI (see
 "Releasing a gate or policy change"); without the entry every deploy is
 rejected by the `registration` check. Run from a clone of this repo:
@@ -426,7 +426,7 @@ allowlist line) and changes nothing — run it first. Without `--profile` the
 profile is detected: `EXPOSE` in the Dockerfile or a published port in the repo
 compose → `service`, otherwise `bot` (no URL). `--port` is optional: onboard
 picks the first free `127.0.0.1` port from 9001 up. Other options: `--cport`,
-`--mem`, `--health-path`, `--app`, `--dockerfile`.
+`--mem`, `--health-path`, `--app`, `--dockerfile`, `--compose`.
 
 Without `--dry-run` it does everything itself: commits the caller stub to the
 default branch (opens a PR when the branch is protected), sets the repo secrets
@@ -489,6 +489,21 @@ If the repo ships `docker-compose.yml` (or `.yaml`, or `compose.yml`), CI runs
   is attached to the main service.
 - `deploy-hub.overlap: "false"` on the main service turns off the zero-downtime
   overlap of old and new instance (see Health gate and rollback).
+
+A second app of the same repo (for example `stt` next to `tasks`) brings its
+own compose anywhere in the repo and names it in the caller's `compose:` input
+(a relative path inside the repo, like `dockerfile:`); without the input CI
+takes the root compose as above. `build.context` and `build.dockerfile` in that
+file stay relative to the repo root, not to the file's directory as plain
+`docker compose` reads them: `stt/docker-compose.yml` says `context: .` and
+`dockerfile: stt/Dockerfile`. Register
+the app in `policy/gate.yaml` with the same `repo:`: the `registration` check
+and the `repo=` binding of `app.conf` allow several apps per repo, and the gate
+checks the whole repo for each of them. Onboard it with
+`onboard <repo> --app stt --dockerfile stt/Dockerfile --compose stt/docker-compose.yml`:
+the profile and port come from that compose, and the stub goes to
+`.github/workflows/deploy-stt.yml` (workflow name and concurrency group
+`deploy-stt`) so the first app's `deploy.yml` stays as it is.
 
 ## Self-hosted CI runner
 
