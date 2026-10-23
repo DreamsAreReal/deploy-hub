@@ -149,3 +149,19 @@ func TestOversizedCacheKeepsOnlyTheLatestRun(t *testing.T) {
 	testutil.Contains(t, e.out.String(), "mutation cache: "+strconv.Itoa(half)+" verdicts, sha256", "mutation cache: "+strconv.Itoa(half)+" verdicts, sha256")
 	e.expectLog("mutation cache over its size limit, keeping only the latest run")
 }
+
+func TestStoredCacheNeverExceedsItsByteLimit(t *testing.T) {
+	e := newEnv(t)
+	entries := make(map[string]mutation.Status, MaxCacheEntries)
+	for i := range MaxCacheEntries {
+		entries[mutation.Digest([]byte{byte(i), byte(i >> 8), byte(i >> 16)})] = mutation.StatusNotCovered
+	}
+	_, err := e.svc.saveCache(appName, mutation.Verdicts{Version: 1, Bases: []string{strings.Repeat("d", 64)}, Entries: entries})
+	testutil.NoErr(t, err)
+	bases := make([]string, 0, MaxCacheBytes/64)
+	for i := range MaxCacheBytes / 64 {
+		bases = append(bases, mutation.Digest([]byte(strconv.Itoa(i))))
+	}
+	_, err = e.svc.saveCache(appName, mutation.Verdicts{Version: 1, Bases: bases})
+	testutil.True(t, errors.Is(err, errCacheTooBig), "a cache over the byte limit is not stored")
+}
