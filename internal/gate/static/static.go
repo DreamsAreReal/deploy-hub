@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path"
 	"path/filepath"
 	"slices"
@@ -27,7 +28,14 @@ const (
 	formatterFlag = "--formatter"
 	formatterJSON = "json"
 	configFlag    = "--config"
+	htmlReport    = "html-validate.json"
 )
+
+type linter struct {
+	files []string
+	args  []string
+	saved string
+}
 
 var (
 	Sources = []string{extHTML, extHTM, extCSS}
@@ -48,27 +56,37 @@ func Lint(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	if err != nil {
 		return gate.Fail(err.Error())
 	}
-	pages := filter(files, markup)
+	x, err := expand(ws, files, filter(files, markup))
+	if err != nil {
+		return gate.Fail(err.Error())
+	}
 	styles := filter(files, []string{extCSS})
 	dir, err := node.Tools(ctx, ws)
 	if err != nil {
 		return gate.Fail(err.Error())
 	}
-	var findings []string
-	for _, run := range []struct {
-		files []string
-		args  []string
-	}{
-		{pages, []string{node.ToolScript(ws, "html-validate", "bin", "html-validate.mjs"), configFlag, filepath.Join(dir, node.HTMLValidateConfig), formatterFlag, formatterJSON}},
-		{styles, []string{node.ToolScript(ws, "stylelint", "bin", "stylelint.mjs"), configFlag, filepath.Join(dir, node.StylelintConfig), "--ignore-disables", formatterFlag, formatterJSON}},
+	findings := x.findings
+	saved := filepath.Join(ws.Report(templatesDir), htmlReport)
+	for _, run := range []linter{
+		{x.pages, []string{node.ToolScript(ws, "html-validate", "bin", "html-validate.mjs"), configFlag, filepath.Join(dir, node.HTMLValidateConfig), formatterFlag, formatterJSON + "=" + saved}, saved},
+		{styles, []string{node.ToolScript(ws, "stylelint", "bin", "stylelint.mjs"), configFlag, filepath.Join(dir, node.StylelintConfig), "--ignore-disables", formatterFlag, formatterJSON}, ""},
 	} {
-		found, lerr := lint(ctx, ws, run.files, run.args)
+		found, lerr := lint(ctx, ws, run, &x)
 		if lerr != nil {
 			return gate.Fail(lerr.Error())
 		}
 		findings = append(findings, found...)
 	}
-	return gate.Findings(reasonLint, findings)
+	return gate.Findings(reasonLint, unique(findings))
+}
+
+func unique(findings []string) []string {
+	seen := map[string]bool{}
+	return slices.DeleteFunc(findings, func(f string) bool {
+		dup := seen[f]
+		seen[f] = true
+		return dup
+	})
 }
 
 func filter(files, exts []string) []string {
@@ -88,6 +106,7 @@ type report struct {
 		RuleID  string `json:"ruleId"`
 		Message string `json:"message"`
 		Line    int    `json:"line"`
+		Column  int    `json:"column"`
 	} `json:"messages"`
 	Warnings []struct {
 		Rule string `json:"rule"`
@@ -96,38 +115,45 @@ type report struct {
 	} `json:"warnings"`
 }
 
-func lint(ctx context.Context, ws gate.Workspace, files, args []string) ([]string, error) {
-	if len(files) == 0 {
+func lint(ctx context.Context, ws gate.Workspace, run linter, x *expansion) ([]string, error) {
+	if len(run.files) == 0 {
 		return nil, nil
 	}
-	res, err := ws.Run(ctx, node.NodeBinary, append(args, files...)...)
-	output := res.Stdout
-	if strings.TrimSpace(output) == "" {
-		output = res.Stderr
-	}
+	res, err := ws.Run(ctx, node.NodeBinary, append(run.args, run.files...)...)
+	output := toolOutput(res, run.saved)
 	var reports []report
 	if perr := json.Unmarshal([]byte(output), &reports); perr != nil {
-		return nil, fmt.Errorf("%s: %w: %s", filepath.Base(args[0]), perr, gate.Tail(procexec.Output(err)))
+		return nil, fmt.Errorf("%s: %w: %s", filepath.Base(run.args[0]), perr, gate.Tail(procexec.Output(err)))
 	}
 	var out []string
 	for _, r := range reports {
-		out = append(out, r.findings(ws)...)
+		out = append(out, r.findings(ws, x)...)
 	}
 	return out, nil
 }
 
-func (r report) findings(ws gate.Workspace) []string {
+func (r report) findings(ws gate.Workspace, x *expansion) []string {
 	file := r.FilePath
 	if file == "" {
 		file = r.Source
 	}
-	file = ws.Rel(file)
 	out := make([]string, 0, len(r.Messages)+len(r.Warnings))
 	for _, m := range r.Messages {
-		out = append(out, fmt.Sprintf(findingForm, file, m.Line, m.RuleID, m.Message))
+		at, line := x.locate(ws, file, m.Line, m.Column)
+		out = append(out, fmt.Sprintf(findingForm, at, line, m.RuleID, m.Message))
 	}
 	for _, w := range r.Warnings {
-		out = append(out, fmt.Sprintf(findingForm, file, w.Line, w.Rule, w.Text))
+		out = append(out, fmt.Sprintf(findingForm, ws.Rel(file), w.Line, w.Rule, w.Text))
 	}
 	return out
+}
+
+func toolOutput(res procexec.Result, saved string) string {
+	if data, err := os.ReadFile(filepath.Clean(saved)); err == nil {
+		return string(data)
+	}
+	if strings.TrimSpace(res.Stdout) == "" {
+		return res.Stderr
+	}
+	return res.Stdout
 }

@@ -111,7 +111,7 @@ duplication check does not count them.
 | Node / TypeScript | `package.json` | npm, eslint (typescript-eslint strict, sonarjs), `tsc --strict`, knip, vitest / jest / mocha / `node --test`, fast-check, trivy, the token mutation engine |
 | .NET | `*.sln`, `*.slnx`, `*.csproj`, `*.fsproj`, `*.vbproj` (the outermost one) | dotnet (`restore --locked-mode`, build with the recommended analyzers and SonarAnalyzer as errors, `format whitespace`, `test` with coverlet), CsCheck / FsCheck, trivy, the token mutation engine |
 | Shell | none; `.sh` and `.bash` files form a root project | shellcheck (every optional check), shfmt, bats with bash xtrace coverage, the token mutation engine |
-| Static site | none; `.html`, `.htm` and `.css` files form a root project | html-validate (recommended rules, SRI on cross-origin resources), stylelint standard |
+| Static site | none; `.html`, `.htm` and `.css` files form a root project | html-validate (recommended rules, SRI on cross-origin resources; Go `html/template` files are rendered first), stylelint standard |
 | SQL | none; `.sql` files form a root project | sqlfluff (parse only) |
 
 What each stack expects from an app repo:
@@ -145,6 +145,17 @@ What each stack expects from an app repo:
   dead code, tests, coverage, fuzzing and mutation are `n/a`. Every
   cross-origin script or stylesheet needs an `integrity` hash. JavaScript
   belongs to a Node project with its own `package.json`.
+  An `.html` or `.htm` file inside a Go module that contains `{{` is a Go
+  `html/template` file. html-validate never sees it raw: the files of one
+  directory form a template set, parsed with Go's own template parser. Each
+  template no other template calls is rendered without data: a
+  `{{template}}` call inlines its target, every branch of `if`, `with` and
+  `range` (an empty `else` too) appears in at least one rendering, a `range`
+  body appears twice, and an action prints a unique number wherever markup
+  takes a value. The renderings get the same html-validate rules, and each
+  finding points back at the template file and line. A template that does
+  not parse, or calls a template the set does not define, is a
+  `go-template` finding.
 - **SQL.** Schema and migration scripts are data for the program that runs
   them, and that program's tests cover them: only `lint` applies, every other
   check is `n/a`. A file passes when it parses in one of the sqlite,

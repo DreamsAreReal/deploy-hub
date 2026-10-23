@@ -290,6 +290,8 @@ server/vmalert/     alert rules for the hub's metrics
   (worst status wins).
 - `golang/`, `python/`, `node/`, `dotnet/`, `shell/`, `static/`,
   `sqlfiles/`: the packs.
+- `static/gotmpl/`: renders Go `html/template` sets without data, branch by
+  branch, so the static pack validates the markup they produce.
 - `source/`: repo-wide text checks: comments, work markers, non-Latin
   letters, forbidden files.
 - `mutation/` (Go, AST based) and `tokmut/` (other languages, token based):
