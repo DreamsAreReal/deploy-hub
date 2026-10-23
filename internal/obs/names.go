@@ -40,6 +40,10 @@ const (
 	MetricHostFilesChanged     = "deploy_hub_host_files_changed"
 	MetricSelfUpdateSuccess    = "deploy_hub_self_update_success"
 	MetricSelfUpdateInstalled  = "deploy_hub_self_update_installed"
+	MetricPreemptSuccess       = "deploy_hub_preempt_success"
+	MetricPreemptCancelled     = "deploy_hub_preempt_cancelled"
+	MetricPreemptRerun         = "deploy_hub_preempt_rerun"
+	MetricPreemptRerunsMax     = "deploy_hub_preempt_reruns_max"
 
 	LabelApp     = "app"
 	LabelAction  = "action"

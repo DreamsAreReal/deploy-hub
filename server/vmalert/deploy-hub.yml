@@ -116,3 +116,15 @@ groups:
         annotations:
           summary: "CI disk is {{ $value | humanizePercentage }} full"
           description: "Builds fail when /var/lib/ci (the image /srv/ci.img) fills up. The job hook prunes Docker and the caches above 70%; on the VPS check du -sh /var/lib/ci/* and run docker system prune -af with DOCKER_HOST=unix:///run/ci/<repo>/docker.sock as ci."
+
+      - alert: DeployHubPreemptFailing
+        expr: max(max_over_time(deploy_hub_preempt_success[10m])) == 0
+        annotations:
+          summary: "deploy-hub preempt has failed for 10 minutes"
+          description: "Main deploys may wait behind pull request gates, and preempted gates may not be re-run. On the VPS: journalctl -u deploy-hub-preempt.service -n 50 (a 401/403 means the token in /etc/deploy-hub/github.token lacks Actions: Read and write on a runner repo)."
+
+      - alert: DeployHubPreemptRerunLoop
+        expr: max by (repo) (max_over_time(deploy_hub_preempt_reruns_max[30m])) > 3
+        annotations:
+          summary: "A pull request gate of {{ $labels.repo }} was preempted and re-run {{ $value }} times"
+          description: "Main deploys keep cancelling the same pull request gate, so it never finishes. Merge less often for a while or let the gate finish; the runs are in /var/lib/deploy-hub/preempt.json on the VPS."

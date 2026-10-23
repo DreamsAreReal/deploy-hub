@@ -27,6 +27,7 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/hostsync"
 	"github.com/DreamsAreReal/deploy-hub/internal/obs"
 	"github.com/DreamsAreReal/deploy-hub/internal/onboard"
+	"github.com/DreamsAreReal/deploy-hub/internal/preempt"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
 	"github.com/DreamsAreReal/deploy-hub/internal/selfupdate"
 	"github.com/DreamsAreReal/deploy-hub/internal/tools"
@@ -52,6 +53,7 @@ const (
 	CmdSudoers    = "sudoers-sync"
 	CmdVersion    = "version"
 	CmdBootstrap  = "bootstrap"
+	CmdPreempt    = "preempt"
 
 	binDocker    = "docker"
 	binSudo      = "sudo"
@@ -70,6 +72,7 @@ commands:
   self-update [sha-<commit>]       replace this binary with a released, gated build (root)
   sudoers-sync                     write the sudoers rule of the runner from the policy (root)
   bootstrap [sha-<commit>]         install the first gated build on a fresh hub (run on the operator machine)
+  preempt                          let main deploys overtake pull request gates on the runner (root, timer)
   version                          print the commit this binary was built from
   prune                            delete old app images (keep running + 2 previous)
   provision --app NAME ...         prepare /opt/<app> on the VPS (root)
@@ -87,17 +90,19 @@ type IO struct {
 }
 
 type App struct {
-	Config  Config
-	IO      IO
-	Out     *console.Printer
-	Err     *console.Printer
-	Exec    func(names ...string) procexec.Runner
-	Now     func() time.Time
-	Log     *slog.Logger
-	Owner   func(username string) func(path string) error
-	Checks  func() []gate.Check
-	Sudoers string
-	Token   string
+	Config       Config
+	IO           IO
+	Out          *console.Printer
+	Err          *console.Printer
+	Exec         func(names ...string) procexec.Runner
+	Now          func() time.Time
+	Log          *slog.Logger
+	Owner        func(username string) func(path string) error
+	Checks       func() []gate.Check
+	Sudoers      string
+	Token        string
+	CIRoot       string
+	PreemptState string
 }
 
 type handler struct {
@@ -122,6 +127,7 @@ var handlers = map[string]handler{
 	CmdSudoers:    {run: runSudoersSync, binaries: []string{selfupdate.VisudoCommand}, onServer: true},
 	CmdVersion:    {run: runVersion},
 	CmdBootstrap:  {run: runBootstrap, binaries: []string{selfupdate.SSHBinary}},
+	CmdPreempt:    {run: runPreempt, onServer: true},
 	CmdHostSync:   {run: runHostSync, binaries: []string{hostsync.DockerBinary, hostsync.SystemctlBinary, hostsync.AnalyzeBinary, hostsync.CaddyBinary}, onServer: true},
 }
 
@@ -133,17 +139,20 @@ var gateBinaries = []string{
 }
 
 type Deps struct {
-	Exec    func(names ...string) procexec.Runner
-	Owner   func(username string) func(path string) error
-	Now     func() time.Time
-	Checks  func() []gate.Check
-	Sudoers string
-	Token   string
+	Exec         func(names ...string) procexec.Runner
+	Owner        func(username string) func(path string) error
+	Now          func() time.Time
+	Checks       func() []gate.Check
+	Sudoers      string
+	Token        string
+	CIRoot       string
+	PreemptState string
 }
 
 func OSDeps() Deps {
 	return Deps{Exec: func(names ...string) procexec.Runner { return procexec.NewOS(names...) }, Owner: ChownTo, Now: time.Now, Checks: catalog.Checks,
-		Sudoers: selfupdate.DefaultSudoers, Token: selfupdate.DefaultPATFile}
+		Sudoers: selfupdate.DefaultSudoers, Token: selfupdate.DefaultPATFile,
+		CIRoot: preempt.DefaultCIRoot, PreemptState: preempt.DefaultState}
 }
 
 func Main(ctx context.Context, args []string, env Env, stdio IO) int {
@@ -169,7 +178,7 @@ func Run(ctx context.Context, args []string, env Env, stdio IO, deps Deps) int {
 	counts := &obs.LevelCounts{}
 	log, closeLog := openLogger(cfg, args[0], h, stdio.Stderr, counts)
 	defer closeLog()
-	a := &App{Config: cfg, IO: stdio, Out: stdout, Err: stderr, Now: deps.Now, Log: log, Owner: deps.Owner, Exec: deps.Exec, Checks: deps.Checks, Sudoers: deps.Sudoers, Token: deps.Token}
+	a := &App{Config: cfg, IO: stdio, Out: stdout, Err: stderr, Now: deps.Now, Log: log, Owner: deps.Owner, Exec: deps.Exec, Checks: deps.Checks, Sudoers: deps.Sudoers, Token: deps.Token, CIRoot: deps.CIRoot, PreemptState: deps.PreemptState}
 	started := time.Now()
 	log.Info("command started", "args", len(args)-1)
 	code, panicked := a.invoke(ctx, h, args[1:])

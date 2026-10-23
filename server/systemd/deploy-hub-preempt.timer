@@ -1,0 +1,10 @@
+[Unit]
+Description=deploy-hub: check every 30 seconds whether a main deploy waits behind pull request gates
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=30s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

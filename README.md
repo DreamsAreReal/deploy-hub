@@ -435,7 +435,7 @@ root SSH to. `<vps>` is the server address.
 
    ```
    tar -C server/systemd -cf - . | ssh vpn 'tar -C /etc/systemd/system -xf - --no-same-owner'
-   ssh vpn 'systemctl daemon-reload && systemctl enable --now deploy-hub-prune.timer deploy-hub-status.timer deploy-hub-self-update.timer'
+   ssh vpn 'systemctl daemon-reload && systemctl enable --now deploy-hub-prune.timer deploy-hub-status.timer deploy-hub-self-update.timer deploy-hub-preempt.timer'
    ```
 
 8. **history-guard timer** — the `history-guard` workflow deletes every branch
@@ -808,6 +808,22 @@ name), downloads the pinned runner (sha256-checked), configures it as
 itself. To remove one: `systemctl disable --now ci-runner@<app> ci-docker@<app>`,
 `systemctl stop ci-netns@<app>`, `loginctl disable-linger ci-<app>`, delete the runner in the repo settings,
 `/var/lib/ci/<app>` and the user `ci-<app>`.
+
+Main deploys overtake pull request gates: each repo has one runner, so a push
+to `main` would otherwise wait for a running gate. `deploy-hub-preempt.timer`
+runs `deploy-hub preempt` as root every 30 seconds for every repo with a runner
+on this host (`/var/lib/ci/<repo>/runner/.runner`). While a `push` run of
+`main` is queued, it cancels the active `pull_request` runs of that repo (it
+reads each run again right before cancelling and never cancels any other
+event); once no `main` run waits, it re-runs each run it cancelled unless a
+newer run of the same pull request branch replaced it or the run ended
+otherwise. Its state is `/var/lib/deploy-hub/preempt.json`. It uses the token
+of `/etc/deploy-hub/github.token`, which needs **Actions: Read and write** on
+every repo with a runner. Metrics: `deploy_hub_preempt_success`,
+`deploy_hub_preempt_cancelled{repo}`, `deploy_hub_preempt_rerun{repo}` and
+`deploy_hub_preempt_reruns_max{repo}` (most re-runs of one gate in the last
+24 h); alerts `DeployHubPreemptFailing` and `DeployHubPreemptRerunLoop` (one
+gate re-run more than 3 times).
 
 Moving from the shared user `ci` of the first version: `host` stops every runner,
 removes the user `ci`, its drop-ins and its files on the CI disk, then each
