@@ -67,8 +67,15 @@ func (o Onboarder) resolveBranch(ctx context.Context, s *session) error {
 }
 
 func (o Onboarder) clone(ctx context.Context, s *session) error {
-	_, err := o.run(ctx, gitBinary, "clone", "-q", "--depth", "1", "-b", s.branch, gitHubPrefix+s.opts.Repo+gitSuffix, s.repoPath())
+	_, err := o.run(ctx, gitBinary, "clone", "-q", "--depth", "1", "-b", s.source(), gitHubPrefix+s.opts.Repo+gitSuffix, s.repoPath())
 	return err
+}
+
+func (s *session) source() string {
+	if s.opts.Ref != "" {
+		return s.opts.Ref
+	}
+	return s.branch
 }
 
 func (o Onboarder) inspectRepo(_ context.Context, s *session) error {
@@ -207,10 +214,12 @@ func (o Onboarder) inspectStub(_ context.Context, s *session) error {
 	s.stubWant = Stub(s.branch, o.Config.HubRepo, s.opts)
 	current, err := os.ReadFile(s.repoPath(s.stubPath))
 	switch {
+	case err == nil && strings.TrimRight(string(current), "\n") == s.stubWant:
+		s.stubState = stubStateOK
+	case s.opts.Ref != "":
+		return fmt.Errorf(errStubOnRef, s.stubPath, s.opts.Ref)
 	case err != nil:
 		s.stubState = stubStateMissing
-	case strings.TrimRight(string(current), "\n") == s.stubWant:
-		s.stubState = stubStateOK
 	case strings.Contains(string(current), fmt.Sprintf(hubUsesPattern, o.Config.HubRepo)):
 		s.stubState = stubStateDiffers
 	default:

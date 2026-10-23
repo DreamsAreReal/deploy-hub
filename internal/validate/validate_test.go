@@ -6,7 +6,10 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/testutil"
 )
 
-const withSpace = "a b"
+const (
+	withSpace = "a b"
+	semicolon = "a;b"
+)
 
 type validatorCase struct {
 	name string
@@ -33,10 +36,11 @@ func TestValidators(t *testing.T) {
 		{"mem", MemLimit, []string{"64m", "1g", "12345m"}, []string{"", "64", "64k", "123456m", "m"}},
 		{"health", HealthPath, []string{"/", "/healthz", "/a/b.c-d_e"}, []string{"", "healthz", "/a b", "/a?b", "/$(id)"}},
 		{"image", Image, []string{"ghcr.io/owner/app"}, []string{"", "docker.io/owner/app", "ghcr.io/", "ghcr.io/Owner/App", "ghcr.io/a b"}},
-		{"service", Service, []string{"web", "Web.1_x-y"}, []string{"", withSpace, "a;b"}},
+		{"service", Service, []string{"web", "Web.1_x-y"}, []string{"", withSpace, semicolon}},
 		{"slug", RepoSlug, []string{"Owner/repo", "a/b.c_d-e"}, []string{"", "repo", "a/b/c", "a b/c", "/repo"}},
 		{"start", StartEpoch, []string{"0", "1700000000"}, []string{"", "-1", "1e9", "1234567890123"}},
 		{"relpath", RelPath, []string{"Dockerfile", "docker/Dockerfile", "./a/b"}, []string{"", "/etc/passwd", "..", "../x", "a/../../x", withSpace}},
+		{"ref", GitRef, []string{"main", "hub-deploy", "feature/x.y_1", "v1.2"}, []string{"", "-b", "--upload-pack=x", "a..b", "a//b", "a/", withSpace, semicolon, "a~1", "a:b"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, c.run)

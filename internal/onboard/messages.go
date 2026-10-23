@@ -21,6 +21,7 @@ const (
 	errNoDockerfile   = "error: the repo has no Dockerfile (%s) — the app model is one built container per repo (add a Dockerfile first)"
 	errMultiBuild     = "error: the repo compose builds more than one service — multi-app repos are outside the app model (see README, 'Connecting a repo')"
 	errNoCompose      = "error: the repo has no compose file (%s)"
+	errStubOnRef      = "error: %s on %s is missing or differs from the hub stub — --ref never commits the stub, put it on that branch first (see the stub in README)"
 	errNoKey          = "error: deploy key not found: %s"
 	errPortTaken      = "error: port already in use on the VPS: %s"
 	errOwnCI          = "error: %s already has a non-hub deploy.yml (own CI) — add the hub caller job manually (see README) instead of onboarding"

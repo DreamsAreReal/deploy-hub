@@ -22,6 +22,7 @@ var (
 	commit     = regexp.MustCompile(`^[0-9a-f]{40}$`)
 	digest     = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 	host       = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`)
+	gitRef     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$`)
 )
 
 var ErrInvalid = errors.New("invalid value")
@@ -72,6 +73,16 @@ func RelPath(v string) error {
 	clean := path.Clean(v)
 	if path.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, "../") {
 		return fmt.Errorf("%w: path", ErrInvalid)
+	}
+	return nil
+}
+
+func GitRef(v string) error {
+	if err := check(gitRef, "ref", v); err != nil {
+		return err
+	}
+	if strings.Contains(v, "..") || strings.Contains(v, "//") || strings.HasSuffix(v, "/") {
+		return fmt.Errorf("%w: ref", ErrInvalid)
 	}
 	return nil
 }
