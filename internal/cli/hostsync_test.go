@@ -4,8 +4,8 @@ import (
 	"log/slog"
 	"os"
 	"os/user"
+	"slices"
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/testutil"
@@ -28,9 +28,8 @@ func TestHostSyncRefusesAnAppWithoutAHostSpec(t *testing.T) {
 func TestEmbeddedPolicyListsTheHostApps(t *testing.T) {
 	h := newHarness(t)
 	a := &App{Log: slog.New(slog.DiscardHandler)}
-	for _, name := range a.hostApps() {
-		testutil.True(t, !strings.Contains(name, "/"), "app names only")
-	}
+	testutil.True(t, slices.Contains(a.hostApps(), "observability"), "observability installs host files")
+	testutil.True(t, !slices.Contains(a.hostApps(), "tasks"), "tasks has no host spec")
 	testutil.Equal(t, h.run(CmdHostSync, "Bad", "sha-abcdef1"), ExitFail)
 }
 

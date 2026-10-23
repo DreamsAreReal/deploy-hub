@@ -38,6 +38,8 @@ const (
 	MetricCIIsolationOK        = "deploy_hub_ci_isolation_ok"
 	MetricHostSyncSuccess      = "deploy_hub_host_sync_success"
 	MetricHostFilesChanged     = "deploy_hub_host_files_changed"
+	MetricSelfUpdateSuccess    = "deploy_hub_self_update_success"
+	MetricSelfUpdateInstalled  = "deploy_hub_self_update_installed"
 
 	LabelApp     = "app"
 	LabelAction  = "action"

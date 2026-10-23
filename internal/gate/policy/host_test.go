@@ -8,11 +8,12 @@ import (
 )
 
 const (
-	root      = "root"
-	obsTimer  = "obs.timer"
-	obsUnit   = "obs.service"
-	unitPath  = "/etc/systemd/system/obs.service"
-	timerPath = "/etc/systemd/system/obs.timer"
+	root       = "root"
+	deployUser = "deploy"
+	obsTimer   = "obs.timer"
+	obsUnit    = "obs.service"
+	unitPath   = "/etc/systemd/system/obs.service"
+	timerPath  = "/etc/systemd/system/obs.timer"
 )
 
 func goodHost() *Host {
@@ -57,7 +58,7 @@ func TestHostSpecRefusesPathsOutsideTheList(t *testing.T) {
 		"bad group":             func(h *Host) { h.Files[0].Group = "" },
 		"env path":              func(h *Host) { h.Files[3].Env = "../secrets.env" },
 		"env not an env file":   func(h *Host) { h.Files[3].Env = "app.conf" },
-		"listed twice":          func(h *Host) { h.Files[1].Src = h.Files[0].Src },
+		"src listed twice":      func(h *Host) { h.Files[1].Src = h.Files[0].Src },
 		"same destination":      func(h *Host) { h.Files[1].Dst = h.Files[0].Dst },
 		"dir outside roots":     func(h *Host) { h.Dirs[0].Path = "/etc/cron.d" },
 		"dir mode":              func(h *Host) { h.Dirs[0].Mode = "1777" },
@@ -107,4 +108,19 @@ func TestHostSpecIsPartOfTheAppPolicy(t *testing.T) {
         - {src: obs.py, dst: /etc/passwd, owner: root, group: root, mode: "0644"}
 `))
 	testutil.Is(t, err, ErrHost)
+}
+
+func TestHubSudoCommandsComeFromAFixedList(t *testing.T) {
+	testutil.NoErr(t, Hub{}.validate())
+	testutil.NoErr(t, Hub{SudoUser: deployUser, SudoCommands: []string{SudoCaddySync, SudoHostSync, SudoSelfUpdate}}.validate())
+	for name, h := range map[string]Hub{
+		"root":         {SudoUser: root, SudoCommands: []string{SudoCaddySync}},
+		"no user":      {SudoCommands: []string{SudoCaddySync}},
+		"bad user":     {SudoUser: "Deploy", SudoCommands: []string{SudoCaddySync}},
+		"any command":  {SudoUser: deployUser, SudoCommands: []string{"prune"}},
+		"shell":        {SudoUser: deployUser, SudoCommands: []string{"/bin/sh"}},
+		"listed twice": {SudoUser: deployUser, SudoCommands: []string{SudoHostSync, SudoHostSync}},
+	} {
+		testutil.True(t, errors.Is(h.validate(), ErrHub), name)
+	}
 }

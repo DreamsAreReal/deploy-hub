@@ -31,7 +31,7 @@ const (
 
 	percentCeiling = 100
 	purlScheme     = "pkg:"
-	policyChecks   = 7
+	policyChecks   = 8
 	appChecks      = 4
 )
 
@@ -61,6 +61,7 @@ type Policy struct {
 	SASTRules      []string          `yaml:"sast_rulesets"`
 	Images         Images            `yaml:"images"`
 	Apps           map[string]App    `yaml:"apps"`
+	Hub            Hub               `yaml:"hub"`
 }
 
 type Images struct {
@@ -176,7 +177,7 @@ func (p Policy) Validate() error {
 	errs = append(errs,
 		p.Thresholds.validate(), p.Limits.validate(), p.Images.validate(),
 		nonEmpty("owners", p.Owners), nonEmpty("licenses", p.Licenses), nonEmpty("markers", p.Markers), nonEmpty("sast_rulesets", p.SASTRules),
-		p.validateDeclared(), p.validateReviewedTexts(),
+		p.validateDeclared(), p.validateReviewedTexts(), p.Hub.validate(),
 	)
 	for name, app := range p.Apps {
 		errs = append(errs, app.validate(name))

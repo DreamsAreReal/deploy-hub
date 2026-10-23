@@ -46,7 +46,11 @@ jobs:
           deploy-hub gate --app deploy-hub --repo "$REPO" --commit "$COMMIT" --policy "$GITHUB_WORKSPACE/policy/gate.yaml" --src "$GITHUB_WORKSPACE" --out "$RUNNER_TEMP/gate"
 
       - name: Build linux binary
-        run: make build OUT_DIR="$RUNNER_TEMP/dist"
+        env:
+          COMMIT: ${{ github.sha }}
+        run: |
+          make build OUT_DIR="$RUNNER_TEMP/dist" COMMIT="$COMMIT"
+          test "$("$RUNNER_TEMP/dist/deploy-hub" version)" = "$COMMIT"
 
       - name: Keep gate reports
         if: always()
@@ -65,3 +69,32 @@ jobs:
           name: deploy-hub-linux-amd64
           path: ${{ runner.temp }}/dist/deploy-hub
           if-no-files-found: error
+
+  release:
+    name: release
+    needs: gate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Fetch the gated binary
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: deploy-hub-linux-amd64
+          path: dist
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          cd dist
+          mv deploy-hub deploy-hub-linux-amd64
+          sha256sum deploy-hub-linux-amd64 > deploy-hub-linux-amd64.sha256
+          gh release create "sha-$COMMIT" deploy-hub-linux-amd64 deploy-hub-linux-amd64.sha256 \
+            --repo "$REPO" --target "$COMMIT" --title "deploy-hub $COMMIT" \
+            --notes "Built by ci.yml after the gate passed on main at $COMMIT."

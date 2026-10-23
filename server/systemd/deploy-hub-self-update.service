@@ -1,0 +1,9 @@
+[Unit]
+Description=deploy-hub: install the newest gated release of deploy-hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/deploy-hub/bin/deploy-hub self-update
+TimeoutStartSec=15min

@@ -87,6 +87,13 @@ var known = map[string]builder{
 	"syft":        func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "syft", a...) },
 	"tar":         func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "tar", a...) },
 	"systemctl":   func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "systemctl", a...) },
+	"visudo":      func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "visudo", a...) },
+	"deploy-hub-installed": func(ctx context.Context, a []string) *exec.Cmd {
+		return exec.CommandContext(ctx, "/opt/deploy-hub/bin/deploy-hub", a...)
+	},
+	"deploy-hub-candidate": func(ctx context.Context, a []string) *exec.Cmd {
+		return exec.CommandContext(ctx, "/opt/deploy-hub/bin/deploy-hub.new", a...)
+	},
 	"systemd-analyze": func(ctx context.Context, a []string) *exec.Cmd {
 		return exec.CommandContext(ctx, "systemd-analyze", a...)
 	},

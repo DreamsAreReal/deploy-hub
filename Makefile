@@ -5,11 +5,12 @@ GOOS ?= linux
 GOARCH ?= amd64
 APP ?= deploy-hub
 REPO ?= DreamsAreReal/deploy-hub
+COMMIT ?= dev
 
 .PHONY: build test lint toolchain gate
 
 build:
-	CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) $(GO) build -trimpath -ldflags="-s -w" -o $(OUT_DIR)/deploy-hub ./cmd/deploy-hub
+	CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) $(GO) build -trimpath -ldflags="-s -w -X github.com/DreamsAreReal/deploy-hub/internal/cli.Commit=$(COMMIT)" -o $(OUT_DIR)/deploy-hub ./cmd/deploy-hub
 
 test:
 	$(GO) test -race -count=1 ./...
