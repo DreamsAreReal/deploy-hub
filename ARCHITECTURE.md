@@ -37,9 +37,9 @@ programs that subcommand may execute.
 | GitHub Actions runner of an **app** repo | `.github/workflows/deploy.yml` (reusable workflow from this repo) | `tools`, `render`, `gate` | install pinned scanners, render the app's compose file, run the quality gate |
 | GitHub Actions runner of **this** repo | `.github/workflows/ci.yml` | `tools`, `gate` | the same gate, run on deploy-hub itself |
 | **VPS**, user `deploy` | SSH forced command | `runner` | `deploy`, `report`, `rollback`, `status`, `history` |
-| **VPS**, root | sudo (narrow rules), systemd timers, `onboard` over root SSH | `caddy-sync`, `host-sync`, `prune`, `provision`, `facts` | HTTPS routes, host files from a gated image, image cleanup, preparing `/opt/<app>/` |
-| **Operator laptop** | you | `onboard` | connect a new app repo end to end |
-| **Operator laptop**, under an MCP client | Claude Code, Claude Desktop or any MCP client | `mcp` | MCP server on stdio: `status`, `history`, `rollback` tools, each one SSH request to the runner with the deploy key |
+| **VPS**, root | sudo (narrow rules), systemd timers, `onboard` over root SSH | `caddy-sync`, `host-sync`, `self-update`, `sudoers-sync`, `prune`, `provision`, `facts` | HTTPS routes, host files from a gated image, image cleanup, preparing `/opt/<app>/` |
+| **Operator machine** | you | `onboard` | connect a new app repo end to end |
+| **Operator machine**, under an MCP client | Claude Code, Claude Desktop or any MCP client | `mcp` | MCP server on stdio: `status`, `history`, `rollback` tools, each one SSH request to the runner with the deploy key |
 
 ```
  app repo (push)                         this repo
@@ -270,7 +270,8 @@ internal/smoke/     ports from smoke.conf that a deploy must not break
 internal/compose/   `render`: repo compose -> server compose (BYOC)
 internal/provision/ `provision` and `facts`: prepare /opt/<app>/ as root
 internal/hostsync/  `host-sync`: install an app's host files from its gated image as root
-internal/onboard/   `onboard` on the operator laptop: stub, secrets, provision
+internal/selfupdate/ `self-update` and `sudoers-sync`: install a gated release of the hub, write the sudoers rule
+internal/onboard/   `onboard` on the operator machine: stub, secrets, provision
 internal/mcp/       `mcp`: JSON-RPC over stdio, tool schemas, argument checks before SSH
 internal/prune/     keep running image + 2 previous per app
 internal/obs/       slog logger, metric names (names.go), pusher, journal-derived counters
@@ -410,11 +411,11 @@ go into the policy struct and its validation.
 pin** in `.github/workflows/deploy.yml` to that `main` commit in a follow-up
 commit. Until the pin moves, app CI keeps the old policy.
 
-**Release the server binary.** Merging to `main` does not touch the VPS. The
-binary on the server is replaced by hand: `make build`, copy it to
-`/opt/deploy-hub/bin/deploy-hub` and keep it `root:root 755` (README
-"Bootstrap", step 5). CI also uploads the linux binary as the artifact
-`deploy-hub-linux-amd64`.
+**Release the server binary.** Merge to `main`. After the gate passes,
+`ci.yml` publishes the release `sha-<commit>`, and within 10 minutes the
+server's `deploy-hub-self-update.timer` installs it (README "Releases and
+self-update"). Nobody copies binaries to the server; the bootstrap is the only
+exception.
 
 ## 9. Pitfalls
 

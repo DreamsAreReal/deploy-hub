@@ -296,6 +296,23 @@ apps:
           - internal/hostsync.TestEveryActivationStepFailureRestores
           - internal/runner.TestHostSyncFailureRollsTheContainersBack
           - internal/runner.TestRollbackReinstallsTheTargetsHostFiles
+      - id: self-update-installs-only-gated-releases
+        category: security
+        tests:
+          - internal/selfupdate.TestRefusesReleasesThatAreNotGatedBuilds
+          - internal/selfupdate.TestAPinnedTagIsLookedUpByName
+          - internal/cli.TestSelfUpdateReplacesOnlyTheInstalledBinary
+      - id: self-update-restores-on-failure
+        category: business
+        tests:
+          - internal/selfupdate.TestFailedHealthCheckRestoresThePreviousBinary
+          - internal/selfupdate.TestRestoreThatFailsIsJournaled
+      - id: sudoers-lists-only-policy-commands
+        category: security
+        tests:
+          - internal/selfupdate.TestSudoersRuleAllowsOnlyTheListedCommands
+          - internal/selfupdate.TestSudoersRefusedByVisudoKeepsThePreviousRule
+          - internal/gate/policy.TestHubSudoCommandsComeFromAFixedList
   tasks:
     repo: DreamsAreReal/tasks
     kind: service
@@ -585,3 +602,57 @@ apps:
           - internal/web.TestLoginWithPasskey
           - internal/web.TestKeysPage
           - internal/passkey.TestACredentialStoredByGoWebAuthnSignsIn
+  observability:
+    repo: DreamsAreReal/observability
+    kind: worker
+    scenarios:
+      - id: config-volume-follows-the-gated-image
+        category: business
+        tests:
+          - internal/configsync.TestSyncReplacesChangedFilesAndKeepsUnchangedOnes
+          - internal/configsync.TestSyncRemovesFilesThatLeftTheBundle
+          - internal/configsync.TestMainSyncsWaitsAndChecks
+      - id: config-sync-copies-only-regular-files
+        category: security
+        tests:
+          - internal/configsync.TestSyncRefusesWhatItCannotCopy
+      - id: backups-are-consistent-and-checked
+        category: business
+        tests:
+          - internal/backup.TestBackupSnapshotsTheDatabases
+          - internal/backup.TestIntegrityCheckFailureIsAnError
+          - internal/backup.TestUnchangedFilesAreHardLinksToThePreviousCopy
+          - internal/backup.TestOffsiteFailures
+      - id: backup-talks-only-to-this-host
+        category: security
+        tests:
+          - internal/backup.TestFetchJSONOnlyTalksToThisHost
+      - id: host-metrics-labels-cannot-break-the-format
+        category: security
+        tests:
+          - internal/hostmetrics.TestLabelsAreEscapedAndSorted
+      - id: sites-are-probed-with-verified-certificates
+        category: security
+        tests:
+          - internal/hostmetrics.TestHTTPSProbeVerifiesTheCertificate
+      - id: host-metrics-run-only-table-commands
+        category: security
+        tests:
+          - internal/hostmetrics.TestExecRunsOnlyTableCommandsAndTimesOut
+    host:
+      files:
+        - {src: obs-host-metrics, dst: /usr/local/sbin/obs-host-metrics, owner: root, group: root, mode: "0755"}
+        - {src: obs-host-metrics.service, dst: /etc/systemd/system/obs-host-metrics.service, owner: root, group: root, mode: "0644"}
+        - {src: obs-host-metrics.timer, dst: /etc/systemd/system/obs-host-metrics.timer, owner: root, group: root, mode: "0644"}
+        - {src: app-backup, dst: /usr/local/sbin/app-backup, owner: root, group: root, mode: "0755"}
+        - {src: app-backup.service, dst: /etc/systemd/system/app-backup.service, owner: root, group: root, mode: "0644"}
+        - {src: app-backup.timer, dst: /etc/systemd/system/app-backup.timer, owner: root, group: root, mode: "0644"}
+        - {src: obs-backfill-deploys, dst: /usr/local/sbin/obs-backfill-deploys, owner: root, group: root, mode: "0755"}
+        - {src: ingest.caddy, dst: /etc/caddy/extra/observability-ingest.caddy, owner: root, group: caddy, mode: "0640", env: ingest.env}
+      dirs:
+        - {path: /var/lib/node_exporter/textfile, owner: root, group: root, mode: "0755"}
+      timers: [obs-host-metrics.timer, app-backup.timer]
+      checks: [obs-host-metrics.service]
+hub:
+  sudo_user: deploy
+  sudo_commands: [caddy-sync, host-sync, self-update]

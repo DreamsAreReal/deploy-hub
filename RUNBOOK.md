@@ -103,8 +103,14 @@ permanent one fails).
 ## The runner itself is broken
 
 The runner is the root-owned binary `/opt/deploy-hub/bin/deploy-hub`; the SSH
-entry is the forced command in `/home/deploy/.ssh/authorized_keys`. Rebuild and
-reinstall from this repo with `make build` + `scp` (README, Bootstrap step 5).
+entry is the forced command in `/home/deploy/.ssh/authorized_keys`. A fix goes
+to `main`; CI releases it and `deploy-hub-self-update.timer` installs it within
+10 minutes (`ssh vpn 'systemctl start deploy-hub-self-update.service'` to do it
+now). A broken release is undone by installing the previous gated one:
+`ssh vpn '/opt/deploy-hub/bin/deploy-hub self-update sha-<previous commit>'`;
+if the binary no longer starts at all,
+`ssh vpn 'cp -p /opt/deploy-hub/bin/deploy-hub.prev /opt/deploy-hub/bin/deploy-hub'`.
+`DeployHubSelfUpdateFailed`: `ssh vpn "grep self-update /opt/deploy-hub/deploys.log | tail; tail -n 30 /opt/deploy-hub/logs/self-update.log"`.
 Manual rollback bypassing SSH (as root on the VPS):
 
     sudo -u deploy env SSH_ORIGINAL_COMMAND="rollback <app>" /opt/deploy-hub/bin/deploy-hub runner

@@ -28,6 +28,7 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/obs"
 	"github.com/DreamsAreReal/deploy-hub/internal/onboard"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
+	"github.com/DreamsAreReal/deploy-hub/internal/selfupdate"
 	"github.com/DreamsAreReal/deploy-hub/internal/tools"
 )
 
@@ -36,17 +37,20 @@ const (
 	ExitFail  = 1
 	ExitUsage = 2
 
-	CmdRunner    = "runner"
-	CmdRender    = "render"
-	CmdCaddySync = "caddy-sync"
-	CmdPrune     = "prune"
-	CmdProvision = "provision"
-	CmdFacts     = "facts"
-	CmdOnboard   = "onboard"
-	CmdGate      = "gate"
-	CmdTools     = "tools"
-	CmdMCP       = "mcp"
-	CmdHostSync  = "host-sync"
+	CmdRunner     = "runner"
+	CmdRender     = "render"
+	CmdCaddySync  = "caddy-sync"
+	CmdPrune      = "prune"
+	CmdProvision  = "provision"
+	CmdFacts      = "facts"
+	CmdOnboard    = "onboard"
+	CmdGate       = "gate"
+	CmdTools      = "tools"
+	CmdMCP        = "mcp"
+	CmdHostSync   = "host-sync"
+	CmdSelfUpdate = "self-update"
+	CmdSudoers    = "sudoers-sync"
+	CmdVersion    = "version"
 
 	binDocker    = "docker"
 	binSudo      = "sudo"
@@ -62,6 +66,9 @@ commands:
   render <app> <in> <out>          render a repo compose into a deploy-ready one
   caddy-sync                       regenerate the Caddyfile from apps.list
   host-sync <app> <tag>            install the app's gated host files as root (policy host spec)
+  self-update [sha-<commit>]       replace this binary with a released, gated build (root)
+  sudoers-sync                     write the sudoers rule of the runner from the policy (root)
+  version                          print the commit this binary was built from
   prune                            delete old app images (keep running + 2 previous)
   provision --app NAME ...         prepare /opt/<app> on the VPS (root)
   facts <app>                      print server facts for onboarding
@@ -78,15 +85,16 @@ type IO struct {
 }
 
 type App struct {
-	Config Config
-	IO     IO
-	Out    *console.Printer
-	Err    *console.Printer
-	Exec   func(names ...string) procexec.Runner
-	Now    func() time.Time
-	Log    *slog.Logger
-	Owner  func(username string) func(path string) error
-	Checks func() []gate.Check
+	Config  Config
+	IO      IO
+	Out     *console.Printer
+	Err     *console.Printer
+	Exec    func(names ...string) procexec.Runner
+	Now     func() time.Time
+	Log     *slog.Logger
+	Owner   func(username string) func(path string) error
+	Checks  func() []gate.Check
+	Sudoers string
 }
 
 type handler struct {
@@ -97,17 +105,20 @@ type handler struct {
 }
 
 var handlers = map[string]handler{
-	CmdRunner:    {run: runRunner, binaries: []string{binDocker, binSudo}, onServer: true},
-	CmdRender:    {run: runRender},
-	CmdCaddySync: {run: runCaddySync, binaries: []string{binCaddy, binSystemctl}, onServer: true},
-	CmdPrune:     {run: runPrune, binaries: []string{binDocker}, onServer: true},
-	CmdProvision: {run: runProvision, binaries: []string{binCaddy, binSystemctl}, onServer: true},
-	CmdFacts:     {run: runFacts, onServer: true},
-	CmdOnboard:   {run: runOnboard, binaries: []string{binGH, binGit, binSSH, onboard.SSHKeygen}},
-	CmdGate:      {run: runGate, binaries: gateBinaries, verbose: true},
-	CmdTools:     {run: runTools, binaries: []string{tools.GoBinary, tools.TarBinary}, verbose: true},
-	CmdMCP:       {run: runMCP, binaries: []string{binSSH}},
-	CmdHostSync:  {run: runHostSync, binaries: []string{hostsync.DockerBinary, hostsync.SystemctlBinary, hostsync.AnalyzeBinary, hostsync.CaddyBinary}, onServer: true},
+	CmdRunner:     {run: runRunner, binaries: []string{binDocker, binSudo}, onServer: true},
+	CmdRender:     {run: runRender},
+	CmdCaddySync:  {run: runCaddySync, binaries: []string{binCaddy, binSystemctl}, onServer: true},
+	CmdPrune:      {run: runPrune, binaries: []string{binDocker}, onServer: true},
+	CmdProvision:  {run: runProvision, binaries: []string{binCaddy, binSystemctl}, onServer: true},
+	CmdFacts:      {run: runFacts, onServer: true},
+	CmdOnboard:    {run: runOnboard, binaries: []string{binGH, binGit, binSSH, onboard.SSHKeygen}},
+	CmdGate:       {run: runGate, binaries: gateBinaries, verbose: true},
+	CmdTools:      {run: runTools, binaries: []string{tools.GoBinary, tools.TarBinary}, verbose: true},
+	CmdMCP:        {run: runMCP, binaries: []string{binSSH}},
+	CmdSelfUpdate: {run: runSelfUpdate, binaries: []string{selfupdate.InstalledCommand, selfupdate.CandidateCommand, selfupdate.VisudoCommand}, onServer: true},
+	CmdSudoers:    {run: runSudoersSync, binaries: []string{selfupdate.VisudoCommand}, onServer: true},
+	CmdVersion:    {run: runVersion},
+	CmdHostSync:   {run: runHostSync, binaries: []string{hostsync.DockerBinary, hostsync.SystemctlBinary, hostsync.AnalyzeBinary, hostsync.CaddyBinary}, onServer: true},
 }
 
 var gateBinaries = []string{
@@ -118,14 +129,16 @@ var gateBinaries = []string{
 }
 
 type Deps struct {
-	Exec   func(names ...string) procexec.Runner
-	Owner  func(username string) func(path string) error
-	Now    func() time.Time
-	Checks func() []gate.Check
+	Exec    func(names ...string) procexec.Runner
+	Owner   func(username string) func(path string) error
+	Now     func() time.Time
+	Checks  func() []gate.Check
+	Sudoers string
 }
 
 func OSDeps() Deps {
-	return Deps{Exec: func(names ...string) procexec.Runner { return procexec.NewOS(names...) }, Owner: ChownTo, Now: time.Now, Checks: catalog.Checks}
+	return Deps{Exec: func(names ...string) procexec.Runner { return procexec.NewOS(names...) }, Owner: ChownTo, Now: time.Now, Checks: catalog.Checks,
+		Sudoers: selfupdate.DefaultSudoers}
 }
 
 func Main(ctx context.Context, args []string, env Env, stdio IO) int {
@@ -151,7 +164,7 @@ func Run(ctx context.Context, args []string, env Env, stdio IO, deps Deps) int {
 	counts := &obs.LevelCounts{}
 	log, closeLog := openLogger(cfg, args[0], h, stdio.Stderr, counts)
 	defer closeLog()
-	a := &App{Config: cfg, IO: stdio, Out: stdout, Err: stderr, Now: deps.Now, Log: log, Owner: deps.Owner, Exec: deps.Exec, Checks: deps.Checks}
+	a := &App{Config: cfg, IO: stdio, Out: stdout, Err: stderr, Now: deps.Now, Log: log, Owner: deps.Owner, Exec: deps.Exec, Checks: deps.Checks, Sudoers: deps.Sudoers}
 	started := time.Now()
 	log.Info("command started", "args", len(args)-1)
 	code, panicked := a.invoke(ctx, h, args[1:])

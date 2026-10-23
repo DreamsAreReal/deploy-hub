@@ -325,15 +325,20 @@ commands:
 | `tools --manifest … --dir …` | CI | installs the pinned scanners, checksums verified |
 | `caddy-sync` | root (via a narrow sudoers rule) | regenerates the Caddyfile from `apps.list` |
 | `host-sync <app> <tag>` | root (via a narrow sudoers rule, called by `runner`) | installs the host files of an app's gated image, as listed in the policy (see [Host files](#host-files-host-sync)) |
+| `self-update [sha-<commit>]` | root (systemd timer every 10 minutes) | replaces the binary with the newest gated release of this repo (see [Releases and self-update](#releases-and-self-update)) |
+| `sudoers-sync` | root (called by `self-update`) | writes `/etc/sudoers.d/deploy-hub` from `hub:` in the policy |
+| `version` | anyone | prints the commit the binary was built from |
 | `prune` | root (systemd timer) | keeps the running image + 2 previous per app |
 | `provision --app … ` | root (from `onboard`) | prepares `/opt/<app>/` and the allowlist line |
 | `facts <app>` | root (from `onboard`) | reports what already exists on the server |
 | `onboard <repo> …` | operator machine | connects a GitHub repo end-to-end |
 | `mcp` | operator machine | MCP server for AI agents: `status`, `history`, `rollback` over the deploy channel |
 
-Build it with `make build` (linux/amd64 by default, output outside the repo in
-`$TMPDIR/deploy-hub-build/`); `make build GOOS=darwin GOARCH=arm64` gives a
-binary for the operator laptop, or use `go run ./cmd/deploy-hub onboard …`.
+`make build` builds it for linux/amd64 into `$TMPDIR/deploy-hub-build/`, outside
+the repo, for local testing; `make build COMMIT=<sha>` stamps the commit that
+`version` prints. The binary that runs on the server is never built by hand:
+only CI publishes it (see [Releases and self-update](#releases-and-self-update)).
+On the operator machine use `go run ./cmd/deploy-hub onboard …`.
 
 ## Bootstrap (one-time host setup)
 
@@ -364,18 +369,33 @@ root SSH to. `<vps>` is the server address.
    ```
 
 5. **Hub directory, server config and binary** (`<host-slug>` is the address
-   with dashes, as used by sslip.io, e.g. `203-0-113-7`):
+   with dashes, as used by sslip.io, e.g. `203-0-113-7`). This is the **only
+   time a person installs the binary**: take the newest release that CI
+   published after a green gate on `main`, check its checksum, and from then on
+   the hub updates itself (step 7):
 
    ```
-   make build
-   ssh vpn 'install -d -m 755 /opt/deploy-hub/bin
-            install -d -m 750 -o deploy -g deploy /opt/deploy-hub/logs
-            printf "host_slug=<host-slug>\n" > /opt/deploy-hub/hub.conf
-            touch /opt/deploy-hub/apps.list /opt/deploy-hub/deploys.log /opt/deploy-hub/deploy.lock /opt/deploy-hub/last-error.log
-            chown deploy:deploy /opt/deploy-hub/deploys.log /opt/deploy-hub/deploy.lock /opt/deploy-hub/last-error.log'
-   scp "${TMPDIR:-/tmp}/deploy-hub-build/deploy-hub" vpn:/opt/deploy-hub/bin/deploy-hub
-   ssh vpn 'chown root:root /opt/deploy-hub/bin/deploy-hub && chmod 755 /opt/deploy-hub/bin/deploy-hub'
+   ssh vpn bash -s <<'EOF'
+   set -euo pipefail
+   install -d -m 755 /opt/deploy-hub/bin
+   install -d -m 750 -o deploy -g deploy /opt/deploy-hub/logs
+   printf "host_slug=<host-slug>\n" > /opt/deploy-hub/hub.conf
+   touch /opt/deploy-hub/apps.list /opt/deploy-hub/deploys.log /opt/deploy-hub/deploy.lock /opt/deploy-hub/last-error.log
+   chown deploy:deploy /opt/deploy-hub/deploys.log /opt/deploy-hub/deploy.lock /opt/deploy-hub/last-error.log
+   tag=$(curl -fsSL https://api.github.com/repos/DreamsAreReal/deploy-hub/releases/latest | sed -n 's/.*"tag_name": *"\(sha-[0-9a-f]\{40\}\)".*/\1/p')
+   cd "$(mktemp -d)"
+   for f in deploy-hub-linux-amd64 deploy-hub-linux-amd64.sha256; do
+     curl -fsSLO "https://github.com/DreamsAreReal/deploy-hub/releases/download/$tag/$f"
+   done
+   sha256sum -c deploy-hub-linux-amd64.sha256
+   install -o root -g root -m 755 deploy-hub-linux-amd64 /opt/deploy-hub/bin/deploy-hub
+   test "sha-$(/opt/deploy-hub/bin/deploy-hub version)" = "$tag"
+   EOF
    ```
+
+   Check in GitHub that the `ci` run of that commit on `main` is green before
+   you trust it (`gh run list -R DreamsAreReal/deploy-hub -w ci.yml -c <sha>`);
+   `self-update` does the same check on its own later.
 
    `hub.conf` also accepts `acme_email=` (default `admin@<host-slug>.sslip.io`);
    the environment variables `HOST_SLUG`/`ACME_EMAIL` override it.
@@ -383,26 +403,29 @@ root SSH to. `<vps>` is the server address.
    gate verdict, deploy and rollback to the task tracker as delivery steps
    (see [Delivery steps](#delivery-steps)); `DEPLOY_HUB_DELIVERY_URL` overrides it.
 
-6. **sudoers rules** — the runner (user `deploy`) may refresh routes and
-   install the host files the policy lists for an app, nothing else:
+6. **sudoers rule** — the runner (user `deploy`) may run only the root
+   commands listed under `hub:` in `policy/gate.yaml` (`caddy-sync`,
+   `host-sync`, `self-update`). The binary writes the rule itself, checks it
+   with `visudo -cf` and keeps the previous one if the check fails:
 
    ```
-   ssh vpn "printf '%s\n' \
-       'deploy ALL=(root) NOPASSWD: /opt/deploy-hub/bin/deploy-hub caddy-sync' \
-       'deploy ALL=(root) NOPASSWD: /opt/deploy-hub/bin/deploy-hub host-sync *' > /etc/sudoers.d/deploy-hub
-            chmod 440 /etc/sudoers.d/deploy-hub && visudo -cf /etc/sudoers.d/deploy-hub"
+   ssh vpn '/opt/deploy-hub/bin/deploy-hub sudoers-sync && cat /etc/sudoers.d/deploy-hub'
    ```
 
-   `host-sync` takes exactly `<app> <tag>`, both checked against the same
-   regexes as the runner's, and does nothing for an app without a `host:`
-   spec in the policy compiled into the binary.
+   `caddy-sync` and `self-update` are allowed without arguments (`""`),
+   `host-sync` with any (`*`): it takes exactly `<app> <tag>`, both checked
+   against the same regexes as the runner's, and does nothing for an app
+   without a `host:` spec in the policy compiled into the binary. Every
+   `self-update` rewrites the rule from the new binary's policy.
 
-7. **Daily prune and the per-minute status refresh** (keeps the metrics
-   continuous, see Observability):
+7. **Timers**: daily prune, the per-minute status refresh (keeps the metrics
+   continuous, see Observability) and the self-update every 10 minutes. Copy
+   the unit files of `server/systemd/` from the same commit as the release you
+   installed in step 5:
 
    ```
-   scp server/systemd/deploy-hub-prune.* server/systemd/deploy-hub-status.* vpn:/etc/systemd/system/
-   ssh vpn 'systemctl daemon-reload && systemctl enable --now deploy-hub-prune.timer deploy-hub-status.timer'
+   tar -C server/systemd -cf - . | ssh vpn 'tar -C /etc/systemd/system -xf - --no-same-owner'
+   ssh vpn 'systemctl daemon-reload && systemctl enable --now deploy-hub-prune.timer deploy-hub-status.timer deploy-hub-self-update.timer'
    ```
 
 8. **history-guard timer** — the `history-guard` workflow deletes every branch
@@ -417,9 +440,10 @@ root SSH to. `<vps>` is the server address.
    ```
    printf 'Authorization: Bearer %s\n' '<github_pat_…>' \
      | ssh vpn 'install -d -m 700 /etc/deploy-hub && install -m 600 /dev/stdin /etc/deploy-hub/history-guard.header'
-   scp server/systemd/deploy-hub-history-guard.* vpn:/etc/systemd/system/
-   ssh vpn 'systemctl daemon-reload && systemctl enable --now deploy-hub-history-guard.timer'
+   ssh vpn 'systemctl enable --now deploy-hub-history-guard.timer'
    ```
+
+   (The unit files arrived with step 7.)
 
    Check: `ssh vpn 'systemctl start deploy-hub-history-guard.service'` exits 0
    and `gh run list -R DreamsAreReal/deploy-hub -w history-guard.yml -L 1`
@@ -435,6 +459,44 @@ root SSH to. `<vps>` is the server address.
 
 Verify the hub answers: `VPS_ADDR=<vps> go run ./cmd/deploy-hub onboard status`
 prints a header (an empty app list is fine on a fresh hub).
+
+## Releases and self-update
+
+The binary on the server comes only from this repo's CI, and only for a commit
+that passed the full gate on `main`:
+
+1. `ci.yml` runs the gate on every push to `main`, then builds the linux/amd64
+   binary with the commit stamped in (`deploy-hub version` prints it; the
+   build step fails if it does not).
+2. The `release` job (push to `main` only, after `gate`) publishes the release
+   `sha-<commit>` targeting that commit, with the assets
+   `deploy-hub-linux-amd64` and `deploy-hub-linux-amd64.sha256`.
+3. On the server `deploy-hub-self-update.timer` runs `deploy-hub self-update`
+   as root every 10 minutes. It takes the latest release (or the one given as
+   `sha-<commit>`) and installs it only when:
+   - the tag is `sha-<40 hex>` and the release targets exactly that commit;
+   - both assets are attached to that release, under
+     `https://github.com/DreamsAreReal/deploy-hub/releases/download/<tag>/`;
+   - GitHub lists a successful `ci.yml` run for that commit, event `push`,
+     branch `main`;
+   - the downloaded binary matches the published sha256;
+   - the candidate (`/opt/deploy-hub/bin/deploy-hub.new`) reports that commit
+     from `version`.
+4. It keeps the current binary as `deploy-hub.prev`, renames the candidate into
+   place, then checks the installed binary: `version` must print the commit and
+   `sudoers-sync` (from the new binary's policy) must pass `visudo -cf`. If
+   either fails, it copies `deploy-hub.prev` back and runs its `sudoers-sync`.
+
+Every installed or refused release is journaled (`deploy-hub@<sha7> self-update
+ok|fail`, a restore adds `restored=ok|fail`); a run that finds the installed
+commit only rewrites the sudoers rule if it drifted. Metrics:
+`deploy_hub_self_update_success` and `deploy_hub_self_update_installed`; the
+alert `DeployHubSelfUpdateFailed` fires when no run succeeded for 40 minutes.
+To pin an older gated release, run `sudo /opt/deploy-hub/bin/deploy-hub
+self-update sha-<commit>`; the next timer run moves back to the latest one.
+
+The only manual install is the bootstrap (Bootstrap, step 5). Do not copy a
+binary to the server any other way.
 
 ## Connecting a repo — one command
 
@@ -850,7 +912,7 @@ key must already be in `known_hosts` (`BatchMode` never prompts). Logs go to
 stderr as JSON (`DEPLOY_HUB_LOG_LEVEL`, default `warn`; `info` logs every
 tool call).
 
-Connect it to Claude Code (build the binary for the laptop first, see
+Connect it to Claude Code (build the binary for the operator machine first, see
 [The binary](#the-binary)):
 
 ```
@@ -1009,6 +1071,7 @@ time quantiles are recording rules in the observability repo
 | `deploy_hub_caddy_routes`, `deploy_hub_caddy_sync_success`, `deploy_hub_caddy_reload` | — | last route sync |
 | `deploy_hub_provision_created_resources` | app | files/lines created by the last provision |
 | `deploy_hub_host_sync_success`, `deploy_hub_host_files_changed` | app | 1/0 and the number of replaced files for every `host-sync` run |
+| `deploy_hub_self_update_success`, `deploy_hub_self_update_installed` | — | 1/0 for every `self-update` run, and whether it installed a new binary |
 | `deploy_hub_command_exit_code` | command | exit code of a server command run (`runner`, `caddy-sync`, `host-sync`, `prune`, `provision`, `facts`); one sample per run |
 | `deploy_hub_command_duration_seconds` | command, result | run time; result `ok`, `fail`, `usage` or `panic` |
 | `deploy_hub_command_panicked` | command | 1 when the run recovered a panic |
@@ -1025,7 +1088,7 @@ vmalert rules over these metrics: a hub that pushed nothing for 5 minutes, a
 panic, error log records, a failed server command, a failed deploy, redeploy or
 rollback, a gate rejection (per check, `ci-<step>` included), a crashed gate
 check, any refused request, an app unhealthy for 5 minutes, a failed Caddy
-sync, a failed host-sync, a deploy waiting over 120 s for the lock, a failed tracker post and an
+sync, a failed host-sync, a self-update failing for 40 minutes, a deploy waiting over 120 s for the lock, a failed tracker post and an
 unreadable journal, a self-hosted CI runner offline for 10 minutes, its
 state not pushed, broken CI isolation, and the CI disk over 85%. `go test ./internal/obs` fails when a rule uses a metric
 that the code does not declare, or when a problem metric has no rule.
@@ -1115,7 +1178,9 @@ hand-managed vhosts that are not deploy-hub apps.
   The runner never invokes a shell; it executes only `docker`,
   `sudo -n deploy-hub caddy-sync` and `sudo -n deploy-hub host-sync <app> <tag>`,
   from a fixed table of literal executables.
-- Root on the host is reached only through those two commands. `host-sync`
+- Root on the host is reached only through the commands under `hub:` in the
+  policy (`caddy-sync`, `host-sync`, `self-update`), written to sudoers by the
+  binary itself. `host-sync`
   installs nothing but files of an image that passed the gate (journal) and was
   pulled by digest, to the explicit per-app list of paths, owners and modes in
   this repo's policy; see [Host files](#host-files-host-sync). The `deploy` user

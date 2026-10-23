@@ -69,6 +69,12 @@ groups:
           summary: "Host files of {{ $labels.app }} were not installed"
           description: "deploy-hub host-sync refused the image or a check after the install failed, so the previous host files were restored and the deploy failed. Journal: grep '{{ $labels.app }}@' /opt/deploy-hub/deploys.log | grep host-; log: /opt/deploy-hub/logs/host-sync.log on the VPS."
 
+      - alert: DeployHubSelfUpdateFailed
+        expr: max_over_time(deploy_hub_self_update_success[40m]) == 0
+        annotations:
+          summary: "deploy-hub cannot update itself"
+          description: "Every self-update run in the last 40 minutes failed (no gated release found, checksum or version mismatch, or a failed check after the install, which restored the previous binary). Journal: grep self-update /opt/deploy-hub/deploys.log; log: /opt/deploy-hub/logs/self-update.log on the VPS."
+
       - alert: DeployHubLockContention
         expr: max by (app) (max_over_time(deploy_hub_lock_wait_seconds[15m])) > 120
         annotations:
