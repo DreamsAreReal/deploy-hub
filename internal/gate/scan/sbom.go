@@ -289,7 +289,7 @@ var licenseAliases = map[string]string{
 	"apache 2.0": apache2, "apache 2": apache2, "apache-2": apache2, "apache license 2.0": apache2, "apache license, version 2.0": apache2,
 	"apache license version 2.0": apache2, "apache software license": apache2, "apache software license 2.0": apache2,
 	"mit license": mit, "the mit license": mit, "mit/x11": mit, "expat": mit,
-	"bsd 3-clause": bsd3, "bsd-3": bsd3, "new bsd": bsd3, "new bsd license": bsd3, "bsd 3-clause license": bsd3, "3-clause bsd": bsd3,
+	"bsd 3-clause": bsd3, "bsd-3": bsd3, "new bsd": bsd3, "new bsd license": bsd3, "bsd 3-clause license": bsd3, "3-clause bsd": bsd3, "3-clause bsd license": bsd3,
 	"modified bsd license": bsd3, "bsd 2-clause": bsd2, "bsd-2": bsd2, "simplified bsd": bsd2, "bsd 2-clause license": bsd2,
 	"isc license": "ISC", "mozilla public license 2.0": mpl2, "mpl 2.0": mpl2, "the unlicense": "Unlicense", "zlib license": "Zlib",
 }
