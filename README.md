@@ -87,7 +87,7 @@ versions and checksums: [`policy/tools.yaml`](policy/tools.yaml).
 | `vulnerabilities` | any known vulnerability reachable or imported | per stack |
 | `sca` | any known vulnerability in dependencies | osv-scanner |
 | `sbom-licenses` | a dependency with an unknown or unapproved license; SBOMs are kept per release | syft |
-| `workflows` | any finding in `.github` at the auditor level | zizmor, actionlint |
+| `workflows` | any finding in `.github` at the auditor level (the hub accepts one, see below) | zizmor, actionlint |
 | `dockerfile` | any hadolint rule, including info level | hadolint |
 | `iac` | any misconfiguration in Dockerfiles, compose and other IaC | trivy config |
 | `image` | any vulnerability, secret or misconfiguration in the built image | trivy |
@@ -260,6 +260,20 @@ other requirements and are turned off centrally for every repo:
   ever involved and arguments are validated before use.
 - zizmor `undocumented-permissions` demands a comment next to every
   write permission, while comments are banned by policy.
+
+**The one accepted workflow finding.** The hub's own gate accepts exactly one
+finding, set in `policy/gate.yaml` under `apps.deploy-hub.accepted_workflow_findings`
+with its reason: zizmor `self-hosted-runner` (Medium) on the `runs-on` line of
+`.github/workflows/deploy.yml`, which picks the
+[self-hosted CI runner](#self-hosted-ci-runner) for private app repos (owner
+decision of 2026-10-22, tasks #600, #621, #627, #633). An accepted finding
+names the rule, the severity, the exact file and the YAML key at the reported
+line, and the policy refuses one without a reason that cites a task. The
+`workflows` check skips a zizmor finding only when all four match, and only
+once per entry: a second self-hosted job, another severity, rule, file or line
+fails the check, and so does an entry that zizmor no longer reports. No other
+check reads this list, and `TestRepositoryPolicyAcceptsOneFinding` fails when
+the policy holds any other entry, for the hub or for an app.
 
 **Toolchains.** `policy/tools.yaml` pins every scanner and language toolchain
 (uv, ruff, node and npm, the .NET SDK, shellcheck, shfmt, bats) by URL and
@@ -488,6 +502,10 @@ from a fork, or when the app repo sets the variable
 gh variable set DEPLOY_HUB_RUNNER -R DreamsAreReal/<app> -b github-hosted   # GitHub-hosted
 gh variable delete DEPLOY_HUB_RUNNER -R DreamsAreReal/<app>                 # self-hosted again
 ```
+
+zizmor reports this `runs-on` as `self-hosted-runner`; it is the one finding
+the hub's gate accepts (see
+[the one accepted workflow finding](#the-quality-gate)).
 
 A runner is registered on one repository (personal accounts have no runner
 groups), so only that repo's jobs reach it. Keep "Run workflows from fork pull

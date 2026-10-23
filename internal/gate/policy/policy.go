@@ -38,6 +38,7 @@ const (
 var (
 	cpus      = regexp.MustCompile(`^[0-9]{1,2}(\.[0-9]{1,2})?$`)
 	digestRef = regexp.MustCompile(`^[a-z0-9./_-]+@sha256:[0-9a-f]{64}$`)
+	taskRef   = regexp.MustCompile(`#[0-9]+`)
 )
 
 var licenseDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
@@ -100,6 +101,15 @@ type App struct {
 	Load      LoadProfile `yaml:"load"`
 	Localized []string    `yaml:"localized"`
 	Allowed   []string    `yaml:"allowed_files"`
+	Accepted  []Accepted  `yaml:"accepted_workflow_findings"`
+}
+
+type Accepted struct {
+	Rule     string `yaml:"rule"`
+	Severity string `yaml:"severity"`
+	File     string `yaml:"file"`
+	Key      string `yaml:"key"`
+	Reason   string `yaml:"reason"`
 }
 
 type Scenario struct {
@@ -279,7 +289,18 @@ func (a App) validate(name string) error {
 	for _, p := range a.Allowed {
 		errs = append(errs, validPattern(name, "allowed_files", p))
 	}
+	for _, f := range a.Accepted {
+		errs = append(errs, f.validate(name))
+	}
 	return errors.Join(errs...)
+}
+
+func (f Accepted) validate(app string) error {
+	if f.Rule == "" || f.Severity == "" || f.Key == "" || !taskRef.MatchString(f.Reason) ||
+		strings.ContainsAny(f.File, "*?[") || validPattern(app, "accepted_workflow_findings", f.File) != nil {
+		return fmt.Errorf("%w: app %s: accepted workflow finding %q needs a rule, a severity, an exact relative file, a key and a reason that cites a task (#N)", ErrPolicy, app, f.Rule)
+	}
+	return nil
 }
 
 func validPattern(app, field, pattern string) error {

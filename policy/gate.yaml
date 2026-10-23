@@ -150,6 +150,19 @@ apps:
   deploy-hub:
     repo: DreamsAreReal/deploy-hub
     kind: binary
+    accepted_workflow_findings:
+      - rule: self-hosted-runner
+        severity: Medium
+        file: .github/workflows/deploy.yml
+        key: runs-on
+        reason: >-
+          Owner decision of 2026-10-22 in #633, for the runner of #600, #621 and #627: the app gate runs on
+          the isolated self-hosted runner on the EU host (server/ci-runner). Each app repo has its own runner
+          user (uid, #621) and rootless Docker daemon, the runners live in a network namespace that reaches
+          only the internet (one namespace per repo: #627), in sandboxed units and a CPU/memory/disk slice.
+          Runners are registered only in private app repos;
+          public repos, forks and pull requests from forks get ubuntu-latest, and the job-started hook
+          refuses workflows that are not from main. This is the only accepted workflow finding.
     scenarios:
       - id: forced-command-allows-only-runner-verbs
         category: security

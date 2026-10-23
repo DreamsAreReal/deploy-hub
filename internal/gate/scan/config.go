@@ -7,8 +7,10 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/policy"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/source"
 )
 
@@ -27,6 +29,8 @@ const (
 	reasonNoWorkflows     = "the repository has no CI/CD configuration"
 	reasonNoDocker        = "the app ships an image but the repository has no Dockerfile"
 	zizmorFormat          = "%s %s %s:%d"
+	staleFormat           = "accepted %s %s %s at %s is no longer reported"
+	valueAccepted         = "accepted"
 	actionlintFormat      = "%s:%d: %s (%s)"
 	hadolintFormat        = "%s:%d: %s %s (%s)"
 	misconfFormat         = "%s %s %s:%d: %s"
@@ -69,21 +73,71 @@ func Workflows(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	if err := json.Unmarshal([]byte(zres.Stdout), &zf); err != nil {
 		return gate.FromTool(reasonWorkflows, zres, zerr, nil, err)
 	}
-	findings := make([]string, 0, len(zf))
+	hits := make([]workflowHit, 0, len(zf))
 	for _, f := range zf {
-		file, row := "", 0
+		h := workflowHit{severity: f.Determinations.Severity, rule: f.Ident}
 		if len(f.Locations) > 0 {
-			file, row = ws.Rel(f.Locations[0].Symbolic.Key.Local.Path), f.Locations[0].Concrete.Location.Start.Row+1
+			h.file, h.row = ws.Rel(f.Locations[0].Symbolic.Key.Local.Path), f.Locations[0].Concrete.Location.Start.Row+1
 		}
-		findings = append(findings, fmt.Sprintf(zizmorFormat, f.Determinations.Severity, f.Ident, file, row))
+		hits = append(hits, h)
 	}
+	findings := unaccepted(ws.Src, hits, ws.App.Accepted)
 	ares, aerr := ws.Run(ctx, ActionlintBinary, "-format", "{{json .}}")
 	more, perr := parseActionlint(ares.Stdout)
 	findings = append(findings, more...)
 	if len(findings) == 0 && aerr != nil {
 		return gate.FromTool(reasonWorkflows, ares, aerr, nil, perr)
 	}
-	return gate.FromTool(reasonWorkflows, zres, nil, findings, perr)
+	out := gate.FromTool(reasonWorkflows, zres, nil, findings, perr)
+	if out.Values != nil {
+		out.Values[valueAccepted] = float64(len(ws.App.Accepted))
+	}
+	return out
+}
+
+type workflowHit struct {
+	severity, rule, file string
+	row                  int
+}
+
+func unaccepted(src string, hits []workflowHit, accepted []policy.Accepted) []string {
+	used := make([]bool, len(accepted))
+	findings := make([]string, 0, len(hits))
+	for _, h := range hits {
+		if i := acceptedBy(src, h, accepted, used); i >= 0 {
+			used[i] = true
+			continue
+		}
+		findings = append(findings, fmt.Sprintf(zizmorFormat, h.severity, h.rule, h.file, h.row))
+	}
+	for i, a := range accepted {
+		if !used[i] {
+			findings = append(findings, fmt.Sprintf(staleFormat, a.Severity, a.Rule, a.File, a.Key))
+		}
+	}
+	return findings
+}
+
+func acceptedBy(src string, h workflowHit, accepted []policy.Accepted, used []bool) int {
+	for i, a := range accepted {
+		if !used[i] && a.Rule == h.rule && a.Severity == h.severity && a.File == h.file && keyAt(src, h.file, h.row) == a.Key {
+			return i
+		}
+	}
+	return -1
+}
+
+func keyAt(src, file string, row int) string {
+	data, err := os.ReadFile(filepath.Clean(filepath.Join(src, filepath.FromSlash(file))))
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(string(data), "\n")
+	if row < 1 || row > len(lines) {
+		return ""
+	}
+	key, _, _ := strings.Cut(strings.TrimSpace(lines[row-1]), ":")
+	return key
 }
 
 func parseActionlint(out string) ([]string, error) {
