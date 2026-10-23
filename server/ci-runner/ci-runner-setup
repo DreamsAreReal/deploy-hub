@@ -11,7 +11,7 @@ CACHE=/var/cache/ci-runner
 CI_ROOT=/var/lib/ci
 LEGACY_USER=ci
 DISK_IMAGE=/srv/ci.img
-DISK_SIZE=${CI_DISK_SIZE:-120G}
+DISK_SIZE=${CI_DISK_SIZE:-240G}
 SUBID_COUNT=65536
 QUOTAS=$HERE/ci-disk-quota
 DEPLOY_LOCK=/opt/deploy-hub/deploy.lock
@@ -184,7 +184,7 @@ quota_enabled() {
 # Project quotas need the image unmounted once: only when no job runs.
 quota_enable() {
   quota_enabled && return 0
-  if pgrep -f 'Runner.Worker' >/dev/null; then
+  if pgrep -x Runner.Worker >/dev/null; then
     echo "a CI job is running: enable the quotas when the runners are idle" >&2
     exit 1
   fi
