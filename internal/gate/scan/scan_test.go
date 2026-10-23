@@ -262,6 +262,7 @@ func TestLicenseNamesAndDeclaredLicenses(t *testing.T) {
 		"pkg:pypi/mystery@1: license unknown",
 	})
 	testutil.Equal(t, canonical(" The MIT License "), "MIT")
+	testutil.Equal(t, canonical("3-Clause BSD License"), "BSD-3-Clause")
 	testutil.Equal(t, canonical("Custom"), "Custom")
 	testutil.Equal(t, purlName("pkg:npm/%40scope/web@2.0.0"), "pkg:npm/%40scope/web")
 }
