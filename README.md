@@ -459,34 +459,44 @@ root SSH to. `<vps>` is the server address.
    EOF
    ```
 
-5. **Hub directory, server config and binary** (`<host-slug>` is the address
-   with dashes, as used by sslip.io, e.g. `203-0-113-7`). This is the **only
-   time a person installs the binary**: take the newest release that CI
-   published after a green gate on `main`, check its checksum, and from then on
-   the hub updates itself (step 7):
+5. **Hub directory, server config, GitHub token and binary** (`<host-slug>`
+   is the address with dashes, as used by sslip.io, e.g. `203-0-113-7`).
+   The repo is private, so the hub reads releases and CI runs with a
+   fine-grained PAT of the owner, limited to `deploy-hub` (and `tasks`, whose
+   history-guard dispatch shares it) with **Contents** and **Actions**
+   permissions. It lives only on the server, root-owned, mode 600:
 
    ```
    ssh vpn bash -s <<'EOF'
    set -euo pipefail
    install -d -m 755 /opt/deploy-hub/bin
    install -d -m 750 -o deploy -g deploy /opt/deploy-hub/logs
+   install -d -m 700 /etc/deploy-hub
    printf "host_slug=<host-slug>\n" > /opt/deploy-hub/hub.conf
    touch /opt/deploy-hub/apps.list /opt/deploy-hub/deploys.log /opt/deploy-hub/deploy.lock /opt/deploy-hub/last-error.log
    chown deploy:deploy /opt/deploy-hub/deploys.log /opt/deploy-hub/deploy.lock /opt/deploy-hub/last-error.log
-   tag=$(curl -fsSL https://api.github.com/repos/DreamsAreReal/deploy-hub/releases/latest | sed -n 's/.*"tag_name": *"\(sha-[0-9a-f]\{40\}\)".*/\1/p')
-   cd "$(mktemp -d)"
-   for f in deploy-hub-linux-amd64 deploy-hub-linux-amd64.sha256; do
-     curl -fsSLO "https://github.com/DreamsAreReal/deploy-hub/releases/download/$tag/$f"
-   done
-   sha256sum -c deploy-hub-linux-amd64.sha256
-   install -o root -g root -m 755 deploy-hub-linux-amd64 /opt/deploy-hub/bin/deploy-hub
-   test "sha-$(/opt/deploy-hub/bin/deploy-hub version)" = "$tag"
    EOF
+   printf '%s\n' '<github_pat_…>' | ssh vpn 'install -m 600 -o root -g root /dev/stdin /etc/deploy-hub/github.token'
    ```
 
-   Check in GitHub that the `ci` run of that commit on `main` is green before
-   you trust it (`gh run list -R DreamsAreReal/deploy-hub -w ci.yml -c <sha>`);
-   `self-update` does the same check on its own later.
+   This is the **only time a person installs the binary**; from then on the
+   hub updates itself (step 7). From a checkout of this repo on the operator
+   machine:
+
+   ```
+   go run ./cmd/deploy-hub bootstrap            # or: bootstrap sha-<commit>
+   ```
+
+   `bootstrap` reads the token over root SSH (`VPS_HOST_ALIAS`, default
+   `vpn`), takes the newest release (or the given one) and makes the same
+   checks as `self-update`: tag `sha-<40 hex>` targeting that commit, a green
+   `ci.yml` push run on `main` for it, the published sha256. It streams the
+   binary to `/opt/deploy-hub/bin/deploy-hub.new`, moves it into place only if
+   it prints that commit from `version`, and removes it otherwise. It refuses
+   to run when `/opt/deploy-hub/bin/deploy-hub` already exists (the hub
+   updates itself) and stops before any GitHub request when the token file is
+   missing, empty, not root's or readable by others; a wrong or expired token
+   fails with GitHub's `401`.
 
    `hub.conf` also accepts `acme_email=` (default `admin@<host-slug>.sslip.io`);
    the environment variables `HOST_SLUG`/`ACME_EMAIL` override it.
@@ -563,13 +573,20 @@ that passed the full gate on `main`:
    `sha-<commit>` targeting that commit, with the assets
    `deploy-hub-linux-amd64` and `deploy-hub-linux-amd64.sha256`.
 3. On the server `deploy-hub-self-update.timer` runs `deploy-hub self-update`
-   as root every 10 minutes. It takes the latest release (or the one given as
+   as root every 10 minutes. It reads releases and runs with the token in
+   `/etc/deploy-hub/github.token` (Bootstrap, step 5; without it the run fails
+   before any request), takes the latest release (or the one given as
    `sha-<commit>`) and installs it only when:
    - the tag is `sha-<40 hex>` and the release targets exactly that commit;
-   - both assets are attached to that release, under
-     `https://github.com/DreamsAreReal/deploy-hub/releases/download/<tag>/`;
+   - both assets are attached to that release and served by the API of this
+     repo (`api.github.com/repos/DreamsAreReal/deploy-hub/releases/assets/<id>`;
+     the token is not sent on to the storage host GitHub redirects to);
    - GitHub lists a successful `ci.yml` run for that commit, event `push`,
      branch `main`;
+   - the release commit descends from the installed one (GitHub compare
+     `ahead` or `identical`), so a rewritten `main` is never installed; this
+     replaces the branch protection the private repo lacks on the free plan.
+     A release pinned by tag skips this check (that is how a rollback works);
    - the downloaded binary matches the published sha256;
    - the candidate (`/opt/deploy-hub/bin/deploy-hub.new`) reports that commit
      from `version`.
@@ -599,6 +616,9 @@ To pin an older gated release, run `sudo /opt/deploy-hub/bin/deploy-hub
 self-update sha-<commit>`; the next timer run moves back to the latest one.
 A release older than `ci-runner-sync` cannot be pinned: its binary fails that
 check and the current one is restored.
+After a deliberate rewrite of `main`, the timer refuses the new releases
+(`release commit does not descend from the installed one`) until an operator
+installs one by tag the same way.
 
 The only manual install is the bootstrap (Bootstrap, step 5). Do not copy a
 binary to the server any other way.
