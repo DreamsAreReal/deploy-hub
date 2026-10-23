@@ -56,7 +56,7 @@ func closureFixture(t *testing.T) (string, golang.Closure) {
 			pkgC:   {ImportPath: pkgC, Dir: filepath.Join(root, "c"), GoFiles: []string{"c.go"}},
 			pkgE2E: {ImportPath: pkgE2E, Dir: filepath.Join(root, "e2e"), TestGoFiles: []string{"e2e_test.go"}},
 			pkgStd: {ImportPath: pkgStd, Standard: true},
-			pkgExt: {ImportPath: pkgExt, Dir: "/mod/x.y/z@v1.0.0", Module: &golang.BuiltModule{Path: pkgExt, Version: "v1.0.0"}},
+			pkgExt: {ImportPath: pkgExt, Dir: "/mod/x.y/z@v1.0.0", Module: &golang.BuiltModule{Path: pkgExt, Version: extVersion}},
 		},
 		Tests: map[string][]string{pkgA: {pkgStd, pkgA, pkgB, pkgExt}, pkgE2E: {pkgA, pkgB, pkgE2E}},
 	}
