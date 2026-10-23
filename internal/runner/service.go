@@ -50,6 +50,7 @@ type Service struct {
 	HTTP        health.HTTPChecker
 	Router      Router
 	Locker      Locker
+	CacheLocker Locker
 	LockWait    time.Duration
 	Listening   func(int) bool
 	Now         func() time.Time
@@ -101,6 +102,10 @@ func (s *Service) Dispatch(ctx context.Context, raw string, stdin io.Reader) int
 		return s.deploy(ctx, raw, entry, req.Tag, stdin)
 	case VerbReport:
 		return s.report(ctx, raw, entry, req.Tag, stdin)
+	case VerbCacheGet:
+		return s.cacheGet(ctx, raw, entry, req.Tag, stdin)
+	case VerbCachePut:
+		return s.cachePut(ctx, raw, entry, req.Tag, stdin)
 	default:
 		return s.rollback(ctx, raw, entry, req.Tag)
 	}
