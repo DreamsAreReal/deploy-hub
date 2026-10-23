@@ -208,6 +208,7 @@ const (
 	flagCache    = "--mutation-cache"
 	flagCacheSum = "--mutation-cache-sha256"
 	checkOnly    = "only"
+	verdictKey   = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	cacheSum     = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 )
 
@@ -238,7 +239,7 @@ func TestGateCommandHandsTheCacheOverAndKeepsTheVerdicts(t *testing.T) {
 	var seen gate.CachedVerdicts
 	h.gateChecks = []gate.Check{{Name: checkOnly, Run: func(_ context.Context, ws gate.Workspace) gate.Outcome {
 		seen = ws.MutationCache
-		v := mutation.Verdicts{Version: 1, Bases: []string{"b"}, Entries: map[string]mutation.Status{"k": mutation.StatusKilled}}
+		v := mutation.Verdicts{Version: 1, Bases: []string{verdictKey}, Entries: map[string]mutation.Status{verdictKey: mutation.StatusKilled}}
 		testutil.Mkdir(t, filepath.Join(ws.Out, "go-app"))
 		_, err := v.Save(filepath.Join(ws.Out, "go-app", mutation.VerdictsFile))
 		testutil.NoErr(t, err)
