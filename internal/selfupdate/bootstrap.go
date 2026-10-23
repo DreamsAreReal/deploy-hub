@@ -9,7 +9,6 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
 )
 
-// SSHBinary runs the bootstrap steps on the hub host as root.
 const (
 	SSHBinary    = "ssh"
 	tokenOwner   = "root"
@@ -29,10 +28,6 @@ var (
 	ErrHostToken = errors.New(DefaultPATFile + " on the hub must belong to root with mode 600 or 400")
 )
 
-// Bootstrap installs the first binary of a fresh hub from the operator
-// machine. It reads the token of the hub host, makes the same checks as
-// self-update (sha tag, green ci.yml push run on main, sha256) and installs the
-// binary only if it reports the release commit.
 type Bootstrap struct {
 	Source Source
 	Host   string

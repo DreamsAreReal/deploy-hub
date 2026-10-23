@@ -22,7 +22,6 @@ const (
 
 var ErrHTTP = errors.New("unexpected HTTP status")
 
-// Run is the part of a GitHub workflow run that preemption looks at.
 type Run struct {
 	ID         int64  `json:"id"`
 	WorkflowID int64  `json:"workflow_id"`
@@ -33,7 +32,6 @@ type Run struct {
 	Attempt    int    `json:"run_attempt"`
 }
 
-// GitHub talks to the Actions API of the owner's repos with the hub token.
 type GitHub struct {
 	API    string
 	Owner  string
@@ -73,7 +71,6 @@ func (g GitHub) runsPath(repo string) string {
 	return "/repos/" + g.Owner + "/" + repo + "/actions/runs"
 }
 
-// Recent lists the newest runs of a repo; active runs are among them.
 func (g GitHub) Recent(ctx context.Context, repo string) ([]Run, error) {
 	var doc struct {
 		Runs []Run `json:"workflow_runs"`

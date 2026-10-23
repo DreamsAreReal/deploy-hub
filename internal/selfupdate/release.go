@@ -194,8 +194,6 @@ func (s Source) Fetch(ctx context.Context, r Release) ([]byte, error) {
 	return bin, nil
 }
 
-// Descends replaces the branch protection a private repo loses on the free
-// plan: a release is installed only if main reached it without a rewrite.
 func (s Source) Descends(ctx context.Context, base, head string) error {
 	if !fullCommit.MatchString(base) || base == head {
 		return nil
@@ -216,9 +214,6 @@ func (s Source) Descends(ctx context.Context, base, head string) error {
 	return nil
 }
 
-// dropTokenOffHost keeps the token away from the storage host that GitHub
-// redirects asset downloads to; Go itself keeps it for the same host name on
-// another port.
 func dropTokenOffHost(req *http.Request, via []*http.Request) error {
 	if len(via) >= maxRedirects {
 		return ErrRedirects
