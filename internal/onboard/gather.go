@@ -24,6 +24,8 @@ const (
 	serviceMem     = "256m"
 	botMem         = "128m"
 	stubPath       = ".github/workflows/deploy.yml"
+	appStubPath    = ".github/workflows/deploy-%s.yml"
+	stubName       = "deploy"
 	hubUsesPattern = "uses: %s/"
 )
 
@@ -45,7 +47,7 @@ func (o Onboarder) gather(ctx context.Context, s *session) error {
 			return err
 		}
 	}
-	s.envVars = envVars(s.repoPath())
+	s.envVars = envVars(s.repoPath(), s.composeIn)
 	return nil
 }
 
@@ -74,19 +76,35 @@ func (o Onboarder) inspectRepo(_ context.Context, s *session) error {
 	if err != nil {
 		return fmt.Errorf(errNoDockerfile, s.opts.Dockerfile)
 	}
-	if data, ok := readFirst(s.repoPath(), composeNames); ok {
-		sum, err := compose.Summarize(data)
-		if err == nil && sum.Built > 1 {
-			return errMulti
-		}
-		if err == nil {
-			s.compose = &sum
-		}
+	if err := s.inspectCompose(); err != nil {
+		return err
 	}
 	if s.opts.Profile == "" {
 		o.detectProfile(s, dockerfile)
 	}
 	applyProfileDefaults(&s.opts)
+	return nil
+}
+
+// inspectCompose reads the --compose file when one is given (it must exist), else the first root compose.
+func (s *session) inspectCompose() error {
+	if s.opts.Compose == "" {
+		s.composeIn, _ = readFirst(s.repoPath(), composeNames)
+	} else if data, err := os.ReadFile(s.repoPath(s.opts.Compose)); err == nil {
+		s.composeIn = data
+	} else {
+		return fmt.Errorf(errNoCompose, s.opts.Compose)
+	}
+	if s.composeIn == nil {
+		return nil
+	}
+	sum, err := compose.Summarize(s.composeIn)
+	if err == nil && sum.Built > 1 {
+		return errMulti
+	}
+	if err == nil {
+		s.compose = &sum
+	}
 	return nil
 }
 
@@ -166,17 +184,31 @@ func pickPort(profile, requested, existing string, taken []int) (string, error) 
 	return requested, nil
 }
 
-func Stub(branch, hubRepo, app, dockerfile string) string {
-	input := ""
-	if dockerfile != defaultDockerfile {
-		input = fmt.Sprintf(stubDockerfileInput, dockerfile)
+// StubPath is where the caller stub of the app lives: an app with its own --compose is a
+// second app of a repo, so its stub gets its own file and must not replace the first one.
+func StubPath(opts Options) string {
+	if opts.Compose == "" {
+		return stubPath
 	}
-	return fmt.Sprintf(stubTemplate, branch, hubRepo, app, input)
+	return fmt.Sprintf(appStubPath, opts.App)
+}
+
+func Stub(branch, hubRepo string, opts Options) string {
+	name, input := stubName, ""
+	if opts.Dockerfile != defaultDockerfile {
+		input = fmt.Sprintf(stubDockerfileInput, opts.Dockerfile)
+	}
+	if opts.Compose != "" {
+		name = stubName + "-" + opts.App
+		input += fmt.Sprintf(stubComposeInput, opts.Compose)
+	}
+	return fmt.Sprintf(stubTemplate, name, branch, name, hubRepo, opts.App, input)
 }
 
 func (o Onboarder) inspectStub(_ context.Context, s *session) error {
-	s.stubWant = Stub(s.branch, o.Config.HubRepo, s.opts.App, s.opts.Dockerfile)
-	current, err := os.ReadFile(s.repoPath(stubPath))
+	s.stubPath = StubPath(s.opts)
+	s.stubWant = Stub(s.branch, o.Config.HubRepo, s.opts)
+	current, err := os.ReadFile(s.repoPath(s.stubPath))
 	switch {
 	case err != nil:
 		s.stubState = stubStateMissing
@@ -199,12 +231,12 @@ func (o Onboarder) listSecrets(ctx context.Context, s *session) error {
 	return nil
 }
 
-func envVars(repo string) []string {
+func envVars(repo string, composeIn []byte) []string {
 	if data, ok := readFirst(repo, envExamples); ok {
 		return uniqueMatches(envExample, data)
 	}
-	if data, ok := readFirst(repo, composeNames); ok {
-		vars := uniqueMatches(composeVar, data)
+	if composeIn != nil {
+		vars := uniqueMatches(composeVar, composeIn)
 		slices.Sort(vars)
 		return vars
 	}

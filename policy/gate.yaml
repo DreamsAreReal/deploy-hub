@@ -58,6 +58,7 @@ dependencies:
   - github.com/valyala/fastrand
   - github.com/valyala/histogram
   - github.com/x448/float16
+  - github.com/yalue/onnxruntime_go
   - github.com/yuin/goldmark
   - go.yaml.in/yaml/v3
   - golang.org/x/crypto
@@ -400,6 +401,46 @@ apps:
         tests:
           - internal/server.TestHealthReportsCountsWithoutAToken
           - internal/store.TestBackupThenRestoreKeepsData
+  stt:
+    repo: DreamsAreReal/tasks
+    kind: service
+    port: 8790
+    health: /health
+    cpus: "2"
+    memory: 768m
+    dast: {target: /health, spider: 1m, max_time: 10m}
+    load: {rate: 20, duration: 30s, p95: 300ms, max_error_percent: 0, concurrency: 10, paths: [/health]}
+    localized:
+      - internal/texts/
+      - internal/web/static/
+      - internal/seed/*.json
+      - widget/
+      - testdata/
+      - tools/e2e/
+      - docs/
+      - "*_test.go"
+    allowed_files:
+      - docs/STATE.md
+      - docs/tasks/*/STATE.md
+    scenarios:
+      - id: stt-refuses-unknown-or-missing-tokens
+        category: security
+        tests:
+          - internal/stt.TestUnknownOrMissingTokenIsRefused
+          - internal/stt.TestEmptyTokenListRefusesEveryone
+      - id: stt-refuses-oversized-or-foreign-audio
+        category: security
+        tests:
+          - internal/stt.TestBodySizeIsChecked
+          - internal/stt.TestRecordingLongerThanTheLimitIsRefused
+          - internal/stt.TestNonWAVBodyIsUnsupported
+      - id: stt-transcribes-like-the-python-version
+        category: business
+        tests:
+          - internal/stt.TestLogMelMatchesThePythonVersion
+          - internal/stt.TestStereo44kRecordingDecodesToTheSamplesOfThePythonVersion
+          - internal/stt.TestLongRecordingIsRecognizedInChunksJoinedBySpaces
+          - internal/stt.TestRecordingIsTranscribedWithAudioAndProcessingTime
   router-bot:
     repo: DreamsAreReal/router-bot
     kind: service

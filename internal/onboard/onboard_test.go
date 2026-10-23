@@ -29,6 +29,8 @@ const (
 	stepCheckout  = "checkout"
 	flagPort      = "--port"
 	flagDocker    = "--dockerfile"
+	flagCompose   = "--compose"
+	dockerDir     = "docker/Dockerfile"
 	alpine        = "FROM alpine\n"
 	flagDryRun    = "--dry-run"
 	flagProfile   = "--profile"
@@ -230,10 +232,10 @@ func TestStubContent(t *testing.T) {
 	want := "name: deploy\non:\n  push: {branches: [main]}\npermissions: {}\nconcurrency: {group: deploy, cancel-in-progress: false}\njobs:\n  deploy:\n    name: deploy\n" +
 		"    permissions: {contents: read, packages: write, id-token: write}\n    uses: H/R/.github/workflows/deploy.yml@main\n    with: {app: web, dockerfile: docker/Dockerfile}\n" +
 		`    secrets: {VPS_SSH_KEY: "${{ secrets.VPS_SSH_KEY }}", VPS_HOST: "${{ secrets.VPS_HOST }}", VPS_HOST_KEY: "${{ secrets.VPS_HOST_KEY }}"}`
-	if got := Stub("main", "H/R", appWeb, "docker/Dockerfile"); got != want {
+	if got := Stub("main", "H/R", Options{App: appWeb, Dockerfile: dockerDir}); got != want {
 		t.Fatalf("got\n%s", got)
 	}
-	testutil.Equal(t, Stub("main", "H/R", appWeb, "Dockerfile"), strings.Replace(want, ", dockerfile: docker/Dockerfile", "", 1))
+	testutil.Equal(t, Stub("main", "H/R", Options{App: appWeb, Dockerfile: defaultDockerfile}), strings.Replace(want, ", dockerfile: docker/Dockerfile", "", 1))
 }
 
 func TestProtectedBranchOpensPR(t *testing.T) {
@@ -257,7 +259,7 @@ func TestAlreadyOnboardedReportsNoChanges(t *testing.T) {
 	w := newWorld(t)
 	w.secrets = allRepoKeys + " OTHER"
 	w.facts = provision.Facts{Dir: optWeb, InList: true, DirExists: true, ConfExists: true, ComposeExists: true, EnvExists: true, Port: "9001"}
-	w.repo[".github/workflows/deploy.yml"] = Stub("main", "DreamsAreReal/deploy-hub", appWeb, "Dockerfile") + "\n"
+	w.repo[".github/workflows/deploy.yml"] = Stub("main", "DreamsAreReal/deploy-hub", Options{App: appWeb, Dockerfile: defaultDockerfile}) + "\n"
 	if code := w.run(appWeb); code != ExitOK {
 		t.Fatalf("exit %d\n%s", code, w.err)
 	}
@@ -333,7 +335,8 @@ func TestGatherFailures(t *testing.T) {
 		{"no repo", func(w *world) { w.noRepo = true }, []string{appWeb}, repoNotFound},
 		{"no default branch", func(w *world) { w.noBranch = true }, []string{appWeb}, repoNotFound},
 		{"no dockerfile", func(w *world) { delete(w.repo, "Dockerfile") }, []string{appWeb}, "the repo has no Dockerfile (Dockerfile)"},
-		{"custom dockerfile missing", func(*world) {}, []string{appWeb, flagDocker, "docker/Dockerfile"}, "the repo has no Dockerfile (docker/Dockerfile)"},
+		{"custom dockerfile missing", func(*world) {}, []string{appWeb, flagDocker, dockerDir}, "the repo has no Dockerfile (docker/Dockerfile)"},
+		{"named compose missing", func(*world) {}, []string{appWeb, flagCompose, sttCompose}, "the repo has no compose file (stt/docker-compose.yml)"},
 		{"multi build", func(w *world) {
 			w.repo["compose.yml"] = "services:\n  a: {build: .}\n  b: {build: ./b}\n"
 		}, []string{appWeb}, "builds more than one service"},
@@ -401,7 +404,7 @@ func TestProxyAndHelpAndUsage(t *testing.T) {
 		t.Fatal("help")
 	}
 	w.expect(w.out, "usage: deploy-hub onboard")
-	for _, args := range [][]string{{}, {"--bogus"}, {appWeb, flagPort}, {appWeb, flagProfile, "root"}, {appWeb, "--app", "Bad Name"}, {appWeb, flagDocker, "../../etc/passwd"}, {appWeb, "--mem", "lots"}} {
+	for _, args := range [][]string{{}, {"--bogus"}, {appWeb, flagPort}, {appWeb, flagProfile, "root"}, {appWeb, "--app", "Bad Name"}, {appWeb, flagDocker, "../../etc/passwd"}, {appWeb, flagCompose, "/etc/compose.yml"}, {appWeb, "--mem", "lots"}} {
 		if code := w.run(args...); code != ExitFail {
 			t.Fatalf("%v: exit %d", args, code)
 		}
@@ -413,5 +416,41 @@ func TestTempDirFailure(t *testing.T) {
 	w := newWorld(t)
 	if code := w.run(appWeb); code != ExitFail {
 		t.Fatal("temp dir failure must surface")
+	}
+}
+
+const (
+	appSTT     = "stt"
+	sttCompose = "stt/docker-compose.yml"
+	sttStub    = ".github/workflows/deploy-stt.yml"
+)
+
+func TestSecondAppOfARepoGetsItsOwnStub(t *testing.T) {
+	want := "name: deploy-stt\non:\n  push: {branches: [main]}\npermissions: {}\nconcurrency: {group: deploy-stt, cancel-in-progress: false}\njobs:\n  deploy:\n    name: deploy\n" +
+		"    permissions: {contents: read, packages: write, id-token: write}\n    uses: H/R/.github/workflows/deploy.yml@main\n" +
+		"    with: {app: stt, dockerfile: stt/Dockerfile, compose: stt/docker-compose.yml}\n" +
+		`    secrets: {VPS_SSH_KEY: "${{ secrets.VPS_SSH_KEY }}", VPS_HOST: "${{ secrets.VPS_HOST }}", VPS_HOST_KEY: "${{ secrets.VPS_HOST_KEY }}"}`
+	stt := Options{App: appSTT, Dockerfile: "stt/Dockerfile", Compose: sttCompose}
+	testutil.Equal(t, Stub("main", "H/R", stt), want)
+	testutil.Equal(t, StubPath(stt), sttStub)
+	testutil.Equal(t, StubPath(Options{App: appWeb}), ".github/workflows/deploy.yml")
+}
+
+func TestComposeOptionDrivesDetectionAndKeepsTheFirstAppStub(t *testing.T) {
+	w := newWorld(t)
+	first := Stub("main", "DreamsAreReal/deploy-hub", Options{App: appWeb, Dockerfile: defaultDockerfile}) + "\n"
+	w.repo[".github/workflows/deploy.yml"] = first
+	w.repo["Dockerfile"] = alpine
+	w.repo["docker-compose.yml"] = "services:\n  web:\n    build: .\n    ports: ['9000:3000']\n    environment: {A: '${ROOT_ONLY}'}\n"
+	w.repo["stt/Dockerfile"] = alpine
+	w.repo[sttCompose] = "services:\n  app:\n    build: {context: ., dockerfile: stt/Dockerfile}\n    ports: ['9003:8790']\n    environment: {T: '${STT_TOKENS}'}\n"
+	if code := w.run(appWeb, "--app", appSTT, flagDocker, "stt/Dockerfile", flagCompose, sttCompose); code != ExitOK {
+		t.Fatalf("exit %d\n%s", code, w.err)
+	}
+	w.expect(w.out, "auto-detected: service (published port in compose)", "127.0.0.1:9003->8790",
+		"commit caller stub to DreamsAreReal/web@main (missing)", "variables found in the repo: STT_TOKENS")
+	testutil.Excludes(t, w.out.String(), "ROOT_ONLY")
+	if w.exec.Count("add "+sttStub) != 1 {
+		t.Fatalf("stub must go to its own file: %v", w.exec.Lines())
 	}
 }

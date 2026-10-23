@@ -56,6 +56,8 @@ type session struct {
 	branch    string
 	image     string
 	compose   *compose.Summary
+	composeIn []byte
+	stubPath  string
 	server    provision.Facts
 	stubWant  string
 	stubState string

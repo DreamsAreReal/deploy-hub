@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	Usage = `usage: deploy-hub onboard <repo> [--profile <static|bot|service>] [--port N] [--cport N] [--mem LIMIT] [--health-path P] [--app NAME] [--dockerfile PATH] [--dry-run]
+	Usage = `usage: deploy-hub onboard <repo> [--profile <static|bot|service>] [--port N] [--cport N] [--mem LIMIT] [--health-path P] [--app NAME] [--dockerfile PATH] [--compose PATH] [--dry-run]
        (--profile is optional: omitted => auto-detect from the repo)
        deploy-hub onboard status | history <app>     # read-only, over the deploy channel`
 	defaultDockerfile = "Dockerfile"
@@ -32,6 +32,7 @@ type Options struct {
 	HealthPath string
 	App        string
 	Dockerfile string
+	Compose    string
 	DryRun     bool
 }
 
@@ -39,7 +40,7 @@ func ParseOptions(args []string, owner string) (Options, error) {
 	o := Options{HealthPath: "/", Dockerfile: defaultDockerfile}
 	values := map[string]*string{
 		"--profile": &o.Profile, "--port": &o.Port, "--cport": &o.CPort, "--mem": &o.Mem,
-		"--health-path": &o.HealthPath, "--app": &o.App, "--dockerfile": &o.Dockerfile,
+		"--health-path": &o.HealthPath, "--app": &o.App, "--dockerfile": &o.Dockerfile, "--compose": &o.Compose,
 	}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -82,6 +83,9 @@ func (o Options) validate() error {
 		validate.OptionalPort(o.CPort), validate.HealthPath(o.HealthPath), validate.RelPath(o.Dockerfile))
 	if o.Mem != "" {
 		errs = errors.Join(errs, validate.MemLimit(o.Mem))
+	}
+	if o.Compose != "" {
+		errs = errors.Join(errs, validate.RelPath(o.Compose))
 	}
 	return errs
 }
