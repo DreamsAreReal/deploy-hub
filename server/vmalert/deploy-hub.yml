@@ -97,7 +97,7 @@ groups:
         expr: max by (runner) (max_over_time(deploy_hub_ci_runner_up[10m])) == 0
         annotations:
           summary: "Self-hosted CI runner of {{ $labels.runner }} is offline"
-          description: "For 10 minutes the runner held no connection to GitHub, so deploys of {{ $labels.runner }} wait in the queue. On the VPS: systemctl status ci-runner@{{ $labels.runner }} ci-docker@{{ $labels.runner }} ci-netns@{{ $labels.runner }}, journalctl -u ci-runner@{{ $labels.runner }}. To deploy meanwhile, set the repository variable DEPLOY_HUB_RUNNER=github-hosted."
+          description: "For 10 minutes the runner held no connection to GitHub, so deploys of {{ $labels.runner }} wait in the queue. On the VPS: systemctl status ci-runner@{{ $labels.runner }} ci-docker@{{ $labels.runner }} ci-netns@{{ $labels.runner }}, journalctl -u ci-runner@{{ $labels.runner }}."
 
       - alert: DeployHubCIIsolationBroken
         expr: min(min_over_time(deploy_hub_ci_isolation_ok[5m])) == 0
