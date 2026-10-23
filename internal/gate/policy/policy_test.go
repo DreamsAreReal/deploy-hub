@@ -25,6 +25,14 @@ const reviewedKey = `"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
 const declaredLine = `"pkg:pypi/legacy": MIT`
 
+const (
+	deployWorkflow = ".github/workflows/deploy.yml"
+	acceptedFile   = "file: " + deployWorkflow
+	selfHosted     = "self-hosted-runner"
+	medium         = "Medium"
+	runsOn         = "runs-on"
+)
+
 const valid = `owners: [Owner]
 thresholds:
   line_coverage: 90
@@ -58,6 +66,12 @@ apps:
     kind: binary
     localized: [internal/texts/]
     allowed_files: [docs/STATE.md]
+    accepted_workflow_findings:
+      - rule: self-hosted-runner
+        severity: Medium
+        file: .github/workflows/deploy.yml
+        key: runs-on
+        reason: "isolated runner, see #600"
     scenarios:
       - id: refuse
         category: security
@@ -88,6 +102,7 @@ func TestParseValidPolicy(t *testing.T) {
 	testutil.Equal(t, web.DAST.OpenAPI, "/openapi.json")
 	hub, _ := p.App("hub")
 	testutil.True(t, !hub.HasImage() && !hub.HasHTTP(), "binary has neither")
+	testutil.Equal(t, hub.Accepted, []Accepted{{Rule: selfHosted, Severity: medium, File: deployWorkflow, Key: runsOn, Reason: "isolated runner, see #600"}})
 	bot, _ := p.App("bot")
 	testutil.True(t, bot.HasImage() && !bot.HasHTTP(), "worker has an image only")
 	_, err = p.App("ghost")
@@ -107,6 +122,22 @@ func TestRepositoryPolicyIsValid(t *testing.T) {
 	_, file, _, _ := runtime.Caller(0)
 	_, err := LoadFile(filepath.Join(filepath.Dir(file), "..", "..", "..", "policy", "gate.yaml"))
 	testutil.NoErr(t, err)
+}
+
+func TestRepositoryPolicyAcceptsOneFinding(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	p, err := LoadFile(filepath.Join(filepath.Dir(file), "..", "..", "..", "policy", "gate.yaml"))
+	testutil.NoErr(t, err)
+	accepted := map[string][]Accepted{}
+	for name, app := range p.Apps {
+		if len(app.Accepted) > 0 {
+			accepted[name] = app.Accepted
+		}
+	}
+	testutil.Equal(t, len(accepted["deploy-hub"]), 1)
+	testutil.Equal(t, len(accepted), 1)
+	only := accepted["deploy-hub"][0]
+	testutil.Equal(t, [4]string{only.Rule, only.Severity, only.File, only.Key}, [4]string{selfHosted, medium, deployWorkflow, runsOn})
 }
 
 func TestParseRejects(t *testing.T) {
@@ -166,6 +197,13 @@ func TestParseRejects(t *testing.T) {
 		"escaping localized": {localizedLine, "localized: [a/../b]"},
 		"bad localized":      {localizedLine, "localized: [\"[\"]"},
 		"escaping allowed":   {"allowed_files: [docs/STATE.md]", "allowed_files: [../STATE.md]"},
+		"accepted rule":      {"rule: self-hosted-runner", `rule: ""`},
+		"accepted severity":  {"severity: Medium", `severity: ""`},
+		"accepted key":       {"key: runs-on", `key: ""`},
+		"accepted no task":   {`reason: "isolated runner, see #600"`, `reason: "isolated runner"`},
+		"accepted glob":      {acceptedFile, "file: .github/workflows/*.yml"},
+		"accepted escape":    {acceptedFile, "file: ../deploy.yml"},
+		"accepted no file":   {acceptedFile, `file: ""`},
 		"duplicate scenario": {"        tests: [internal/x.TestRefuse]\n", "        tests: [internal/x.TestRefuse]\n      - id: refuse\n        category: business\n        tests: [a.TestB]\n"},
 	}
 	for name, c := range cases {

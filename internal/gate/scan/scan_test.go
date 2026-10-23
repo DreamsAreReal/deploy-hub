@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -169,6 +170,66 @@ func TestWorkflows(t *testing.T) {
 	testutil.Equal(t, garbled.Findings, []string{" a :0"})
 	onlyGarbage := workspace(t, script{ZizmorBinary: ok("[]"), ActionlintBinary: ok("x")})
 	testutil.Contains(t, Workflows(context.Background(), onlyGarbage).Reason, "unreadable")
+}
+
+func TestWorkflowsAcceptedFinding(t *testing.T) {
+	const (
+		deployPath  = ".github/workflows/deploy.yml"
+		selfHosted  = "self-hosted-runner"
+		medium      = "Medium"
+		staleRunsOn = "accepted Medium " + selfHosted + " " + deployPath + " at runs-on is no longer reported"
+		deployYML   = "jobs:\n  deploy:\n    runs-on: [self-hosted]\n    timeout-minutes: 5\n  other:\n    runs-on: [self-hosted]\n"
+	)
+	hit := func(rule, severity, file string, row int) string {
+		return `{"ident":"` + rule + `","determinations":{"severity":"` + severity + `"},"locations":[{"symbolic":{"key":{"Local":{"verbatim_path":"SRC/` + file + `"}}},"concrete":{"location":{"start_point":{"row":` + fmt.Sprint(row) + `}}}}]}`
+	}
+	reported := func(severity, rule, file string, line int) string {
+		return fmt.Sprintf(zizmorFormat, severity, rule, file, line)
+	}
+	accepted := policy.Accepted{Rule: selfHosted, Severity: medium, File: deployPath, Key: "runs-on", Reason: "#600"}
+	run := func(t *testing.T, accept []policy.Accepted, hits ...string) gate.Outcome {
+		t.Helper()
+		w := workspace(t, nil)
+		testutil.Mkdir(t, filepath.Join(w.Src, ".github", "workflows"))
+		testutil.Write(t, filepath.Join(w.Src, filepath.FromSlash(deployPath)), deployYML)
+		w.App.Accepted = accept
+		w.Exec = &procexectest.Fake{Handler: script{
+			ZizmorBinary:     ok(strings.ReplaceAll("["+strings.Join(hits, ",")+"]", "SRC", w.Src)),
+			ActionlintBinary: ok("[]"),
+		}.Handle}
+		return Workflows(context.Background(), w)
+	}
+	only := []policy.Accepted{accepted}
+	runsOn := hit(selfHosted, medium, deployPath, 2)
+	passed := run(t, only, runsOn)
+	testutil.Equal(t, passed.Status, gate.StatusPass)
+	testutil.Equal(t, passed.Values, map[string]float64{gate.ValueFindings: 0, valueAccepted: 1})
+	cases := map[string]struct {
+		accept   []policy.Accepted
+		hits     []string
+		findings []string
+	}{
+		"not accepted":   {nil, []string{runsOn}, []string{reported(medium, selfHosted, deployPath, 3)}},
+		"second runs-on": {only, []string{runsOn, hit(selfHosted, medium, deployPath, 5)}, []string{reported(medium, selfHosted, deployPath, 6)}},
+		"other rule":     {only, []string{hit("excessive-permissions", medium, deployPath, 2)}, []string{reported(medium, "excessive-permissions", deployPath, 3), staleRunsOn}},
+		"other severity": {only, []string{hit(selfHosted, "High", deployPath, 2)}, []string{reported("High", selfHosted, deployPath, 3), staleRunsOn}},
+		"other file":     {only, []string{hit(selfHosted, medium, ".github/workflows/ci.yml", 2)}, []string{reported(medium, selfHosted, ".github/workflows/ci.yml", 3), staleRunsOn}},
+		"other key":      {only, []string{hit(selfHosted, medium, deployPath, 3)}, []string{reported(medium, selfHosted, deployPath, 4), staleRunsOn}},
+		"past the end":   {only, []string{hit(selfHosted, medium, deployPath, 6)}, []string{reported(medium, selfHosted, deployPath, 7), staleRunsOn}},
+		"before start":   {only, []string{hit(selfHosted, medium, deployPath, -1)}, []string{reported(medium, selfHosted, deployPath, 0), staleRunsOn}},
+		"stale":          {only, nil, []string{staleRunsOn}},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			out := run(t, c.accept, c.hits...)
+			testutil.Equal(t, out.Status, gate.StatusFail)
+			testutil.Equal(t, out.Findings, c.findings)
+		})
+	}
+	missing := accepted
+	missing.File = ".github/workflows/gone.yml"
+	gone := run(t, []policy.Accepted{missing}, hit(selfHosted, medium, missing.File, 2))
+	testutil.Equal(t, gone.Status, gate.StatusFail)
 }
 
 func TestDockerfiles(t *testing.T) {
