@@ -13,6 +13,7 @@ import (
 
 	"github.com/DreamsAreReal/deploy-hub/internal/console"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/mutation"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
 	"github.com/DreamsAreReal/deploy-hub/internal/testutil"
 )
@@ -102,7 +103,7 @@ func TestGateCommandBlocksAndWritesVerdict(t *testing.T) {
 
 func TestGateCommandPasses(t *testing.T) {
 	h := newHarness(t)
-	h.gateChecks = []gate.Check{{Name: "only", Run: func(context.Context, gate.Workspace) gate.Outcome { return gate.Pass(nil) }}}
+	h.gateChecks = []gate.Check{{Name: checkOnly, Run: func(context.Context, gate.Workspace) gate.Outcome { return gate.Pass(nil) }}}
 	out := filepath.Join(t.TempDir(), "gate")
 	code := h.run(append([]string{CmdGate}, gateFlags(hubApp, hubRepo, commitSha, gatePolicy(t), t.TempDir(), out)...)...)
 	testutil.Equal(t, code, ExitOK)
@@ -200,4 +201,59 @@ func TestEveryHandlerBinaryIsAllowed(t *testing.T) {
 			testutil.True(t, !errors.Is(err, procexec.ErrNotAllowed), name+" needs "+bin+" in the subprocess table")
 		}
 	}
+}
+
+const (
+	flagCache    = "--mutation-cache"
+	flagCacheSum = "--mutation-cache-sha256"
+	checkOnly    = "only"
+	cacheSum     = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+)
+
+func TestParseGateArgsMutationCache(t *testing.T) {
+	src := t.TempDir()
+	out := filepath.Join(t.TempDir(), "reports")
+	cache := filepath.Join(t.TempDir(), "verdicts.json")
+	base := gateFlags(testApp, testRepo, commitSha, "p", src, out)
+	g, err := parseGateArgs(append(base, flagCache, cache, flagCacheSum, cacheSum))
+	testutil.NoErr(t, err)
+	testutil.Equal(t, g.cache, cache)
+	bad := [][]string{
+		{flagCache, cache},
+		{flagCacheSum, cacheSum},
+		{flagCache, "relative.json", flagCacheSum, cacheSum},
+		{flagCache, filepath.Join(src, "planted.json"), flagCacheSum, cacheSum},
+		{flagCache, filepath.Join(src, "..planted.json"), flagCacheSum, cacheSum},
+		{flagCache, cache, flagCacheSum, "0123"},
+	}
+	for _, extra := range bad {
+		_, err := parseGateArgs(append(append([]string{}, base...), extra...))
+		testutil.Fails(t, err)
+	}
+}
+
+func TestGateCommandHandsTheCacheOverAndKeepsTheVerdicts(t *testing.T) {
+	h := newHarness(t)
+	var seen gate.CachedVerdicts
+	h.gateChecks = []gate.Check{{Name: checkOnly, Run: func(_ context.Context, ws gate.Workspace) gate.Outcome {
+		seen = ws.MutationCache
+		v := mutation.Verdicts{Version: 1, Bases: []string{"b"}, Entries: map[string]mutation.Status{"k": mutation.StatusKilled}}
+		testutil.Mkdir(t, filepath.Join(ws.Out, "go-app"))
+		_, err := v.Save(filepath.Join(ws.Out, "go-app", mutation.VerdictsFile))
+		testutil.NoErr(t, err)
+		return gate.Pass(nil)
+	}}}
+	out := filepath.Join(t.TempDir(), "gate")
+	cache := filepath.Join(t.TempDir(), "verdicts.json")
+	args := append(gateFlags(hubApp, hubRepo, commitSha, gatePolicy(t), t.TempDir(), out), flagCache, cache, flagCacheSum, cacheSum)
+	testutil.Equal(t, h.run(append([]string{CmdGate}, args...)...), ExitOK)
+	testutil.Equal(t, seen, gate.CachedVerdicts{Path: cache, SHA256: strings.TrimPrefix(cacheSum, digestPrefix)})
+	merged := testutil.Read(t, filepath.Join(out, mutation.VerdictsFile))
+	testutil.Contains(t, h.out.String(), "mutation verdicts: "+filepath.Join(out, mutation.VerdictsFile)+" sha256:"+mutation.Digest([]byte(merged)))
+	h2 := newHarness(t)
+	h2.gateChecks = []gate.Check{{Name: checkOnly, Run: func(_ context.Context, ws gate.Workspace) gate.Outcome {
+		testutil.Write(t, filepath.Join(ws.Out, "go-app", mutation.VerdictsFile), "{")
+		return gate.Pass(nil)
+	}}}
+	testutil.Equal(t, h2.run(append([]string{CmdGate}, gateFlags(hubApp, hubRepo, commitSha, gatePolicy(t), t.TempDir(), filepath.Join(t.TempDir(), "g"))...)...), ExitFail)
 }

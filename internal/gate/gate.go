@@ -90,18 +90,24 @@ type Check struct {
 }
 
 type Workspace struct {
-	Src         string
-	Out         string
-	PolicyDir   string
-	Image       string
-	AppName     string
-	Repo        string
-	Module      string
-	App         policy.App
-	Policy      policy.Policy
-	Exec        procexec.Runner
-	Log         *slog.Logger
-	MemoryLimit int64
+	Src           string
+	Out           string
+	PolicyDir     string
+	Image         string
+	AppName       string
+	Repo          string
+	Module        string
+	App           policy.App
+	Policy        policy.Policy
+	Exec          procexec.Runner
+	Log           *slog.Logger
+	MemoryLimit   int64
+	MutationCache CachedVerdicts
+}
+
+type CachedVerdicts struct {
+	Path   string
+	SHA256 string
 }
 
 type Subject struct {

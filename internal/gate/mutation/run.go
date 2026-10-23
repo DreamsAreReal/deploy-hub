@@ -71,6 +71,8 @@ type target struct {
 	pkg        golang.Package
 	dependents []string
 	key        string
+	verdict    string
+	cached     Status
 }
 
 type engine struct {
@@ -82,6 +84,7 @@ type engine struct {
 }
 
 type Report struct {
+	Cached    int
 	Counts    map[Status]int
 	Survivors []string
 	Entries   []entry
@@ -108,7 +111,7 @@ func Judge(ws gate.Workspace, rep Report, err error) gate.Outcome {
 	if err := rep.Save(ws.Report(ReportFile)); err != nil {
 		return gate.Fail("cannot keep the mutation report: " + err.Error())
 	}
-	values := map[string]float64{ValueScore: rep.Score(), ValueMutants: float64(totalMutants(rep.Counts))}
+	values := map[string]float64{ValueScore: rep.Score(), ValueMutants: float64(totalMutants(rep.Counts)), ValueCached: float64(rep.Cached), ValueRun: float64(totalMutants(rep.Counts) - rep.Cached)}
 	for s, n := range rep.Counts {
 		values[string(s)] = float64(n)
 	}
@@ -143,24 +146,19 @@ func Run(ctx context.Context, ws gate.Workspace) (Report, error) {
 	if berr := e.measureBaselines(ctx, pkgs); berr != nil {
 		return Report{}, berr
 	}
-	if e.index, err = e.buildIndex(ctx, pkgs); err != nil {
-		return Report{}, err
-	}
-	targets, err := e.targets(pkgs)
-	if err != nil {
-		return Report{}, err
-	}
-	defer func() { _ = os.RemoveAll(e.dir) }()
-	return e.execute(ctx, targets)
+	return e.incremental(ctx, pkgs)
 }
 
 func (e *engine) measureBaselines(ctx context.Context, pkgs golang.Packages) error {
+	if err := os.MkdirAll(e.ws.Report(testLogDir), dirPerm); err != nil {
+		return err
+	}
 	for _, p := range pkgs {
 		if !p.HasTests() {
 			continue
 		}
 		started := time.Now()
-		_, err := e.ws.RunEnv(ctx, []string{e.cache}, golang.GoBinary, goTest, countOnce, p.ImportPath)
+		_, err := e.ws.RunEnv(ctx, []string{e.cache}, golang.GoBinary, goTest, countOnce, p.ImportPath, argsFlag, testLogFlag+e.testLog(p.ImportPath))
 		if err != nil {
 			return fmt.Errorf("%s: %s: %s", reasonBaseline, p.ImportPath, gate.Tail(procexec.Output(err)))
 		}
@@ -207,13 +205,14 @@ func (e *engine) execute(ctx context.Context, targets []target) (Report, error) 
 	}
 	jobs := make([]Job, 0, len(targets))
 	for i, t := range targets {
-		jobs = append(jobs, Job{Mutant: t.mutant, Run: func(ctx context.Context, _ int) Status { return e.run(ctx, i, t) }})
+		jobs = append(jobs, Job{Mutant: t.mutant, Cached: t.cached, Run: func(ctx context.Context, _ int) Status { return e.run(ctx, i, t) }})
 	}
 	return Execute(ctx, e.ws, jobs, Workers())
 }
 
 type Job struct {
 	Mutant Mutant
+	Cached Status
 	Run    func(ctx context.Context, worker int) Status
 }
 
@@ -240,7 +239,7 @@ func Execute(ctx context.Context, ws gate.Workspace, jobs []Job, workers int) (R
 		go func() {
 			defer wg.Done()
 			for i := range queue {
-				statuses[i] = jobs[i].Run(ctx, w)
+				statuses[i] = jobs[i].status(ctx, w)
 				p.done(statuses[i])
 			}
 		}()
@@ -250,12 +249,12 @@ func Execute(ctx context.Context, ws gate.Workspace, jobs []Job, workers int) (R
 	}
 	close(queue)
 	wg.Wait()
-	if ctx.Err() != nil {
-		return Report{}, fmt.Errorf("%w: %w", ErrIncomplete, ctx.Err())
-	}
 	rep := report(ws, jobs, statuses)
+	if ctx.Err() != nil {
+		return rep, fmt.Errorf("%w: %w", ErrIncomplete, ctx.Err())
+	}
 	if n := rep.Counts[StatusErrored]; n > 0 {
-		return Report{}, fmt.Errorf("%w: %d %s", ErrIncomplete, n, reasonErrored)
+		return rep, fmt.Errorf("%w: %d %s", ErrIncomplete, n, reasonErrored)
 	}
 	return rep, nil
 }
@@ -289,6 +288,7 @@ type entry struct {
 	Original string `json:"original"`
 	Mutated  string `json:"mutated"`
 	Status   Status `json:"status"`
+	Source   string `json:"source"`
 }
 
 func report(ws gate.Workspace, jobs []Job, statuses []Status) Report {
@@ -296,7 +296,12 @@ func report(ws gate.Workspace, jobs []Job, statuses []Status) Report {
 	for i, j := range jobs {
 		m := j.Mutant
 		rep.Counts[statuses[i]]++
-		rep.Entries = append(rep.Entries, entry{File: ws.Rel(m.File), Line: m.Line, Operator: m.Operator, Original: m.Original, Mutated: m.Mutated, Status: statuses[i]})
+		source := SourceRun
+		if j.Cached != "" {
+			rep.Cached++
+			source = SourceCache
+		}
+		rep.Entries = append(rep.Entries, entry{File: ws.Rel(m.File), Line: m.Line, Operator: m.Operator, Original: m.Original, Mutated: m.Mutated, Status: statuses[i], Source: source})
 		if statuses[i] == StatusSurvived || statuses[i] == StatusNotCovered {
 			rep.Survivors = append(rep.Survivors, fmt.Sprintf(survivorFormat, ws.Rel(m.File), m.Line, m.Operator, snippet(m.Original), snippet(m.Mutated), statuses[i]))
 		}
@@ -392,7 +397,7 @@ func (e *engine) test(ctx context.Context, ov string, pkgs []string, extra ...st
 	limit := e.timeout(pkgs)
 	tctx, cancel := context.WithTimeout(ctx, deadline(limit, e.ws.Policy.Limits.MutantFloor))
 	defer cancel()
-	args := append(append([]string{goTest, countOnce, "-failfast", "-timeout=" + limit.String()}, extra...), pkgs...)
+	args := append(append([]string{goTest, countOnce, failFast, "-timeout=" + limit.String()}, extra...), pkgs...)
 	res, err := e.ws.RunEnv(tctx, []string{overlayEnv + ov, e.cache}, golang.GoBinary, args...)
 	out := res.Combined()
 	switch {
