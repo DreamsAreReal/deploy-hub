@@ -52,6 +52,8 @@ limits:
   mutant_timeout_factor: 3
   findings_listed: 20
   stage_ready_timeout: 30s
+  mutation_disk_gib: 20
+  mutation_free_gib: 10
 licenses: [MIT]
 dependencies: [example.com/dep]
 declared_licenses: {"pkg:pypi/legacy": MIT}
@@ -163,6 +165,8 @@ func TestParseRejects(t *testing.T) {
 		"mutant factor":      {"mutant_timeout_factor: 3", "mutant_timeout_factor: 0"},
 		"findings listed":    {"findings_listed: 20", "findings_listed: 0"},
 		"stage ready":        {"stage_ready_timeout: 30s", "stage_ready_timeout: 0s"},
+		"mutation disk":      {"mutation_disk_gib: 20", "mutation_disk_gib: 0"},
+		"mutation free":      {"mutation_free_gib: 10", "mutation_free_gib: 0"},
 		"licenses":           {"licenses: [MIT]", "licenses: []"},
 		"declared license":   {declaredLine, `"pkg:pypi/legacy": GPL-3.0-only`},
 		"declared purl":      {declaredLine, `"pypi/legacy": MIT`},

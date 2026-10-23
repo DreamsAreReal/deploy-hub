@@ -87,6 +87,8 @@ type Limits struct {
 	MutantFactor   int           `yaml:"mutant_timeout_factor"`
 	FindingsListed int           `yaml:"findings_listed"`
 	StageReady     time.Duration `yaml:"stage_ready_timeout"`
+	MutationDisk   int64         `yaml:"mutation_disk_gib"`
+	MutationFree   int64         `yaml:"mutation_free_gib"`
 }
 
 type App struct {
@@ -265,6 +267,8 @@ func (l Limits) validate() error {
 		positive("mutant_timeout_factor", int64(l.MutantFactor)),
 		positive("findings_listed", int64(l.FindingsListed)),
 		positive("stage_ready_timeout", int64(l.StageReady)),
+		positive("mutation_disk_gib", l.MutationDisk),
+		positive("mutation_free_gib", l.MutationFree),
 	)
 }
 

@@ -80,6 +80,8 @@ type engine struct {
 	baselines map[string]time.Duration
 	dir       string
 	cache     string
+	cacheDir  string
+	workers   []*workerCache
 	index     *testIndex
 }
 
@@ -127,6 +129,13 @@ func totalMutants(counts map[Status]int) int {
 }
 
 func Run(ctx context.Context, ws gate.Workspace) (Report, error) {
+	guard := newDiskGuard(ws)
+	if err := guard.check(); err != nil {
+		return Report{}, fmt.Errorf("%w: %w", ErrIncomplete, err)
+	}
+	ctx, stop := context.WithCancelCause(ctx)
+	defer stop(nil)
+	go guard.watch(ctx, stop, diskEvery)
 	sandbox := ws.Report(sandboxDir)
 	defer func() { _ = os.RemoveAll(sandbox) }()
 	if rerr := os.RemoveAll(sandbox); rerr != nil {
@@ -142,7 +151,7 @@ func Run(ctx context.Context, ws gate.Workspace) (Report, error) {
 		return Report{}, err
 	}
 	defer func() { _ = os.RemoveAll(ws.Report(cacheDir)) }()
-	e := &engine{ws: ws, baselines: map[string]time.Duration{}, dir: ws.Report(mutantsDir), cache: cacheEnv + ws.Report(cacheDir)}
+	e := &engine{ws: ws, baselines: map[string]time.Duration{}, dir: ws.Report(mutantsDir), cacheDir: ws.Report(cacheDir), cache: cacheEnv + ws.Report(cacheDir)}
 	if berr := e.measureBaselines(ctx, pkgs); berr != nil {
 		return Report{}, berr
 	}
@@ -205,7 +214,7 @@ func (e *engine) execute(ctx context.Context, targets []target) (Report, error) 
 	}
 	jobs := make([]Job, 0, len(targets))
 	for i, t := range targets {
-		jobs = append(jobs, Job{Mutant: t.mutant, Cached: t.cached, Run: func(ctx context.Context, _ int) Status { return e.run(ctx, i, t) }})
+		jobs = append(jobs, Job{Mutant: t.mutant, Cached: t.cached, Run: func(ctx context.Context, w int) Status { return e.run(ctx, i, t, e.workers[w]) }})
 	}
 	return Execute(ctx, e.ws, jobs, Workers())
 }
@@ -251,7 +260,7 @@ func Execute(ctx context.Context, ws gate.Workspace, jobs []Job, workers int) (R
 	wg.Wait()
 	rep := report(ws, jobs, statuses)
 	if ctx.Err() != nil {
-		return rep, fmt.Errorf("%w: %w", ErrIncomplete, ctx.Err())
+		return rep, fmt.Errorf("%w: %w", ErrIncomplete, context.Cause(ctx))
 	}
 	if n := rep.Counts[StatusErrored]; n > 0 {
 		return rep, fmt.Errorf("%w: %d %s", ErrIncomplete, n, reasonErrored)
@@ -325,7 +334,16 @@ func snippet(s string) string {
 	return s
 }
 
-func (e *engine) run(ctx context.Context, id int, t target) Status {
+func (e *engine) run(ctx context.Context, id int, t target, c *workerCache) Status {
+	status := e.mutate(ctx, id, t, cacheEnv+c.dir)
+	if err := c.trim(); err != nil {
+		e.ws.Log.Error("worker build cache trim failed", "dir", c.dir, "error", err.Error())
+		return StatusErrored
+	}
+	return status
+}
+
+func (e *engine) mutate(ctx context.Context, id int, t target, cache string) Status {
 	sel := e.index.selectFor(t.key, t.mutant.Line, append([]string{t.pkg.ImportPath}, t.dependents...))
 	if sel.none() {
 		return StatusNotCovered
@@ -337,31 +355,32 @@ func (e *engine) run(ctx context.Context, id int, t target) Status {
 		e.ws.Log.Error("mutant staging failed", "file", t.mutant.File, "error", err.Error())
 		return StatusErrored
 	}
+	m := mutantRun{overlay: ov, cache: cache}
 	if sel.full {
-		return e.runWhole(ctx, ov, t)
+		return e.runWhole(ctx, m, t)
 	}
-	return e.runSelected(ctx, ov, sel)
+	return e.runSelected(ctx, m, sel)
 }
 
-func (e *engine) runWhole(ctx context.Context, ov string, t target) Status {
+func (e *engine) runWhole(ctx context.Context, m mutantRun, t target) Status {
 	status := StatusSurvived
 	if t.pkg.HasTests() {
-		status = e.test(ctx, ov, []string{t.pkg.ImportPath})
+		status = e.test(ctx, m, []string{t.pkg.ImportPath})
 	}
 	if status == StatusSurvived && len(t.dependents) > 0 {
-		status = e.test(ctx, ov, t.dependents)
+		status = e.test(ctx, m, t.dependents)
 	}
 	return status
 }
 
-func (e *engine) runSelected(ctx context.Context, ov string, sel selection) Status {
+func (e *engine) runSelected(ctx context.Context, m mutantRun, sel selection) Status {
 	status := StatusSurvived
 	if len(sel.tests) > 0 {
 		pkgs, run := selectedArgs(sel.tests)
-		status = e.test(ctx, ov, pkgs, run...)
+		status = e.test(ctx, m, pkgs, run...)
 	}
 	if status == StatusSurvived && len(sel.whole) > 0 {
-		status = e.test(ctx, ov, sel.whole)
+		status = e.test(ctx, m, sel.whole)
 	}
 	return status
 }
@@ -393,12 +412,17 @@ func (e *engine) timeout(pkgs []string) time.Duration {
 	return max(e.ws.Policy.Limits.MutantFloor, longest*time.Duration(e.ws.Policy.Limits.MutantFactor))
 }
 
-func (e *engine) test(ctx context.Context, ov string, pkgs []string, extra ...string) Status {
+type mutantRun struct {
+	overlay string
+	cache   string
+}
+
+func (e *engine) test(ctx context.Context, m mutantRun, pkgs []string, extra ...string) Status {
 	limit := e.timeout(pkgs)
 	tctx, cancel := context.WithTimeout(ctx, deadline(limit, e.ws.Policy.Limits.MutantFloor))
 	defer cancel()
 	args := append(append([]string{goTest, countOnce, failFast, "-timeout=" + limit.String()}, extra...), pkgs...)
-	res, err := e.ws.RunEnv(tctx, []string{overlayEnv + ov, e.cache}, golang.GoBinary, args...)
+	res, err := e.ws.RunEnv(tctx, []string{overlayEnv + m.overlay, m.cache}, golang.GoBinary, args...)
 	out := res.Combined()
 	switch {
 	case err == nil:

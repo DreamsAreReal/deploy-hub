@@ -463,9 +463,10 @@ func TestBrokenToolchainMakesTheRunIncomplete(t *testing.T) {
 	testutil.Contains(t, logs.String(), `"msg":"mutant could not be run","packages":["m/lib"],"output":"go: creating work dir: no space left on device"`)
 	testutil.True(t, len(fg.caches) > 0, "mutants run with the isolated build cache")
 	for _, c := range fg.caches {
-		testutil.Equal(t, c, cacheEnv+filepath.Join(ws.Out, cacheDir))
+		testutil.True(t, strings.HasPrefix(c, cacheEnv+filepath.Join(ws.Out, cacheDir)+workerSep), "mutants build in a worker cache: "+c)
 	}
 	testutil.Missing(t, filepath.Join(ws.Out, cacheDir))
+	testutil.Missing(t, filepath.Join(ws.Out, cacheDir)+workerSep+"0")
 }
 
 func TestCancelledRunIsIncomplete(t *testing.T) {
@@ -484,7 +485,7 @@ func TestStagingFailureIsAnError(t *testing.T) {
 	ws.Log = slog.New(slog.NewJSONHandler(&logs, nil))
 	e := &engine{ws: ws, baselines: map[string]time.Duration{}, dir: filepath.Join(ws.Out, "missing", "\x00")}
 	e.index = newIndex()
-	st := e.run(context.Background(), 1, target{mutant: Mutant{File: fileX}})
+	st := e.run(context.Background(), 1, target{mutant: Mutant{File: fileX}}, &workerCache{dir: t.TempDir()})
 	testutil.Equal(t, st, StatusErrored)
 	testutil.Contains(t, logs.String(), `"msg":"mutant staging failed","file":"x.go"`)
 	dir := t.TempDir()
