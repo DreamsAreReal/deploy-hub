@@ -88,7 +88,7 @@ jobs:
 
       - name: Toolchain
         id: hub
-        uses: DreamsAreReal/deploy-hub/.github/actions/hub@c21abd07f8bbceb1ce7335adbe80648feacc8747
+        uses: DreamsAreReal/deploy-hub/.github/actions/hub@600a1886e891f2b0f9ee4c48e49fddce6bbd5eca
 
       - name: Resolve build inputs
         id: ctx
