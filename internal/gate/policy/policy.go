@@ -97,6 +97,7 @@ type App struct {
 	Memory    string      `yaml:"memory"`
 	DAST      DAST        `yaml:"dast"`
 	Env       []string    `yaml:"env"`
+	Data      []string    `yaml:"data"`
 	Scenarios []Scenario  `yaml:"scenarios"`
 	Load      LoadProfile `yaml:"load"`
 	Localized []string    `yaml:"localized"`
@@ -339,7 +340,7 @@ func (a App) validateKind(name string) error {
 	case KindService:
 		return errors.Join(
 			validate.Port(fmt.Sprint(a.Port)), validate.HealthPath(a.Health), validate.MemLimit(a.Memory),
-			validCPUs("apps."+name+".cpus", a.CPUs), a.Load.validate(name), a.DAST.validate(name),
+			validCPUs("apps."+name+".cpus", a.CPUs), a.Load.validate(name), a.DAST.validate(name), validData(name, a.Data),
 		)
 	default:
 		return fmt.Errorf("%w: app %s: unknown kind %q", ErrPolicy, name, a.Kind)
@@ -401,4 +402,15 @@ func (a App) HasImage() bool {
 
 func (a App) HasHTTP() bool {
 	return a.Kind == KindService
+}
+
+func validData(app string, dirs []string) error {
+	seen := map[string]bool{}
+	for _, dir := range dirs {
+		if !path.IsAbs(dir) || path.Clean(dir) != dir || dir == "/" || strings.ContainsAny(dir, ",=") || seen[dir] {
+			return fmt.Errorf("%w: app %s: data directory %q must be a unique clean absolute path other than / without commas or equal signs", ErrPolicy, app, dir)
+		}
+		seen[dir] = true
+	}
+	return nil
 }

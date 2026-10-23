@@ -201,6 +201,12 @@ network on the CI runner with the production limits from the policy (`cpus`,
 the limit, errors above the limit, a crash, a restart or an OOM kill. The VPS
 itself is never load-tested.
 
+**Data volumes.** A service lists the directories it keeps state in under
+`data`, the same container paths its production compose mounts. The stage
+mounts a fresh named volume on each one and removes it with the container, so
+the load test and the scan hit the app as it runs in production, not a
+fallback for a missing volume.
+
 **DAST.** The same isolated stage runs an OWASP ZAP full scan (or the API scan
 when the app declares an OpenAPI path) for the time budget in the policy; any
 alert of Low risk or above blocks the deploy.
@@ -232,6 +238,7 @@ apps:
     cpus: "0.5"              # production limits used by the stage
     memory: 256m
     env: [APP_MODE=test]     # non-secret settings the app needs to boot
+    data: [/data]            # container paths of its production volumes
     localized: [internal/texts/, "*_test.go"]  # UI texts and tests that may use another language
     allowed_files: [docs/STATE.md]             # tracked although forbidden_files matches it
     dast: {target: /api, spider: 1m, max_time: 10m}

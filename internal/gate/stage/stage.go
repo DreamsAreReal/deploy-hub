@@ -30,6 +30,8 @@ const (
 	schemeHTTP     = "http://"
 	portFormat     = "%d/tcp"
 	publishFormat  = "%s::%d"
+	mountFormat    = "type=volume,src=%s,dst=%s"
+	volumeFormat   = "%s-data-%d"
 )
 
 var (
@@ -82,6 +84,9 @@ func (s *Stage) runArgs() []string {
 	}
 	for _, e := range s.ws.App.Env {
 		args = append(args, "-e", e)
+	}
+	for i, dst := range s.ws.App.Data {
+		args = append(args, "--mount", fmt.Sprintf(mountFormat, s.volume(i), dst))
 	}
 	return append(args, s.ws.Image)
 }
@@ -168,5 +173,12 @@ func (s *Stage) Stop(ctx context.Context) {
 
 func (s *Stage) remove(ctx context.Context) {
 	_, _ = s.ws.Run(ctx, DockerBinary, "rm", "-f", s.Name)
+	for i := range s.ws.App.Data {
+		_, _ = s.ws.Run(ctx, DockerBinary, "volume", "rm", "-f", s.volume(i))
+	}
 	_, _ = s.ws.Run(ctx, DockerBinary, "network", "rm", s.Network)
+}
+
+func (s *Stage) volume(i int) string {
+	return fmt.Sprintf(volumeFormat, s.Name, i)
 }

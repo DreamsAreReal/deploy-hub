@@ -451,6 +451,7 @@ apps:
     env:
       - ROUTER_TOKEN=gate-stage-only-router-token-000000
       - PUBLIC_URL=http://localhost:8080
+    data: [/data]
     dast: {target: /, spider: 1m, max_time: 10m}
     load: {rate: 20, duration: 30s, p95: 300ms, max_error_percent: 0, concurrency: 10, paths: [/healthz, /login]}
     localized:
@@ -476,7 +477,9 @@ apps:
         category: security
         tests:
           - internal/core.TestCrossSiteFormIsRefused
-          - internal/web.TestLocalPathRejectsOtherSites
+          - internal/core.TestFormWithoutTokenIsRefused
+          - internal/web.TestFormsReturnToTheirOwnPage
+          - internal/web.TestLinksStayOnThisSite
       - id: malformed-or-oversized-report-is-refused
         category: security
         tests:
@@ -523,6 +526,10 @@ apps:
           - internal/web.TestEnrollRefusals
           - internal/web.TestLoginRefusals
           - internal/web.TestCrossSiteAuthIsRefused
+          - internal/passkey.TestASignInIsRefusedWhenAnythingIsOff
+          - internal/passkey.TestARegistrationIsRefusedWhenAnythingIsOff
+          - internal/passkey.TestRealSignInsAreRefusedWhenAnythingIsOff
+          - internal/passkey.TestAuthenticationVectorsOfTheSpecification
       - id: sessions-expire
         category: security
         tests:
@@ -533,6 +540,8 @@ apps:
         tests:
           - internal/router.FuzzClean
           - internal/router.FuzzParseBlock
+          - internal/passkey.FuzzVerify
+          - internal/passkey.FuzzRegister
       - id: storage-failures-surface
         category: security
         tests:
@@ -545,3 +554,4 @@ apps:
         tests:
           - internal/web.TestLoginWithPasskey
           - internal/web.TestKeysPage
+          - internal/passkey.TestACredentialStoredByGoWebAuthnSignsIn
