@@ -102,6 +102,10 @@ func (e *engine) prior() Verdicts {
 }
 
 func (e *engine) assignKeys(d *digests, targets []target) error {
+	if EngineVersion == "" {
+		e.ws.Log.Warn(logUnversioned)
+		return nil
+	}
 	prior := e.prior()
 	if len(prior.Entries) > 0 && !slices.Contains(prior.Bases, d.base) {
 		e.ws.Log.Warn(logStaleCache)

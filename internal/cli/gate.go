@@ -34,6 +34,8 @@ const (
 	toolsPrefix    = "tools: "
 	usageTools     = "usage: deploy-hub tools --manifest FILE --dir DIR"
 	msgToolsDone   = "tools: %d installed into %s\n"
+	usageEngine    = "usage: deploy-hub engine-version (run in the deploy-hub checkout)"
+	enginePrefix   = "engine-version: "
 	digestPrefix   = "sha256:"
 	msgVerdicts    = "mutation verdicts: %s %s%s\n"
 )
@@ -230,4 +232,18 @@ func (a *App) keepVerdicts(ws gate.Workspace) error {
 		a.Out.Printf(msgVerdicts, out, digestPrefix, digest)
 	}
 	return err
+}
+
+func runEngineVersion(ctx context.Context, a *App, ex procexec.Runner, args []string) int {
+	dir, err := os.Getwd()
+	if err != nil || len(args) != 0 {
+		a.Err.Println(usageEngine)
+		return ExitUsage
+	}
+	v, err := mutation.SourceVersion(ctx, gate.Workspace{Src: dir, Exec: ex, Log: a.Log})
+	if err != nil {
+		return a.failWith(enginePrefix, err)
+	}
+	a.Out.Println(v)
+	return ExitOK
 }

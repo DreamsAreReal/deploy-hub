@@ -51,6 +51,7 @@ const (
 	CmdSelfUpdate = "self-update"
 	CmdSudoers    = "sudoers-sync"
 	CmdVersion    = "version"
+	CmdEngine     = "engine-version"
 
 	binDocker    = "docker"
 	binSudo      = "sudo"
@@ -75,6 +76,7 @@ commands:
   onboard <repo> [options]         connect a GitHub repo (run on the operator machine)
   gate --app NAME --repo O/N ...   run the deploy quality gate on a checkout (CI)
   tools --manifest FILE --dir DIR  install the pinned gate toolchain (CI)
+  engine-version                   print the sha256 of the mutation engine sources (make passes it to the build)
   mcp                              MCP server for AI agents on stdio (run on the operator machine)`
 )
 
@@ -119,6 +121,7 @@ var handlers = map[string]handler{
 	CmdSudoers:    {run: runSudoersSync, binaries: []string{selfupdate.VisudoCommand}, onServer: true},
 	CmdVersion:    {run: runVersion},
 	CmdHostSync:   {run: runHostSync, binaries: []string{hostsync.DockerBinary, hostsync.SystemctlBinary, hostsync.AnalyzeBinary, hostsync.CaddyBinary}, onServer: true},
+	CmdEngine:     {run: runEngineVersion, binaries: []string{tools.GoBinary}},
 }
 
 var gateBinaries = []string{

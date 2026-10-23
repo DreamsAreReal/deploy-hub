@@ -223,9 +223,11 @@ the engine's own test flags; the app policy, thresholds and limits; the host
 and `out-of-memory` depend on them); and `EngineVersion`. `EngineVersion` is the
 sha256 of the engine sources (`internal/gate/mutation` and the module packages
 it imports, except `policy` and `validate`, whose effect is already in the
-policy part), and `TestEngineVersionCoversTheEngineSources` fails until it is
-updated after any change there. When anything in a mutant's key changes, the
-mutant runs again. A package whose tests left no test log is never cached.
+policy part). `deploy-hub engine-version` computes it in the checkout and
+`make build` and `make toolchain` link it in with `-ldflags -X`, so every change
+to those sources is a new engine. A binary built without it (`go run`, `make
+gate`) neither reuses nor stores any verdict. When anything in a mutant's key
+changes, the mutant runs again. A package whose tests left no test log is never cached.
 What stays outside the key is a read made by a package-level variable
 initializer or by a child process of a test; the scheduled full run without the
 cache is the backstop for those. A run that stops early (an errored mutant, the
@@ -359,6 +361,7 @@ commands:
 | `render <app> <in> <out>` | CI | turns a repo compose into a deploy-ready one |
 | `gate …` | CI | the quality gate |
 | `tools --manifest … --dir …` | CI | installs the pinned scanners, checksums verified |
+| `engine-version` | build (make) | sha256 of the mutation engine sources, linked into the binary |
 | `caddy-sync` | root (via a narrow sudoers rule) | regenerates the Caddyfile from `apps.list` |
 | `host-sync <app> <tag>` | root (via a narrow sudoers rule, called by `runner`) | installs the host files of an app's gated image, as listed in the policy (see [Host files](#host-files-host-sync)) |
 | `self-update [sha-<commit>]` | root (systemd timer every 10 minutes) | replaces the binary with the newest gated release of this repo (see [Releases and self-update](#releases-and-self-update)) |
