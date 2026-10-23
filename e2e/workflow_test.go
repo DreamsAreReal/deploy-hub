@@ -42,10 +42,6 @@ func readWorkflow(t *testing.T, name string) (workflow, string) {
 	return w, string(data)
 }
 
-// The hub release is published from the one job of deploy.yml that every app
-// calls. Only a push to main of the hub repo with a passed gate may reach the
-// step, and only that step sees RELEASE_TOKEN; the GITHUB_TOKEN of app jobs
-// stays read-only.
 func TestOnlyTheHubPublishesReleases(t *testing.T) {
 	w, raw := readWorkflow(t, "deploy.yml")
 	testutil.Equal(t, len(w.Jobs), 1)
@@ -71,8 +67,6 @@ func TestOnlyTheHubPublishesReleases(t *testing.T) {
 	}
 }
 
-// The one job of deploy.yml runs on the EU runner, with no GitHub-hosted branch
-// left for public repos, forks or a repo variable.
 func TestDeployRunsOnlyOnTheEURunner(t *testing.T) {
 	w, raw := readWorkflow(t, "deploy.yml")
 	testutil.Equal(t, w.Jobs["deploy"].RunsOn, any(`${{ fromJSON('["self-hosted", "linux", "eu"]') }}`))

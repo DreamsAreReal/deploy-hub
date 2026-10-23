@@ -94,7 +94,6 @@ jobs:
           go-version-file: go.mod
           cache: false
 
-      # The hub gates itself with the gate and the policy of the commit under test.
       - name: Toolchain of the hub commit under test
         id: own
         if: env.HUB == 'true'
@@ -206,9 +205,6 @@ jobs:
           path: ${{ runner.temp }}/dist/deploy-hub
           if-no-files-found: error
 
-      # The only step that publishes a hub release, and the only one that sees
-      # RELEASE_TOKEN: the hub repo, a push to main, after a passed gate. App
-      # repos never get here (e2e TestOnlyTheHubPublishesReleases).
       - name: Publish the hub release
         if: >-
           github.repository == 'DreamsAreReal/deploy-hub' && inputs.app == 'deploy-hub'

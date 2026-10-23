@@ -64,7 +64,7 @@ func TestBootstrapRefusesWithoutAUsableToken(t *testing.T) {
 		reply procexectest.Reply
 		want  error
 	}{
-		"missing file":  {statToken, procexectest.Reply{Err: errors.New("No such file")}, ErrNoToken},
+		"no token file": {statToken, procexectest.Reply{Err: errors.New("No such file")}, ErrNoToken},
 		"empty file":    {readToken, procexectest.Reply{Res: procexec.Result{Stdout: "\n"}}, ErrNoToken},
 		"http header":   {readToken, procexectest.Reply{Res: procexec.Result{Stdout: "Authorization: Bearer x"}}, ErrNoToken},
 		"open file":     {statToken, procexectest.Reply{Res: procexec.Result{Stdout: "root:644"}}, ErrHostToken},
