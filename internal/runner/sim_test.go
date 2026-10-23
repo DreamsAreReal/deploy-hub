@@ -351,6 +351,7 @@ func newEnv(t *testing.T) *env {
 		HTTP:        e.sim,
 		Router:      e.router,
 		Locker:      e.locker,
+		CacheLocker: e.locker,
 		LockWait:    time.Minute,
 		Listening:   func(int) bool { return false },
 		Now:         func() time.Time { now = now.Add(time.Second); return now },
@@ -405,7 +406,7 @@ func (e *env) state(s registry.DeployState) {
 }
 
 func (e *env) dispatch(raw, stdin string) int {
-	if !e.bare && (strings.HasPrefix(raw, VerbDeploy+" ") || strings.HasPrefix(raw, VerbReport+" ")) {
+	if !e.bare && slices.ContainsFunc([]string{VerbDeploy, VerbReport, VerbCacheGet, VerbCachePut}, func(v string) bool { return strings.HasPrefix(raw, v+" ") }) {
 		stdin = identity() + stdin
 	}
 	return e.svc.Dispatch(context.Background(), raw, strings.NewReader(stdin))
