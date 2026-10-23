@@ -229,9 +229,24 @@ func TestMissingHostKeyStopsBeforeChanges(t *testing.T) {
 }
 
 func TestStubContent(t *testing.T) {
-	want := "name: deploy\non:\n  push: {branches: [main]}\npermissions: {}\nconcurrency: {group: deploy, cancel-in-progress: false}\njobs:\n  deploy:\n    name: deploy\n" +
-		"    permissions: {contents: read, packages: write, id-token: write}\n    uses: H/R/.github/workflows/deploy.yml@main\n    with: {app: web, dockerfile: docker/Dockerfile}\n" +
-		`    secrets: {VPS_SSH_KEY: "${{ secrets.VPS_SSH_KEY }}", VPS_HOST: "${{ secrets.VPS_HOST }}", VPS_HOST_KEY: "${{ secrets.VPS_HOST_KEY }}"}`
+	want := `name: deploy
+on:
+  push: {branches: [main]}
+  pull_request: {branches: [main]}
+permissions: {}
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('deploy-gate-{0}', github.event.pull_request.number) || 'deploy' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  deploy:
+    name: deploy
+    permissions: {contents: read, packages: write, id-token: write, actions: write}
+    uses: H/R/.github/workflows/deploy.yml@main
+    with: {app: web, dockerfile: docker/Dockerfile}
+    secrets:
+      VPS_SSH_KEY: ${{ github.event_name != 'pull_request' && secrets.VPS_SSH_KEY || '' }}
+      VPS_HOST: ${{ github.event_name != 'pull_request' && secrets.VPS_HOST || '' }}
+      VPS_HOST_KEY: ${{ github.event_name != 'pull_request' && secrets.VPS_HOST_KEY || '' }}`
 	if got := Stub("main", "H/R", Options{App: appWeb, Dockerfile: dockerDir}); got != want {
 		t.Fatalf("got\n%s", got)
 	}
@@ -426,10 +441,24 @@ const (
 )
 
 func TestSecondAppOfARepoGetsItsOwnStub(t *testing.T) {
-	want := "name: deploy-stt\non:\n  push: {branches: [main]}\npermissions: {}\nconcurrency: {group: deploy-stt, cancel-in-progress: false}\njobs:\n  deploy:\n    name: deploy\n" +
-		"    permissions: {contents: read, packages: write, id-token: write}\n    uses: H/R/.github/workflows/deploy.yml@main\n" +
-		"    with: {app: stt, dockerfile: stt/Dockerfile, compose: stt/docker-compose.yml}\n" +
-		`    secrets: {VPS_SSH_KEY: "${{ secrets.VPS_SSH_KEY }}", VPS_HOST: "${{ secrets.VPS_HOST }}", VPS_HOST_KEY: "${{ secrets.VPS_HOST_KEY }}"}`
+	want := `name: deploy-stt
+on:
+  push: {branches: [main]}
+  pull_request: {branches: [main]}
+permissions: {}
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('deploy-stt-gate-{0}', github.event.pull_request.number) || 'deploy-stt' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  deploy:
+    name: deploy
+    permissions: {contents: read, packages: write, id-token: write, actions: write}
+    uses: H/R/.github/workflows/deploy.yml@main
+    with: {app: stt, dockerfile: stt/Dockerfile, compose: stt/docker-compose.yml}
+    secrets:
+      VPS_SSH_KEY: ${{ github.event_name != 'pull_request' && secrets.VPS_SSH_KEY || '' }}
+      VPS_HOST: ${{ github.event_name != 'pull_request' && secrets.VPS_HOST || '' }}
+      VPS_HOST_KEY: ${{ github.event_name != 'pull_request' && secrets.VPS_HOST_KEY || '' }}`
 	stt := Options{App: appSTT, Dockerfile: "stt/Dockerfile", Compose: sttCompose}
 	testutil.Equal(t, Stub("main", "H/R", stt), want)
 	testutil.Equal(t, StubPath(stt), sttStub)

@@ -168,7 +168,9 @@ apps:
           only the internet (one namespace per repo: #627), in sandboxed units and a CPU/memory/disk slice.
           Runners are registered only in private app repos;
           public repos, forks and pull requests from forks get ubuntu-latest, and the job-started hook
-          refuses workflows that are not from main. This is the only accepted workflow finding.
+          takes only workflows of main and of pull requests into main from the repo itself (owner decision of
+          2026-10-23 in #645: the pull request gate shares the runner, runs without deploy secrets, and a main
+          deploy cancels and later re-runs it). This is the only accepted workflow finding.
     scenarios:
       - id: forced-command-allows-only-runner-verbs
         category: security

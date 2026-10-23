@@ -199,7 +199,7 @@ func Stub(branch, hubRepo string, opts Options) string {
 		name = stubName + "-" + opts.App
 		input += fmt.Sprintf(stubComposeInput, opts.Compose)
 	}
-	return fmt.Sprintf(stubTemplate, name, branch, name, hubRepo, opts.App, input)
+	return fmt.Sprintf(stubTemplate, name, branch, hubRepo, opts.App, input)
 }
 
 func (o Onboarder) inspectStub(_ context.Context, s *session) error {
