@@ -86,7 +86,6 @@ func (o Onboarder) inspectRepo(_ context.Context, s *session) error {
 	return nil
 }
 
-// inspectCompose reads the --compose file when one is given (it must exist), else the first root compose.
 func (s *session) inspectCompose() error {
 	if s.opts.Compose == "" {
 		s.composeIn, _ = readFirst(s.repoPath(), composeNames)
@@ -184,8 +183,6 @@ func pickPort(profile, requested, existing string, taken []int) (string, error) 
 	return requested, nil
 }
 
-// StubPath is where the caller stub of the app lives: an app with its own --compose is a
-// second app of a repo, so its stub gets its own file and must not replace the first one.
 func StubPath(opts Options) string {
 	if opts.Compose == "" {
 		return stubPath
