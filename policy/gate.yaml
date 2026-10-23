@@ -276,7 +276,8 @@ apps:
     port: 8787
     health: /api/health
     cpus: "1"
-    memory: 128m
+    memory: 512m
+    data: [/data]
     dast: {target: /, spider: 1m, max_time: 10m}
     load: {rate: 20, duration: 30s, p95: 300ms, max_error_percent: 0, concurrency: 10, paths: [/api/health, /]}
     localized:
