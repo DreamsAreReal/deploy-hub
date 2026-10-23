@@ -27,4 +27,12 @@ case "${GITHUB_WORKFLOW_REF:-}" in
   "${GITHUB_REPOSITORY:-?}/.github/workflows/"*"@$ref") ;;
   *) refuse "workflow ${GITHUB_WORKFLOW_REF:-?} is not from $ref of ${GITHUB_REPOSITORY:-?}" ;;
 esac
+quota=$(df -B1G --output=used,size,pcent "${HOME:-/nonexistent}" 2>/dev/null | awk 'NR == 2 {print $1 " of " $2 " GiB (" $3 ")"}')
+echo "ci-job-started: disk quota of $(id -un): ${quota:-unknown}"
+case "$quota" in
+  *"(9"[5-9]"%)" | *"(100%)")
+    echo "ci-job-started: the disk quota of $(id -un) is full even after the last cleanup, refusing the job; free $HOME or raise its line in server/ci-runner/disk-quota of deploy-hub"
+    exit 1
+    ;;
+esac
 exit 0
