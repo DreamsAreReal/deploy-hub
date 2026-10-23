@@ -105,6 +105,7 @@ func TestEveryProblemSignalHasAnAlert(t *testing.T) {
 		MetricLockWait, MetricDeliverySuccess, MetricJournalReadable,
 		MetricCIRunnerUp, MetricCIDiskUsedRatio, MetricCIIsolationOK, MetricHostSyncSuccess, MetricSelfUpdateSuccess,
 		MetricCIQuotaOn, MetricCIQuotaUsedRatio,
+		MetricPreemptSuccess, MetricPreemptRerunsMax,
 	} {
 		testutil.True(t, watched[m], "no alert watches "+m)
 	}
