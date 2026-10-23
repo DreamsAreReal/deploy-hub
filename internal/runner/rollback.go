@@ -47,6 +47,9 @@ func (s *Service) rollback(ctx context.Context, raw string, entry registry.Entry
 	}
 	s.advanceState(op)
 	s.reportRollback(action, op.sha7)
+	if !s.syncHost(ctx, op) {
+		return ExitFail
+	}
 	return ExitOK
 }
 

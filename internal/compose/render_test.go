@@ -316,3 +316,13 @@ func TestRenderListLabelsAndExactLayout(t *testing.T) {
 	_, err = Summarize([]byte("[not, a, mapping]"))
 	testutil.Is(t, err, ErrNotMapping)
 }
+
+func TestSidecarsAreEveryServiceButTheMainOne(t *testing.T) {
+	got := Sidecars([]byte("services:\n  app:\n    image: x\n  db:\n    image: y\n  cache:\n    image: z\n"), "app")
+	if strings.Join(got, ",") != "db,cache" {
+		t.Fatalf("got %v", got)
+	}
+	if Sidecars([]byte("services: ["), "app") != nil || len(Sidecars([]byte("services:\n  app:\n    image: x\n"), "app")) != 0 {
+		t.Fatal("no sidecars expected")
+	}
+}

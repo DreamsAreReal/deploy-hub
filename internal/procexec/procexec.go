@@ -87,18 +87,21 @@ var known = map[string]builder{
 	"syft":        func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "syft", a...) },
 	"tar":         func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "tar", a...) },
 	"systemctl":   func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "systemctl", a...) },
-	"trivy":       func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "trivy", a...) },
-	"trufflehog":  func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "trufflehog", a...) },
-	"ruff":        func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "ruff", a...) },
-	"node":        func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "node", a...) },
-	"dotnet":      func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "dotnet", a...) },
-	"shellcheck":  func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "shellcheck", a...) },
-	"shfmt":       func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "shfmt", a...) },
-	"bats":        func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "bats", a...) },
-	"bash":        func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "bash", a...) },
-	"npm":         func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "npm", a...) },
-	"uv":          func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "uv", a...) },
-	"zizmor":      func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "zizmor", a...) },
+	"systemd-analyze": func(ctx context.Context, a []string) *exec.Cmd {
+		return exec.CommandContext(ctx, "systemd-analyze", a...)
+	},
+	"trivy":      func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "trivy", a...) },
+	"trufflehog": func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "trufflehog", a...) },
+	"ruff":       func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "ruff", a...) },
+	"node":       func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "node", a...) },
+	"dotnet":     func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "dotnet", a...) },
+	"shellcheck": func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "shellcheck", a...) },
+	"shfmt":      func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "shfmt", a...) },
+	"bats":       func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "bats", a...) },
+	"bash":       func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "bash", a...) },
+	"npm":        func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "npm", a...) },
+	"uv":         func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "uv", a...) },
+	"zizmor":     func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "zizmor", a...) },
 }
 
 type OS struct {

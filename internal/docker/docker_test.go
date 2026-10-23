@@ -62,11 +62,12 @@ func TestPullReturnsCombinedOutput(t *testing.T) {
 func TestComposeCommands(t *testing.T) {
 	c, f := client(reply("", nil))
 	ctx := context.Background()
-	if err := c.ComposeUp(ctx, UpOptions{File: composeFile, Image: imageRef, Pull: PullNever, Services: []string{MainService}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.ComposeUp(ctx, UpOptions{File: composeFile, Image: imageRef, Pull: PullMissing, NoRecreate: true}); err != nil {
-		t.Fatal(err)
+	for _, o := range []UpOptions{
+		{File: composeFile, Image: imageRef, Pull: PullNever, Services: []string{MainService}},
+		{File: composeFile, Image: imageRef, Pull: PullMissing, NoRecreate: true},
+		{File: composeFile, Image: imageRef, Pull: PullMissing, NoDeps: true, Services: []string{"vm", "vector"}},
+	} {
+		testutil.NoErr(t, c.ComposeUp(ctx, o))
 	}
 	if err := c.ComposeStop(ctx, composeFile, imageRef, MainService); err != nil {
 		t.Fatal(err)
@@ -77,6 +78,7 @@ func TestComposeCommands(t *testing.T) {
 	want := []string{
 		"docker compose -f /a/dc.yml up -d --pull never app",
 		"docker compose -f /a/dc.yml up -d --pull missing --no-recreate",
+		"docker compose -f /a/dc.yml up -d --pull missing --no-deps vm vector",
 		"docker compose -f /a/dc.yml stop app",
 		"docker compose -f dc.yml.new config -q",
 	}
@@ -88,7 +90,7 @@ func TestComposeCommands(t *testing.T) {
 			t.Fatalf("env: %v", call.Env)
 		}
 	}
-	if f.Calls()[3].Dir != "/a" {
+	if f.Calls()[4].Dir != "/a" {
 		t.Fatal("validate must run inside the app dir")
 	}
 }

@@ -58,6 +58,7 @@ const (
 	msgBadDigest        = "refused: digest must match ^sha256:[0-9a-f]{64}$"
 	msgBadVerdict       = "refused: gate verdict missing, malformed or for another commit"
 	msgGateRecorded     = "gate %s@%s: %s %s\n"
+	msgHostSyncFail     = "error: host files not installed, previous ones kept: %s\n"
 	wordPassed          = "passed"
 	wordBlocked         = "blocked"
 	labelYes            = "true"

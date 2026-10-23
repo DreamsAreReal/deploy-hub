@@ -32,7 +32,7 @@ const (
 	percentCeiling = 100
 	purlScheme     = "pkg:"
 	policyChecks   = 7
-	appChecks      = 3
+	appChecks      = 4
 )
 
 var (
@@ -103,6 +103,7 @@ type App struct {
 	Localized []string    `yaml:"localized"`
 	Allowed   []string    `yaml:"allowed_files"`
 	Accepted  []Accepted  `yaml:"accepted_workflow_findings"`
+	Host      *Host       `yaml:"host"`
 }
 
 type Accepted struct {
@@ -279,7 +280,7 @@ func pinned(field, ref string) error {
 
 func (a App) validate(name string) error {
 	errs := make([]error, 0, len(a.Scenarios)+appChecks)
-	errs = append(errs, validate.AppName(name), validate.RepoSlug(a.Repo), a.validateKind(name))
+	errs = append(errs, validate.AppName(name), validate.RepoSlug(a.Repo), a.validateKind(name), validateHost(name, a.Host))
 	seen := map[string]bool{}
 	for _, s := range a.Scenarios {
 		errs = append(errs, s.validate(name, seen))
