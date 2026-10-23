@@ -110,6 +110,20 @@ func TestStartRunsTheImageWithProductionLimits(t *testing.T) {
 	testutil.Contains(t, logs.String(), `"msg":"gate stage ready","stage":"deploy-hub-gate-web-test","addr":"`+sim.addr+`","cpus":"0.5","memory":"256m"`)
 }
 
+func TestStartMountsAFreshVolumeOnEveryDataDirectory(t *testing.T) {
+	ws, _ := app(t, okHandler())
+	ws.App.Data = []string{"/data", "/cache"}
+	st, err := Start(context.Background(), ws, "test")
+	testutil.NoErr(t, err)
+	st.Stop(context.Background())
+	lines := procexectest.LinesOf(ws.Exec)
+	testutil.Equal(t, lines[1], "docker volume rm -f deploy-hub-gate-web-test-data-0")
+	testutil.Equal(t, lines[2], "docker volume rm -f deploy-hub-gate-web-test-data-1")
+	testutil.Contains(t, strings.Join(lines, "\n"),
+		"--mount type=volume,src=deploy-hub-gate-web-test-data-0,dst=/data --mount type=volume,src=deploy-hub-gate-web-test-data-1,dst=/cache web:gate")
+	testutil.Equal(t, strings.Count(strings.Join(lines, "\n"), "docker volume rm -f deploy-hub-gate-web-test-data-1"), 2)
+}
+
 func cleanups(ws gate.Workspace) int {
 	return strings.Count(strings.Join(procexectest.LinesOf(ws.Exec), "\n"), "docker rm -f deploy-hub-gate-web-x")
 }

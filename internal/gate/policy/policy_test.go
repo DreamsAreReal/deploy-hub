@@ -17,6 +17,8 @@ const (
 
 const localizedLine = "localized: [internal/texts/]"
 
+const dataLine = "data: [/data, /cache]"
+
 const digest = "@sha256:" + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 const reviewedExpr = `"MIT OR (MIT AND MIT)"`
@@ -84,6 +86,7 @@ apps:
     cpus: "0.5"
     memory: 256m
     env: [MODE=test]
+    data: [/data, /cache]
     dast: {spider: 1m, max_time: 5m, openapi: /openapi.json}
     load: {rate: 20, duration: 30s, p95: 300ms, max_error_percent: 0, concurrency: 10, paths: [/health]}
   bot:
@@ -100,6 +103,7 @@ func TestParseValidPolicy(t *testing.T) {
 	testutil.True(t, web.HasImage() && web.HasHTTP(), "service has image and HTTP")
 	testutil.Equal(t, web.Load.P95.Milliseconds(), int64(300))
 	testutil.Equal(t, web.DAST.OpenAPI, "/openapi.json")
+	testutil.Equal(t, web.Data, []string{"/data", "/cache"})
 	hub, _ := p.App("hub")
 	testutil.True(t, !hub.HasImage() && !hub.HasHTTP(), "binary has neither")
 	testutil.Equal(t, hub.Accepted, []Accepted{{Rule: selfHosted, Severity: medium, File: deployWorkflow, Key: runsOn, Reason: "isolated runner, see #600"}})
@@ -204,6 +208,11 @@ func TestParseRejects(t *testing.T) {
 		"accepted glob":      {acceptedFile, "file: .github/workflows/*.yml"},
 		"accepted escape":    {acceptedFile, "file: ../deploy.yml"},
 		"accepted no file":   {acceptedFile, `file: ""`},
+		"relative data":      {dataLine, "data: [data]"},
+		"root data":          {dataLine, "data: [/]"},
+		"unclean data":       {dataLine, "data: [/data/]"},
+		"data with comma":    {dataLine, "data: [\"/a,b\"]"},
+		"repeated data":      {dataLine, "data: [/data, /data]"},
 		"duplicate scenario": {"        tests: [internal/x.TestRefuse]\n", "        tests: [internal/x.TestRefuse]\n      - id: refuse\n        category: business\n        tests: [a.TestB]\n"},
 	}
 	for name, c := range cases {
