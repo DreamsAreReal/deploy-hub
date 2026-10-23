@@ -9,6 +9,7 @@ import (
 
 	"github.com/DreamsAreReal/deploy-hub/internal/caddy"
 	"github.com/DreamsAreReal/deploy-hub/internal/health"
+	"github.com/DreamsAreReal/deploy-hub/internal/historysweep"
 	"github.com/DreamsAreReal/deploy-hub/internal/hub"
 	"github.com/DreamsAreReal/deploy-hub/internal/oidc"
 	"github.com/DreamsAreReal/deploy-hub/internal/registry"
@@ -38,6 +39,7 @@ const (
 	envAudience    = "DEPLOY_HUB_OIDC_AUDIENCE"
 	envJWKSURL     = "DEPLOY_HUB_JWKS_URL"
 	envJWKSCache   = "DEPLOY_HUB_JWKS_CACHE"
+	envAuthFile    = "DEPLOY_HUB_GITHUB_TOKEN_FILE"
 
 	minGateTimeout = 60 * time.Second
 	maxGateTimeout = 10 * time.Minute
@@ -57,6 +59,7 @@ const (
 	confHostSlug      = "host_slug"
 	confACMEEmail     = "acme_email"
 	confDeliveryURL   = "delivery_url"
+	confHistorySweep  = "history_sweep"
 	schemeHTTP        = "http"
 	schemeHTTPS       = "https"
 )
@@ -80,25 +83,27 @@ func (e Env) get(key, fallback string) string {
 }
 
 type Config struct {
-	Paths      hub.Paths
-	Caddy      caddy.Config
-	CaddyUser  string
-	DeployUser string
-	MetricsURL string
-	Delivery   string
-	LogLevel   string
-	LogFile    string
-	HostAlias  string
-	VPSAddr    string
-	DeployKey  string
-	HubRepo    string
-	RepoOwner  string
-	SSHCommand string
-	GateWait   time.Duration
-	GateTick   time.Duration
-	Audience   string
-	JWKSURL    string
-	JWKSCache  string
+	Paths        hub.Paths
+	Caddy        caddy.Config
+	CaddyUser    string
+	DeployUser   string
+	MetricsURL   string
+	Delivery     string
+	LogLevel     string
+	LogFile      string
+	HostAlias    string
+	VPSAddr      string
+	DeployKey    string
+	HubRepo      string
+	RepoOwner    string
+	SSHCommand   string
+	GateWait     time.Duration
+	GateTick     time.Duration
+	Audience     string
+	JWKSURL      string
+	JWKSCache    string
+	HistorySweep string
+	TokenFile    string
 }
 
 func (c Config) WorkflowRef() string {
@@ -110,23 +115,25 @@ func LoadConfig(env Env) (Config, error) {
 	server, _ := registry.ReadKV(paths.HubConf())
 	slug := env.get(envHostSlug, server[confHostSlug])
 	c := Config{
-		Paths:      paths,
-		Caddy:      caddy.Config{Caddyfile: env.get(envCaddyfile, caddy.DefaultCaddyfile), HostSlug: slug, Email: env.get(envACMEEmail, acmeEmail(server[confACMEEmail], slug))},
-		CaddyUser:  env.get(envCaddyUser, caddy.DefaultUser),
-		DeployUser: env.get(envDeployUser, defaultDeployUser),
-		MetricsURL: defaultMetricsURL,
-		Delivery:   env.get(envDeliveryURL, server[confDeliveryURL]),
-		LogLevel:   env.get(envLogLevel, ""),
-		LogFile:    env.get(envLogFile, ""),
-		HostAlias:  env.get(envHostAlias, defaultHostAlias),
-		VPSAddr:    env.get(envVPSAddr, ""),
-		DeployKey:  env.get(envDeployKey, filepath.Join(env.get(envHome, ""), defaultDeployKey)),
-		HubRepo:    env.get(envHubRepo, defaultHubRepo),
-		RepoOwner:  env.get(envRepoOwner, defaultRepoOwner),
-		SSHCommand: env.get(envSSHOriginal, ""),
-		Audience:   env.get(envAudience, defaultAudience),
-		JWKSURL:    env.get(envJWKSURL, oidc.JWKSURL),
-		JWKSCache:  env.get(envJWKSCache, filepath.Join(env.get(envHome, ""), defaultJWKSCache)),
+		Paths:        paths,
+		Caddy:        caddy.Config{Caddyfile: env.get(envCaddyfile, caddy.DefaultCaddyfile), HostSlug: slug, Email: env.get(envACMEEmail, acmeEmail(server[confACMEEmail], slug))},
+		CaddyUser:    env.get(envCaddyUser, caddy.DefaultUser),
+		DeployUser:   env.get(envDeployUser, defaultDeployUser),
+		MetricsURL:   defaultMetricsURL,
+		Delivery:     env.get(envDeliveryURL, server[confDeliveryURL]),
+		LogLevel:     env.get(envLogLevel, ""),
+		LogFile:      env.get(envLogFile, ""),
+		HostAlias:    env.get(envHostAlias, defaultHostAlias),
+		VPSAddr:      env.get(envVPSAddr, ""),
+		DeployKey:    env.get(envDeployKey, filepath.Join(env.get(envHome, ""), defaultDeployKey)),
+		HubRepo:      env.get(envHubRepo, defaultHubRepo),
+		RepoOwner:    env.get(envRepoOwner, defaultRepoOwner),
+		SSHCommand:   env.get(envSSHOriginal, ""),
+		Audience:     env.get(envAudience, defaultAudience),
+		JWKSURL:      env.get(envJWKSURL, oidc.JWKSURL),
+		JWKSCache:    env.get(envJWKSCache, filepath.Join(env.get(envHome, ""), defaultJWKSCache)),
+		HistorySweep: server[confHistorySweep],
+		TokenFile:    env.get(envAuthFile, historysweep.DefaultAuthFile),
 	}
 	if v, ok := env(envMetricsURL); ok {
 		c.MetricsURL = v
