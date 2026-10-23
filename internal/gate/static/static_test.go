@@ -57,7 +57,7 @@ func TestLintBothLinters(t *testing.T) {
 	testutil.Equal(t, out.Findings, []string{"index.html:3 require-sri SRI required", "style.css:2 color-named Unexpected named color"})
 	calls := procexectest.CallsOf(ws.Exec)
 	html := calls[len(calls)-2]
-	testutil.Equal(t, html.Args[1:], []string{configFlag, filepath.Join(ws.Report("node-tools"), node.HTMLValidateConfig), formatterFlag, formatterJSON, page})
+	testutil.Equal(t, html.Args[1:], []string{configFlag, filepath.Join(ws.Report("node-tools"), node.HTMLValidateConfig), formatterFlag, formatterJSON + "=" + filepath.Join(ws.Report(templatesDir), htmlReport), page})
 	style := calls[len(calls)-1]
 	testutil.Equal(t, style.Args[1:], []string{configFlag, filepath.Join(ws.Report("node-tools"), node.StylelintConfig), "--ignore-disables", formatterFlag, formatterJSON, sheet})
 }
@@ -65,7 +65,7 @@ func TestLintBothLinters(t *testing.T) {
 func TestLintFailures(t *testing.T) {
 	garbled := site(t, func(procexec.Command) (procexec.Result, error) { return procexec.Result{Stdout: "oops"}, errSim }, page)
 	testutil.Contains(t, Lint(context.Background(), garbled).Reason, htmlTool)
-	onlyStyles := site(t, func(procexec.Command) (procexec.Result, error) { return procexec.Result{Stderr: "[]"}, nil }, sheet)
+	onlyStyles := site(t, func(procexec.Command) (procexec.Result, error) { return procexec.Result{Stderr: emptyJSON}, nil }, sheet)
 	testutil.Equal(t, Lint(context.Background(), onlyStyles).Status, gate.StatusPass)
 	unlisted := site(t, nil, page)
 	unlisted.Exec = &procexectest.Fake{Handler: func(procexec.Command) (procexec.Result, error) { return procexec.Result{}, errSim }}
