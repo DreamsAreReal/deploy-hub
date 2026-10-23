@@ -74,9 +74,6 @@ func (e *engine) closure(ctx context.Context, pkgs golang.Packages) (*digests, e
 	}
 	d := newDigests(e.ws.Src, base.Digest(), built, map[string]string{})
 	for _, p := range pkgs {
-		if !p.HasTests() {
-			continue
-		}
 		data, rerr := os.ReadFile(e.testLog(p.ImportPath))
 		if rerr != nil {
 			d.volatile[p.ImportPath] = true
@@ -116,7 +113,7 @@ func (e *engine) assignKeys(d *digests, targets []target) error {
 			return err
 		}
 		targets[i].verdict = key
-		if s, ok := prior.lookup(key); ok && key != "" {
+		if s, ok := prior.lookup(key); ok {
 			targets[i].cached = s
 		}
 	}
@@ -155,6 +152,9 @@ func (e *engine) incremental(ctx context.Context, pkgs golang.Packages) (Report,
 	}
 	if err == nil {
 		e.index, err = e.buildIndex(ctx, pkgs, uncached(d, targets))
+	}
+	if err == nil {
+		err = e.guard.check()
 	}
 	if err != nil {
 		return Report{}, err

@@ -249,8 +249,9 @@ report directory. Each mutation worker then gets its own copy made of hard
 links to it (no extra space); once the builds a worker added pass 1 GiB they are
 deleted after its current mutant, so the build cache stays within its baseline
 size plus 1 GiB per worker however many mutants run, while consecutive mutants
-of a worker still reuse each other's builds. Every 15 seconds, and once before it
-starts, the run measures its report directory (hard links counted once) and
+of a worker still reuse each other's builds. Before it starts, after the baseline runs,
+after the test index and then every 15 seconds, the run measures its report
+directory (the build caches included) (hard links counted once) and
 the free space of that disk; above `mutation_disk_gib` (20) or below
 `mutation_free_gib` (10 GiB free) it stops with `mutation testing stopped to
 protect the disk` and the numbers, keeps the verdicts it finished, and the
