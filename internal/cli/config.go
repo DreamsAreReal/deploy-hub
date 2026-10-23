@@ -63,6 +63,7 @@ const (
 	acmeEmailFormat   = "admin@%s.sslip.io"
 	confHostSlug      = "host_slug"
 	confACMEEmail     = "acme_email"
+	confHistorySweep  = "history_sweep"
 	schemeHTTP        = "http"
 	schemeHTTPS       = "https"
 )
@@ -87,28 +88,29 @@ func (e Env) get(key, fallback string) string {
 }
 
 type Config struct {
-	Paths       hub.Paths
-	Caddy       caddy.Config
-	CaddyUser   string
-	DeployUser  string
-	MetricsURL  string
-	LogsURL     string
-	TextfileDir string
-	LogLevel    string
-	LogFile     string
-	HostAlias   string
-	VPSAddr     string
-	DeployKey   string
-	HubRepo     string
-	RepoOwner   string
-	SSHCommand  string
-	GateWait    time.Duration
-	GateTick    time.Duration
-	Audience    string
-	JWKSURL     string
-	JWKSCache   string
-	Secrets     SecretsConfig
-	SpoolRoot   string
+	Paths        hub.Paths
+	Caddy        caddy.Config
+	CaddyUser    string
+	DeployUser   string
+	MetricsURL   string
+	LogsURL      string
+	TextfileDir  string
+	LogLevel     string
+	LogFile      string
+	HostAlias    string
+	VPSAddr      string
+	DeployKey    string
+	HubRepo      string
+	RepoOwner    string
+	SSHCommand   string
+	GateWait     time.Duration
+	GateTick     time.Duration
+	Audience     string
+	JWKSURL      string
+	JWKSCache    string
+	Secrets      SecretsConfig
+	SpoolRoot    string
+	HistorySweep string
 }
 
 type SecretsConfig struct {
@@ -126,26 +128,27 @@ func LoadConfig(env Env) (Config, error) {
 	server, _ := registry.ReadKV(paths.HubConf())
 	slug := env.get(envHostSlug, server[confHostSlug])
 	c := Config{
-		Paths:       paths,
-		Caddy:       caddy.Config{Caddyfile: env.get(envCaddyfile, caddy.DefaultCaddyfile), HostSlug: slug, Email: env.get(envACMEEmail, acmeEmail(server[confACMEEmail], slug))},
-		CaddyUser:   env.get(envCaddyUser, caddy.DefaultUser),
-		DeployUser:  env.get(envDeployUser, defaultDeployUser),
-		MetricsURL:  defaultMetricsURL,
-		LogsURL:     accesslog.DefaultURL,
-		LogLevel:    env.get(envLogLevel, ""),
-		LogFile:     env.get(envLogFile, ""),
-		HostAlias:   env.get(envHostAlias, defaultHostAlias),
-		VPSAddr:     env.get(envVPSAddr, ""),
-		DeployKey:   env.get(envDeployKey, filepath.Join(env.get(envHome, ""), defaultDeployKey)),
-		HubRepo:     env.get(envHubRepo, defaultHubRepo),
-		RepoOwner:   env.get(envRepoOwner, defaultRepoOwner),
-		SSHCommand:  env.get(envSSHOriginal, ""),
-		Audience:    env.get(envAudience, defaultAudience),
-		JWKSURL:     env.get(envJWKSURL, oidc.JWKSURL),
-		JWKSCache:   env.get(envJWKSCache, filepath.Join(env.get(envHome, ""), defaultJWKSCache)),
-		Secrets:     SecretsConfig{File: env.get(envStoreFile, ""), Key: env.get(envStoreAge, defaultAgeKey), Age: env.get(envAge, defaultAge)},
-		SpoolRoot:   env.get(envSpoolRoot, defaultSpool),
-		TextfileDir: env.get(envTextfileDir, ""),
+		Paths:        paths,
+		Caddy:        caddy.Config{Caddyfile: env.get(envCaddyfile, caddy.DefaultCaddyfile), HostSlug: slug, Email: env.get(envACMEEmail, acmeEmail(server[confACMEEmail], slug))},
+		CaddyUser:    env.get(envCaddyUser, caddy.DefaultUser),
+		DeployUser:   env.get(envDeployUser, defaultDeployUser),
+		MetricsURL:   defaultMetricsURL,
+		LogsURL:      accesslog.DefaultURL,
+		LogLevel:     env.get(envLogLevel, ""),
+		LogFile:      env.get(envLogFile, ""),
+		HostAlias:    env.get(envHostAlias, defaultHostAlias),
+		VPSAddr:      env.get(envVPSAddr, ""),
+		DeployKey:    env.get(envDeployKey, filepath.Join(env.get(envHome, ""), defaultDeployKey)),
+		HubRepo:      env.get(envHubRepo, defaultHubRepo),
+		RepoOwner:    env.get(envRepoOwner, defaultRepoOwner),
+		SSHCommand:   env.get(envSSHOriginal, ""),
+		Audience:     env.get(envAudience, defaultAudience),
+		JWKSURL:      env.get(envJWKSURL, oidc.JWKSURL),
+		JWKSCache:    env.get(envJWKSCache, filepath.Join(env.get(envHome, ""), defaultJWKSCache)),
+		Secrets:      SecretsConfig{File: env.get(envStoreFile, ""), Key: env.get(envStoreAge, defaultAgeKey), Age: env.get(envAge, defaultAge)},
+		SpoolRoot:    env.get(envSpoolRoot, defaultSpool),
+		HistorySweep: server[confHistorySweep],
+		TextfileDir:  env.get(envTextfileDir, ""),
 	}
 	if v, ok := env(envMetricsURL); ok {
 		c.MetricsURL = v

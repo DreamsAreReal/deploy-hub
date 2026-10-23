@@ -43,6 +43,7 @@ type Updater struct {
 	Exec    procexec.Runner
 	Sudo    Sudoers
 	Runner  RunnerFiles
+	Units   UnitFiles
 	Journal journal.Journal
 	Metrics obs.Pusher
 	Now     func() time.Time
@@ -118,7 +119,12 @@ func (u Updater) keep(ctx context.Context) (bool, error) {
 	if err := u.Sudo.Sync(ctx); err != nil {
 		return false, err
 	}
-	return u.Runner.Sync(ctx)
+	runner, err := u.Runner.Sync(ctx)
+	if err != nil {
+		return false, err
+	}
+	units, err := u.Units.Sync(ctx)
+	return (runner || units) && err == nil, err
 }
 
 func (u Updater) install(ctx context.Context, r Release, bin []byte) error {
@@ -164,7 +170,7 @@ func (u Updater) restore(ctx context.Context, cause error) error {
 }
 
 func (u Updater) apply(ctx context.Context) error {
-	for _, verb := range []string{VerbSudoersSync, VerbRunnerSync} {
+	for _, verb := range []string{VerbSudoersSync, VerbRunnerSync, VerbUnitSync} {
 		if _, err := u.Exec.Run(ctx, procexec.Command{Name: InstalledCommand, Args: []string{verb}}); err != nil {
 			return fmt.Errorf("%s: %w: %s", verb, err, procexec.Output(err))
 		}

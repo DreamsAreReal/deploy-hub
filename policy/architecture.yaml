@@ -23,7 +23,7 @@ services:
       - name: .github/workflows/history-guard.yml
         why: every 5 minutes, deletes branches and tags that bring back the history from before the repository was recreated, also when a push was missed
       - name: deploy-hub-history-guard.timer
-        why: every 5 minutes, dispatches history-guard in deploy-hub and tasks from the server, because the GitHub schedule trigger is best-effort and may never fire (#790 decides the interval)
+        why: every 5 minutes, history-sweep deletes the branches and tags of the history_sweep repos (tasks, deploy-hub) not rooted at their public snapshot; GitHub runs nothing for private repos, so the server does it
       - name: deploy-hub-status.timer
         why: every minute, app health, journal metrics and this check of the server against the catalog; the hub runs no daemon that could push them
       - name: deploy-hub-self-update.timer

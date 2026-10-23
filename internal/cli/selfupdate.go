@@ -11,6 +11,7 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/selfupdate"
 	embedded "github.com/DreamsAreReal/deploy-hub/policy"
 	cirunner "github.com/DreamsAreReal/deploy-hub/server/ci-runner"
+	units "github.com/DreamsAreReal/deploy-hub/server/systemd"
 )
 
 var Commit = "dev"
@@ -22,6 +23,7 @@ const (
 	selfUpdatePrefix = "self-update: "
 	sudoersPrefix    = "sudoers-sync: "
 	runnerSyncPrefix = "ci-runner-sync: "
+	unitSyncPrefix   = "systemd-sync: "
 )
 
 var ErrNotInstalled = errors.New("only the binary installed as " + selfupdate.DefaultBinary + " updates the server")
@@ -69,7 +71,7 @@ func runSelfUpdate(ctx context.Context, a *App, ex procexec.Runner, args []strin
 	}
 	u := selfupdate.Updater{
 		Source: selfupdate.Source{API: selfupdate.DefaultAPI, Repo: defaultHubRepo, Token: token, Client: &http.Client{}},
-		Binary: selfupdate.DefaultBinary, Current: Commit, Exec: ex, Sudo: sudo, Runner: a.runnerFiles(ex),
+		Binary: selfupdate.DefaultBinary, Current: Commit, Exec: ex, Sudo: sudo, Runner: a.runnerFiles(ex), Units: unitFiles(ex),
 		Journal: a.journal(), Metrics: a.metrics(), Now: a.Now, Out: a.Out, Log: a.Log,
 	}
 	if err := u.Run(ctx, tag); err != nil {
@@ -85,16 +87,28 @@ func (a *App) runnerFiles(ex procexec.Runner) selfupdate.RunnerFiles {
 	}}
 }
 
+func unitFiles(ex procexec.Runner) selfupdate.UnitFiles {
+	return selfupdate.UnitFiles{Files: units.Files(), Dir: selfupdate.DefaultUnitDir, Exec: ex}
+}
+
 func runRunnerSync(ctx context.Context, a *App, ex procexec.Runner, _ []string) int {
+	return a.syncInstalled(ctx, runnerSyncPrefix, selfupdate.DefaultRunnerDir, a.runnerFiles(ex).Sync)
+}
+
+func runUnitSync(ctx context.Context, a *App, ex procexec.Runner, _ []string) int {
+	return a.syncInstalled(ctx, unitSyncPrefix, selfupdate.DefaultUnitDir, unitFiles(ex).Sync)
+}
+
+func (a *App) syncInstalled(ctx context.Context, prefix, dir string, sync func(context.Context) (bool, error)) int {
 	if a.Config.Paths.Binary() != selfupdate.DefaultBinary {
-		return a.failWith(runnerSyncPrefix, ErrNotInstalled)
+		return a.failWith(prefix, ErrNotInstalled)
 	}
-	changed, err := a.runnerFiles(ex).Sync(ctx)
+	changed, err := sync(ctx)
 	if err != nil {
-		return a.failWith(runnerSyncPrefix, err)
+		return a.failWith(prefix, err)
 	}
 	if changed {
-		a.Out.Println(runnerSyncPrefix + "installed " + selfupdate.DefaultRunnerDir)
+		a.Out.Println(prefix + "installed " + dir)
 	}
 	return ExitOK
 }

@@ -1,11 +1,14 @@
 [Unit]
-Description=deploy-hub: dispatch history-guard in deploy-hub and tasks
+Description=deploy-hub: delete branches and tags not rooted at the public snapshot (history-sweep)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-DynamicUser=yes
-LoadCredential=github-header:/etc/deploy-hub/history-guard.header
-ExecStart=/usr/bin/curl -fsS --retry 3 --max-time 30 -X POST -H "Accept: application/vnd.github+json" -H @${CREDENTIALS_DIRECTORY}/github-header -d "{\"ref\":\"main\"}" https://api.github.com/repos/DreamsAreReal/deploy-hub/actions/workflows/history-guard.yml/dispatches
-ExecStart=/usr/bin/curl -fsS --retry 3 --max-time 30 -X POST -H "Accept: application/vnd.github+json" -H @${CREDENTIALS_DIRECTORY}/github-header -d "{\"ref\":\"main\"}" https://api.github.com/repos/DreamsAreReal/tasks/actions/workflows/history-guard.yml/dispatches
+ExecStart=/opt/deploy-hub/bin/deploy-hub history-sweep
+TimeoutStartSec=10min
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/deploy-hub
+NoNewPrivileges=yes
