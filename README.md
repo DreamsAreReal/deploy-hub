@@ -75,6 +75,13 @@ push to main
 A main deploy therefore never waits behind a pull request gate; a gate that a
 deploy interrupted starts again from scratch after it.
 
+**The image does not depend on the runner umask.** The CI runner works under
+`UMask=0077`, so its checkout is private (files `0600`, directories `0700`),
+and `docker build` copies those modes into the image. Before building,
+deploy.yml makes the build context group- and world-readable as in an
+ordinary git checkout (`chmod -R go+rX,go-w`), so an app that runs as a
+non-root user can read the files it copied, in the gate stage as in production.
+
 **Merge only on a green gate.** Merge a pull request only when every gate
 check (`deploy / gate`, and `deploy-<app> / gate` for a second app) passed for its latest commit, and only by merging the pull request (no direct
 pushes to `main`):

@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -34,9 +35,9 @@ type workflow struct {
 	Jobs map[string]workflowJob `yaml:"jobs"`
 }
 
-func readWorkflow(t *testing.T, name string) (workflow, string) {
+func readDeployWorkflow(t *testing.T) (workflow, string) {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Clean(filepath.Join(workflows, name)))
+	data, err := os.ReadFile(filepath.Clean(filepath.Join(workflows, "deploy.yml")))
 	testutil.NoErr(t, err)
 	var w workflow
 	testutil.NoErr(t, yaml.Unmarshal(data, &w))
@@ -44,7 +45,7 @@ func readWorkflow(t *testing.T, name string) (workflow, string) {
 }
 
 func TestOnlyTheHubPublishesReleases(t *testing.T) {
-	w, raw := readWorkflow(t, "deploy.yml")
+	w, raw := readDeployWorkflow(t)
 	testutil.Equal(t, len(w.Jobs), 1)
 	job := w.Jobs["deploy"]
 	testutil.Equal(t, job.Permissions["contents"], "read")
@@ -69,7 +70,7 @@ func TestOnlyTheHubPublishesReleases(t *testing.T) {
 }
 
 func TestDeployRunsOnlyOnTheEURunner(t *testing.T) {
-	w, raw := readWorkflow(t, "deploy.yml")
+	w, raw := readDeployWorkflow(t)
 	testutil.Equal(t, w.Jobs["deploy"].RunsOn, any(`${{ fromJSON('["self-hosted", "linux", "eu"]') }}`))
 	testutil.Excludes(t, raw, "ubuntu-latest", "github-hosted", "repository.fork", "repository.private", "DEPLOY_HUB_RUNNER")
 }
@@ -108,7 +109,7 @@ func TestTheHubGatesItselfThroughDeployYML(t *testing.T) {
 }
 
 func TestNothingReachesProductionBeforeTheGatePasses(t *testing.T) {
-	w, _ := readWorkflow(t, "deploy.yml")
+	w, _ := readDeployWorkflow(t)
 	steps := w.Jobs["deploy"].Steps
 	gate := -1
 	for i, s := range steps {
@@ -130,4 +131,34 @@ func TestNothingReachesProductionBeforeTheGatePasses(t *testing.T) {
 		}
 		testutil.True(t, found, "no step "+name)
 	}
+}
+
+const umaskPrivateCheckout = `umask 0077
+mkdir -p "$CONTEXT/web/templates"
+echo x > "$CONTEXT/web/templates/page.html"
+echo x > "$CONTEXT/run.sh"
+chmod u+x "$CONTEXT/run.sh"
+docker() { for a; do ctx=$a; done; find "$ctx" -mindepth 1 -printf '%m %P\n' | sort > "$MODES"; }
+`
+
+func TestTheImageIsBuiltFromAContextReadableWhateverTheRunnerUmask(t *testing.T) {
+	w, _ := readDeployWorkflow(t)
+	build := ""
+	for _, s := range w.Jobs["deploy"].Steps {
+		if s.Name == "Build image" {
+			build = s.Run
+		}
+	}
+	testutil.True(t, build != "", "no Build image step")
+	dir := t.TempDir()
+	modes := filepath.Join(dir, "modes")
+	cmd := exec.CommandContext(t.Context(), "bash", "-e", "-c", umaskPrivateCheckout+build)
+	cmd.Env = []string{"PATH=/usr/bin:/bin", "MODES=" + modes, "CONTEXT=" + filepath.Join(dir, "src"), "DOCKERFILE=Dockerfile",
+		"APP=web", "GITHUB_REPOSITORY_OWNER=Owner", "GITHUB_SHA=abc", "GITHUB_OUTPUT=" + filepath.Join(dir, "out")}
+	out, err := cmd.CombinedOutput()
+	testutil.NoErr(t, err)
+	testutil.Equal(t, string(out), "")
+	got, err := os.ReadFile(filepath.Clean(modes))
+	testutil.NoErr(t, err)
+	testutil.Equal(t, string(got), "644 web/templates/page.html\n755 run.sh\n755 web\n755 web/templates\n")
 }
