@@ -3,5 +3,5 @@
 # to register a repository that has no line here.
 tasks 140
 router-bot 40
-observability 10
+observability 20
 deploy-hub 35
