@@ -17,10 +17,11 @@ const (
 )
 
 type workflowStep struct {
-	Name string            `yaml:"name"`
-	If   string            `yaml:"if"`
-	Env  map[string]string `yaml:"env"`
-	Run  string            `yaml:"run"`
+	Name     string            `yaml:"name"`
+	If       string            `yaml:"if"`
+	Continue any               `yaml:"continue-on-error"`
+	Env      map[string]string `yaml:"env"`
+	Run      string            `yaml:"run"`
 }
 
 type workflowJob struct {
@@ -79,4 +80,54 @@ func mapValues(m map[string]string) []string {
 		out = append(out, v)
 	}
 	return out
+}
+
+type callerJob struct {
+	Uses    string            `yaml:"uses"`
+	With    map[string]string `yaml:"with"`
+	Secrets map[string]string `yaml:"secrets"`
+	RunsOn  any               `yaml:"runs-on"`
+}
+
+func TestTheHubGatesItselfThroughDeployYML(t *testing.T) {
+	data, err := os.ReadFile(filepath.Clean(filepath.Join(workflows, "ci.yml")))
+	testutil.NoErr(t, err)
+	var ci struct {
+		Jobs map[string]callerJob `yaml:"jobs"`
+	}
+	testutil.NoErr(t, yaml.Unmarshal(data, &ci))
+	testutil.Equal(t, len(ci.Jobs), 1)
+	for _, job := range ci.Jobs {
+		testutil.Equal(t, job.Uses, "DreamsAreReal/deploy-hub/.github/workflows/deploy.yml@main")
+		testutil.Equal(t, job.With["app"], "deploy-hub")
+		testutil.Equal(t, job.Secrets["RELEASE_TOKEN"], "${{ github.event_name == 'push' && "+releaseToken+" || '' }}")
+		testutil.Equal(t, len(job.Secrets), 1)
+		testutil.Equal(t, job.RunsOn, nil)
+	}
+	testutil.Excludes(t, string(data), "runs-on")
+}
+
+func TestNothingReachesProductionBeforeTheGatePasses(t *testing.T) {
+	w, _ := readWorkflow(t, "deploy.yml")
+	steps := w.Jobs["deploy"].Steps
+	gate := -1
+	for i, s := range steps {
+		testutil.Equal(t, s.Continue, nil)
+		if s.Name == "Quality gate" {
+			gate = i
+		}
+	}
+	testutil.True(t, gate >= 0, "no Quality gate step")
+	for _, name := range []string{"Push the gated image", "Deploy on the VPS", "Publish the hub release"} {
+		found := false
+		for i, s := range steps {
+			if s.Name != name {
+				continue
+			}
+			found = true
+			testutil.True(t, i > gate, name+" runs before the gate")
+			testutil.Excludes(t, s.If, "always()", "failure()", "cancelled()", "!(", "||")
+		}
+		testutil.True(t, found, "no step "+name)
+	}
 }

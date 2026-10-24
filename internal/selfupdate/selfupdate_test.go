@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -466,4 +467,14 @@ func TestABrokenCompareFails(t *testing.T) {
 	f.hub.routes[comparePath] = "{"
 	testutil.Fails(t, f.u.Run(context.Background(), ""))
 	testutil.Equal(t, testutil.Read(t, f.u.Binary), oldBinary)
+}
+
+func TestFilesKeepTheirModeUnderAStrictUmask(t *testing.T) {
+	old := syscall.Umask(0o077)
+	t.Cleanup(func() { syscall.Umask(old) })
+	f := newFixture(t)
+	testutil.NoErr(t, f.u.Run(context.Background(), ""))
+	testutil.Perm(t, f.u.Binary, binaryPerm)
+	testutil.NoErr(t, f.u.Sudo.Sync(context.Background()))
+	testutil.Perm(t, f.u.Sudo.Path, sudoersPerm)
 }
