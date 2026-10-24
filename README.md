@@ -634,9 +634,13 @@ that passed the full gate on `main`:
    with no `Runner.Worker` in their cgroup, so a running job (a PR gate, a
    deploy) is not cut off. A busy runner keeps its pending restart; every later
    `ci-runner-sync` (each self-update timer run, every 10 minutes) restarts it
-   once its job is done. A job that a runner picks up in the instant between
-   the check and the restart can still fail. A rollback runs `host` of the
-   previous tree, and trees older than this change restart every runner.
+   once its job is done. Both commands call systemctl only as
+   `systemctl-ci-runner`, whose arguments the executor limits to
+   `show -p ControlGroup --value ci-runner@<repo>.service` and
+   `try-restart ci-docker@<repo>.service ci-runner@<repo>.service`. A job that a
+   runner picks up in the instant between the check and the restart can still
+   fail. A rollback runs `host` of the previous tree, and trees older than this
+   change restart every runner.
 
 Every installed or refused release is journaled (`deploy-hub@<sha7> self-update
 ok|fail`, a restore adds `restored=ok|fail`); a run that finds the installed

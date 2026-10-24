@@ -23,7 +23,6 @@ const (
 	jobProcess        = "Runner.Worker"
 	cgroupProcs       = "cgroup.procs"
 	markerPerm        = 0o600
-	systemctl         = "systemctl"
 )
 
 type Runners struct {
@@ -76,7 +75,7 @@ func (r Runners) restart(ctx context.Context, repo string) {
 		r.Log.Info("ci runner runs a job, restart deferred", "runner", repo)
 		return
 	}
-	cmd := procexec.Command{Name: systemctl, Args: []string{"try-restart", dockerUnitPrefix + repo + unitSuffix, runnerUnitPrefix + repo + unitSuffix}}
+	cmd := procexec.Command{Name: procexec.CIRunnerSystemctl, Args: []string{"try-restart", dockerUnitPrefix + repo + unitSuffix, runnerUnitPrefix + repo + unitSuffix}}
 	if _, err := r.Exec.Run(ctx, cmd); err != nil {
 		r.Log.Error("ci runner restart failed", "runner", repo, "error", err.Error(), "output", procexec.Output(err))
 		return
@@ -89,7 +88,7 @@ func (r Runners) restart(ctx context.Context, repo string) {
 }
 
 func (r Runners) busy(ctx context.Context, repo string) (bool, error) {
-	res, err := r.Exec.Run(ctx, procexec.Command{Name: systemctl, Args: []string{"show", "-p", "ControlGroup", "--value", runnerUnitPrefix + repo + unitSuffix}})
+	res, err := r.Exec.Run(ctx, procexec.Command{Name: procexec.CIRunnerSystemctl, Args: []string{"show", "-p", "ControlGroup", "--value", runnerUnitPrefix + repo + unitSuffix}})
 	if err != nil {
 		return false, err
 	}
