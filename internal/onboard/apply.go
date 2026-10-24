@@ -39,9 +39,10 @@ func (s *session) plan() []string {
 		add(!s.secrets[name], planRepoKey, name, s.opts.Repo)
 	}
 	add(!f.DirExists, planDir, dir)
-	add(!f.ComposeExists, planCompose, dir, s.image, s.portsNote(), s.opts.Mem)
+	container := s.opts.Profile != registry.ProfileHost
+	add(container && !f.ComposeExists, planCompose, dir, s.image, s.portsNote(), s.opts.Mem)
 	add(!f.ConfExists, planConf, dir, s.opts.Profile, s.confPortNote(), s.opts.HealthPath)
-	add(!f.EnvExists, planEnv, dir)
+	add(container && !f.EnvExists, planEnv, dir)
 	add(!f.InList, planList, s.opts.App, dir)
 	return out
 }

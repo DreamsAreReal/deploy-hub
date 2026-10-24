@@ -72,6 +72,7 @@ type Service struct {
 	Catalog     *arch.Catalog
 	HostDirs    arch.HostDirs
 	Visits      func(context.Context) ([]arch.Visit, error)
+	HostOnly    []string
 	samples     []obs.Sample
 	steps       []delivery.Step
 }

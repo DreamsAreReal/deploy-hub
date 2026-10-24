@@ -522,3 +522,20 @@ func TestRefMustBeABranchName(t *testing.T) {
 		testutil.Equal(t, w.exec.Count("git clone"), 0)
 	}
 }
+
+func TestHostProfilePlansNoContainer(t *testing.T) {
+	w := newWorld(t)
+	if code := w.run(appWeb, flagDryRun, flagProfile, "host", flagPort, "9100"); code != ExitOK {
+		t.Fatalf("exit %d\n%s", code, w.err)
+	}
+	w.expect(w.out, "write /opt/web/app.conf (profile=host health_path=/)", "allowlist: add 'web /opt/web' to apps.list")
+	testutil.Excludes(t, w.out.String(), "docker-compose.yml")
+	testutil.Excludes(t, w.out.String(), ".env")
+	w2 := newWorld(t)
+	if code := w2.run(appWeb, flagProfile, "host"); code != ExitOK {
+		t.Fatalf("exit %d\n%s", code, w2.err)
+	}
+	if len(w2.provisions) != 1 || !strings.Contains(w2.provisions[0], "--profile host --mem 128m") || strings.Contains(w2.provisions[0], flagPort) {
+		t.Fatalf("host provision: %v", w2.provisions)
+	}
+}

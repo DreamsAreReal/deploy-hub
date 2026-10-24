@@ -2,6 +2,7 @@ package policy
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/testutil"
@@ -123,4 +124,25 @@ func TestHubSudoCommandsComeFromAFixedList(t *testing.T) {
 	} {
 		testutil.True(t, errors.Is(h.validate(), ErrHub), name)
 	}
+}
+
+func TestHostKindNeedsAHostSpec(t *testing.T) {
+	spec := `
+  ops:
+    repo: Owner/ops
+    kind: host
+`
+	_, err := Parse([]byte(valid + spec))
+	testutil.Is(t, err, ErrPolicy)
+	testutil.True(t, err != nil && strings.Contains(err.Error(), "kind host needs a host spec"), "names the missing spec")
+	p, err := Parse([]byte(valid + spec + `    host:
+      files:
+        - {src: ops, dst: /usr/local/sbin/ops, owner: root, group: root, mode: "0755"}
+`))
+	testutil.NoErr(t, err)
+	app, err := p.App("ops")
+	testutil.NoErr(t, err)
+	testutil.True(t, app.HostOnly() && app.HasImage() && !app.HasHTTP(), "a host app ships an image, has no HTTP surface")
+	bot, _ := p.App("bot")
+	testutil.True(t, !bot.HostOnly(), "a worker runs a container")
 }

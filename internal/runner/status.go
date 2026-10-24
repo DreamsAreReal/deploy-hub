@@ -32,7 +32,7 @@ func (s appStatus) line() string {
 }
 
 func (s appStatus) up() bool {
-	return s.state == health.StatusRunning
+	return s.state == health.StatusRunning || s.state == stateInstalled
 }
 
 func (s appStatus) healthy() bool {
@@ -74,6 +74,9 @@ func (s *Service) appStatus(ctx context.Context, a registry.Entry, entries []jou
 	}
 	if op, ok := journal.LastContainerOp(entries); ok {
 		st.last = op.Stamp()
+	}
+	if s.hostOnly(a.Name) {
+		return hostStatus(st, entries)
 	}
 	conf, confErr := registry.LoadAppConf(a.Dir)
 	st.public = confErr == nil && caddy.Public(conf)

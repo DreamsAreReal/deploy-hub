@@ -25,6 +25,7 @@ const (
 	botMem     = "128m"
 	freshApp   = "fresh"
 	webImage   = "ghcr.io/owner/web"
+	opsImage   = "ghcr.io/owner/ops"
 )
 
 const webRepo = "owner/web"
@@ -238,4 +239,24 @@ func TestEnsureStatError(t *testing.T) {
 	var created []string
 	testutil.Fails(t, f.provisioner().ensure(step{path: filepath.Join(blocker, "\x00bad"), create: func(string) error { return nil }}, &created))
 	testutil.Equal(t, len(created), 0)
+}
+
+func TestProvisionHostAppWritesOnlyItsConf(t *testing.T) {
+	f := newFixture(t)
+	r := Request{App: "ops", Profile: registry.ProfileHost, Port: "9100", CPort: "80", Mem: botMem, HealthPath: "/", Image: opsImage, Repo: "owner/ops"}
+	testutil.NoErr(t, r.Validate())
+	testutil.NoErr(t, f.provisioner().Run(context.Background(), r))
+	dir := filepath.Join(f.root, "ops")
+	for _, name := range []string{registry.ComposeFile, registry.EnvFile} {
+		if _, err := os.Stat(filepath.Join(dir, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s written for a host-only app: %v", name, err)
+		}
+	}
+	conf, err := registry.LoadAppConf(dir)
+	testutil.NoErr(t, err)
+	testutil.Equal(t, conf, registry.AppConf{Profile: registry.ProfileHost, HealthPath: "/", Image: opsImage, Repo: "owner/ops"})
+	testutil.Equal(t, f.metrics.samples[0].Value, 3.0)
+	if e, lerr := f.apps.Lookup("ops"); lerr != nil || e.Dir != dir {
+		t.Fatalf("lookup %+v %v", e, lerr)
+	}
 }

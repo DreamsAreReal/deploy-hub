@@ -99,6 +99,7 @@ func (a *App) runnerService(ex procexec.Runner) *runner.Service {
 		HostDirs:    arch.HostDirs{Units: policy.UnitDir, Sites: policy.CaddySiteDir, Net: arch.ProcNetDir, Accounts: arch.AccountsDir},
 		Visits:      a.visits(),
 		HostApps:    a.hostApps(),
+		HostOnly:    a.hostOnlyApps(),
 	}
 }
 

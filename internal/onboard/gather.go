@@ -142,9 +142,10 @@ func applyProfileDefaults(o *Options) {
 		registry.ProfileStatic:  {staticCPort, staticMem},
 		registry.ProfileService: {serviceCPort, serviceMem},
 		registry.ProfileBot:     {"", botMem},
+		registry.ProfileHost:    {"", botMem},
 	}
 	d := defaults[o.Profile]
-	if o.Profile == registry.ProfileBot {
+	if registry.Containerless(o.Profile) {
 		o.CPort, o.Port = "", ""
 	}
 	if o.CPort == "" {
@@ -172,7 +173,7 @@ func (o Onboarder) choosePort(_ context.Context, s *session) error {
 
 func pickPort(profile, requested, existing string, taken []int) (string, error) {
 	switch {
-	case profile == registry.ProfileBot:
+	case registry.Containerless(profile):
 		return "", nil
 	case existing != "":
 		return existing, nil

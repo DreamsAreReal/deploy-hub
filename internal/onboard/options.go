@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	Usage = `usage: deploy-hub onboard <repo> [--profile <static|bot|service>] [--port N] [--cport N] [--mem LIMIT] [--health-path P] [--app NAME] [--dockerfile PATH] [--compose PATH] [--ref BRANCH] [--dry-run]
+	Usage = `usage: deploy-hub onboard <repo> [--profile <static|bot|service|host>] [--port N] [--cport N] [--mem LIMIT] [--health-path P] [--app NAME] [--dockerfile PATH] [--compose PATH] [--ref BRANCH] [--dry-run]
        (--profile is optional: omitted => auto-detect from the repo)
        (--ref reads the repo from BRANCH instead of the default one; the caller stub must already be there)
        deploy-hub onboard status | history <app>     # read-only, over the deploy channel`
