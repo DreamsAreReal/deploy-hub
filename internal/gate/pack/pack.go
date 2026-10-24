@@ -78,25 +78,25 @@ type Layout struct {
 	Orphans  []string
 }
 
-func Discover(files []string, packs []Pack) Layout {
+func Discover(files []string, ext func(string) string, packs []Pack) Layout {
 	files = slices.DeleteFunc(slices.Clone(files), source.Fixture)
 	var layout Layout
 	for i := range packs {
-		projects, orphans := discoverPack(&packs[i], files)
+		projects, orphans := discoverPack(&packs[i], files, ext)
 		layout.Projects = append(layout.Projects, projects...)
 		layout.Orphans = append(layout.Orphans, orphans...)
 	}
-	layout.Orphans = append(layout.Orphans, unclaimed(files, packs)...)
+	layout.Orphans = append(layout.Orphans, unclaimed(files, ext, packs)...)
 	slices.Sort(layout.Orphans)
 	return layout
 }
 
-func discoverPack(p *Pack, files []string) ([]Project, []string) {
+func discoverPack(p *Pack, files []string, ext func(string) string) ([]Project, []string) {
 	roots := manifestRoots(files, p.Manifests)
 	if p.Outermost {
 		roots = outermost(roots)
 	}
-	homeless := homelessSources(p, files, roots)
+	homeless := homelessSources(p, files, ext, roots)
 	var orphans []string
 	switch {
 	case !p.Loose:
@@ -123,10 +123,10 @@ func outermost(roots []string) []string {
 	return out
 }
 
-func homelessSources(p *Pack, files, roots []string) []string {
+func homelessSources(p *Pack, files []string, ext func(string) string, roots []string) []string {
 	var out []string
 	for _, f := range files {
-		if slices.Contains(p.Sources, path.Ext(f)) && nearestRoot(roots, path.Dir(f)) == "" {
+		if slices.Contains(p.Sources, ext(f)) && nearestRoot(roots, path.Dir(f)) == "" {
 			out = append(out, f)
 		}
 	}
@@ -163,11 +163,11 @@ func nearestRoot(roots []string, dir string) string {
 	return best
 }
 
-func unclaimed(files []string, packs []Pack) []string {
+func unclaimed(files []string, ext func(string) string, packs []Pack) []string {
 	var out []string
 	for _, f := range files {
-		if lexis.IsCode(f) && owner(packs, path.Ext(f)) == nil {
-			out = append(out, fmt.Sprintf(orphanNoPack, f, path.Ext(f)))
+		if e := ext(f); lexis.IsCodeExt(e) && owner(packs, e) == nil {
+			out = append(out, fmt.Sprintf(orphanNoPack, f, e))
 		}
 	}
 	return out
@@ -184,7 +184,7 @@ func owner(packs []Pack, ext string) *Pack {
 
 func layoutOf(ctx context.Context, ws gate.Workspace, packs []Pack) (Layout, error) {
 	files, err := source.Tracked(ctx, ws.Exec, ws.Src)
-	return Discover(files, packs), err
+	return Discover(files, func(f string) string { return source.Ext(ws.Src, f) }, packs), err
 }
 
 func withLayout(packs []Pack, judge func(context.Context, gate.Workspace, Layout) gate.Outcome) Run {

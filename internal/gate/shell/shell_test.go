@@ -299,3 +299,13 @@ func TestShellMutationNeedsReports(t *testing.T) {
 	_, err = os.Stat(w.WS.Report(linecov.ReportFile))
 	testutil.NoErr(t, err)
 }
+
+func TestScriptsWithoutExtensionAreChecked(t *testing.T) {
+	w := newWorld(t, map[string]string{"agent/apply": "#!/bin/sh\necho ok\n", "agent/run": "#!/usr/bin/ucode\nlet x = 1;\n", readmeFile: "x"})
+	w.On(ShellcheckBinary, `{"comments":[]}`, nil)
+	w.On(ShfmtBinary, "", nil)
+	testutil.Equal(t, Lint(context.Background(), w.WS).Status, gate.StatusPass)
+	check, _ := w.Fake.Find(ShellcheckBinary)
+	testutil.Equal(t, check.Args[len(check.Args)-1], "agent/apply")
+	testutil.Equal(t, Complexity(context.Background(), w.WS).Values[ValueFunctions], float64(1))
+}

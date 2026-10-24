@@ -67,7 +67,7 @@ var (
 )
 
 func scripts(ctx context.Context, ws gate.Workspace) ([]string, error) {
-	return source.Select(ctx, ws, func(f string) bool { return slices.Contains(Sources, path.Ext(f)) })
+	return source.Select(ctx, ws, func(f string) bool { return slices.Contains(Sources, source.Ext(ws.Src, f)) })
 }
 
 func Lint(ctx context.Context, ws gate.Workspace) gate.Outcome {

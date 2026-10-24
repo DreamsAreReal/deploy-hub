@@ -189,3 +189,13 @@ func TestLimitIsStrict(t *testing.T) {
 	w.Policy.Thresholds.MaxDuplication += 0.001
 	testutil.Equal(t, Check(context.Background(), w).Status, gate.StatusPass)
 }
+
+func TestShellScriptsWithoutExtensionAreCounted(t *testing.T) {
+	loop := "for host in a b c; do\n  ping -c1 -W2 \"$host\" >/dev/null && echo up \"$host\"\ndone\n"
+	body := "#!/bin/sh\n" + strings.Repeat(loop, 3)
+	files := map[string][]byte{"agent/one": []byte(body), "agent/two": []byte(body), "agent/run": []byte("#!/usr/bin/ucode\nlet x = 1;\n")}
+	out := Check(context.Background(), workspace(t, files, nil))
+	testutil.Equal(t, out.Status, gate.StatusFail)
+	testutil.Equal(t, out.Values[ValueCodeLines], float64(18))
+	testutil.Equal(t, out.Values[ValueDupLines], float64(18))
+}

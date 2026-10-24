@@ -141,3 +141,34 @@ func FuzzLex(f *testing.F) {
 		}
 	})
 }
+
+func TestShebangNamesTheLanguageOfFilesWithoutExtension(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"run", "#!/bin/sh\necho hi\n", ExtSh},
+		{"init", "#!/bin/sh /etc/rc.common\nstart() { :; }\n", ExtSh},
+		{"ash", "#!/bin/ash\n", ExtSh},
+		{"tool", "#!/usr/bin/env bash\n", ExtBash},
+		{"split", "#!/usr/bin/env -S bash -e\n", ExtBash},
+		{"agent", "#!/usr/bin/ucode\nlet x = 1;\n", "#!ucode"},
+		{"proxy", "#!/usr/bin/python3\n", "#!python3"},
+		{"named.sh", "#!/usr/bin/ucode\n", ExtSh},
+		{"LICENSE", "MIT\n", ""},
+		{"blank", "#!\n", ""},
+		{"bare-env", "#!/usr/bin/env\n", ""},
+		{"empty", "", ""},
+	}
+	for _, c := range cases {
+		testutil.Equal(t, Ext(c.name, []byte(c.src)), c.want)
+	}
+	testutil.True(t, IsCodeExt("#!ucode") && IsCodeExt(ExtSh) && IsCode("a.go"), "scripts and known extensions are code")
+	testutil.True(t, !IsCodeExt("") && !IsCodeExt(".md"), "prose and plain files are not code")
+}
+
+func TestShellScriptsWithoutExtensionAreLexedAsShell(t *testing.T) {
+	testutil.Equal(t, noteLines(t, "agent/apply", "#!/bin/sh\n# yes\necho $# a#b # yes\n"), []int{2, 3})
+	_, known, err := Lex("agent/run", []byte("#!/usr/bin/ucode\n// yes\n"))
+	testutil.NoErr(t, err)
+	testutil.True(t, !known, "ucode has no lexer")
+	_, known, _ = Lex("x.unknownext", []byte("#!/bin/sh\n"))
+	testutil.True(t, !known, "an unknown extension is not guessed from the shebang")
+}

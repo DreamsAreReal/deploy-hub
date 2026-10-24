@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"go/scanner"
 	"go/token"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -70,6 +71,20 @@ func Tracked(ctx context.Context, ex procexec.Runner, dir string) ([]string, err
 		}
 	}
 	return files, nil
+}
+
+func Ext(dir, rel string) string {
+	if ext := path.Ext(rel); ext != "" {
+		return ext
+	}
+	f, err := os.Open(filepath.Clean(filepath.Join(dir, filepath.FromSlash(rel))))
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = f.Close() }()
+	head := make([]byte, binarySniff)
+	n, _ := io.ReadFull(f, head)
+	return lexis.Ext(rel, head[:n])
 }
 
 func Fixture(rel string) bool {

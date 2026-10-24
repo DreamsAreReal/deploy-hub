@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,15 +18,16 @@ import (
 )
 
 const (
-	stackA    = "alpha"
-	stackB    = "beta"
-	stackC    = "gamma"
-	checkName = "probe"
-	webRoot   = "web"
-	manifestA = "a.mod"
-	readme    = "README.md"
-	testGo    = "go.TestA"
-	testWeb   = "Web.Tests.B"
+	stackA       = "alpha"
+	stackB       = "beta"
+	stackC       = "gamma"
+	stackCSource = ".sh"
+	checkName    = "probe"
+	webRoot      = "web"
+	manifestA    = "a.mod"
+	readme       = "README.md"
+	testGo       = "go.TestA"
+	testWeb      = "Web.Tests.B"
 )
 
 var errSim = errors.New("simulated")
@@ -34,7 +36,7 @@ func testPacks(run Run) []Pack {
 	return []Pack{
 		{Stack: stackA, Manifests: []string{manifestA}, Sources: []string{".go"}, Checks: map[string]Run{checkName: run}},
 		{Stack: stackB, Manifests: []string{"*.proj"}, Sources: []string{".cs"}, Checks: map[string]Run{checkName: run}},
-		{Stack: stackC, Sources: []string{".sh"}, Loose: true, Checks: map[string]Run{checkName: run}},
+		{Stack: stackC, Sources: []string{stackCSource}, Loose: true, Checks: map[string]Run{checkName: run}},
 	}
 }
 
@@ -44,7 +46,7 @@ func TestDiscoverFindsProjectsAndOrphans(t *testing.T) {
 		"web/app.proj", "web/src/a.cs", "web/tests/t.proj", "web/tests/t.cs", "lonely.cs",
 		"scripts/run.sh", "Gemfile", "lib/tool.rb", readme,
 	}
-	layout := Discover(files, testPacks(nil))
+	layout := Discover(files, path.Ext, testPacks(nil))
 	labels := make([]string, 0, len(layout.Projects))
 	for _, p := range layout.Projects {
 		labels = append(labels, p.Label())
@@ -56,22 +58,31 @@ func TestDiscoverFindsProjectsAndOrphans(t *testing.T) {
 	})
 }
 
+func TestShebangScriptsJoinTheirPackOrAreOrphans(t *testing.T) {
+	apply, agent := "agent/apply", "agent/run"
+	kinds := map[string]string{apply: stackCSource, agent: "#!ucode", readme: ""}
+	layout := Discover([]string{apply, agent, readme}, func(f string) string { return kinds[f] }, testPacks(nil))
+	testutil.Equal(t, len(layout.Projects), 1)
+	testutil.Equal(t, layout.Projects[0].Label(), stackC)
+	testutil.Equal(t, layout.Orphans, []string{"agent/run: no language pack for #!ucode files"})
+}
+
 func TestFixturesBelongToNoProject(t *testing.T) {
-	layout := Discover([]string{manifestA, "cmd/app.go", "lib/testdata/old.cs", "testdata/run.sh", "store/testdata/schema.rb"}, testPacks(nil))
+	layout := Discover([]string{manifestA, "cmd/app.go", "lib/testdata/old.cs", "testdata/run.sh", "store/testdata/schema.rb"}, path.Ext, testPacks(nil))
 	testutil.Equal(t, len(layout.Projects), 1)
 	testutil.Equal(t, len(layout.Orphans), 0)
 }
 
 func TestLooseSourcesJoinARootProject(t *testing.T) {
-	layout := Discover([]string{"a.sh", "deep/b.sh"}, testPacks(nil))
+	layout := Discover([]string{"a.sh", "deep/b.sh"}, path.Ext, testPacks(nil))
 	testutil.Equal(t, len(layout.Projects), 1)
 	testutil.Equal(t, layout.Projects[0].Root, rootDir)
-	none := Discover([]string{readme}, testPacks(nil))
+	none := Discover([]string{readme}, path.Ext, testPacks(nil))
 	testutil.Equal(t, len(none.Projects)+len(none.Orphans), 0)
-	rooted := Discover([]string{manifestA, "x.go", "sub/a.mod", "sub/y.go", "subway/z.go"}, testPacks(nil))
+	rooted := Discover([]string{manifestA, "x.go", "sub/a.mod", "sub/y.go", "subway/z.go"}, path.Ext, testPacks(nil))
 	testutil.Equal(t, len(rooted.Projects), 2)
 	testutil.Equal(t, len(rooted.Orphans), 0)
-	nested := Discover([]string{"svc/a.mod", "svc/x.go", "svcx/y.go"}, testPacks(nil))
+	nested := Discover([]string{"svc/a.mod", "svc/x.go", "svcx/y.go"}, path.Ext, testPacks(nil))
 	testutil.Equal(t, nested.Orphans, []string{"svcx/y.go: alpha source outside a project (a.mod)"})
 	testutil.Equal(t, nearestRoot([]string{".", webRoot, "web/sub"}, "web/sub/deep"), "web/sub")
 	testutil.Equal(t, nearestRoot([]string{webRoot}, "webapp"), "")
@@ -81,10 +92,10 @@ func TestLooseSourcesJoinARootProject(t *testing.T) {
 func TestOutermostRootsAbsorbNestedManifests(t *testing.T) {
 	packs := testPacks(nil)
 	packs[1].Outermost = true
-	layout := Discover([]string{"app.proj", "src/a/a.proj", "src/a/x.cs", "tests/t/t.proj", "tests/t/y.cs"}, packs)
+	layout := Discover([]string{"app.proj", "src/a/a.proj", "src/a/x.cs", "tests/t/t.proj", "tests/t/y.cs"}, path.Ext, packs)
 	testutil.Equal(t, len(layout.Projects), 1)
 	testutil.Equal(t, layout.Projects[0].Root, rootDir)
-	split := Discover([]string{"svc/a.proj", "svc/x.cs", "web/b.proj", "web/sub/c.proj", "web/y.cs"}, packs)
+	split := Discover([]string{"svc/a.proj", "svc/x.cs", "web/b.proj", "web/sub/c.proj", "web/y.cs"}, path.Ext, packs)
 	testutil.Equal(t, len(split.Projects), 2)
 	testutil.Equal(t, outermost([]string{".", "a"}), []string{"."})
 	nested := "ab"
