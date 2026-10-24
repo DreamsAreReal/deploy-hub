@@ -26,9 +26,6 @@ const (
 	systemctl         = "systemctl"
 )
 
-// Runners restarts the CI runners after their host files changed, but only
-// the idle ones: a runner that runs a job (Runner.Worker in its cgroup) keeps
-// its restart pending until a later sync finds it idle.
 type Runners struct {
 	Pending string
 	Wants   string
@@ -38,7 +35,6 @@ type Runners struct {
 	Log     *slog.Logger
 }
 
-// MarkAll leaves a pending restart for every enabled runner.
 func (r Runners) MarkAll() error {
 	links, err := filepath.Glob(filepath.Join(r.Wants, runnerUnitPrefix+"*"+unitSuffix))
 	if err != nil {
@@ -56,8 +52,6 @@ func (r Runners) MarkAll() error {
 	return nil
 }
 
-// RestartIdle restarts every runner with a pending restart that runs no job.
-// A failure keeps the restart pending for the next sync.
 func (r Runners) RestartIdle(ctx context.Context) {
 	entries, err := os.ReadDir(r.Pending)
 	if errors.Is(err, fs.ErrNotExist) {

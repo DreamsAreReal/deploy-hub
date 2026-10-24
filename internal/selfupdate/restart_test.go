@@ -56,8 +56,6 @@ func (h *ciHost) cgroup(repo string) string {
 	return filepath.Join(h.r.Runners.Cgroups, "user.slice", "user-1001.slice", runnerUnitPrefix+repo+unitSuffix)
 }
 
-// processes puts one process per name into the cgroup (or a child cgroup) of
-// the runner of repo, replacing what that cgroup held.
 func (h *ciHost) processes(t *testing.T, repo, child string, names ...string) {
 	t.Helper()
 	pids := ""
