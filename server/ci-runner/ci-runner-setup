@@ -157,6 +157,7 @@ disk() {
   systemctl daemon-reload
   install -d -m 755 "$CI_ROOT"
   systemctl enable --now var-lib-ci.mount
+  findmnt -no OPTIONS "$CI_ROOT" | tr ',' '\n' | grep -qx discard || mount -o remount,discard "$CI_ROOT"
   chown root:root "$CI_ROOT"
   chmod 755 "$CI_ROOT"
 }

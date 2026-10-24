@@ -853,7 +853,7 @@ Isolation, all in [`server/ci-runner`](server/ci-runner):
 | network | one namespace per repository, `ci-<repo>` (`ci-netns@<repo>`): the runner, its rootless `dockerd` and the user manager of `ci-<repo>` all run in it. Its own veth pair (`cih<uid>` on the host, `cin<uid>` inside) and a /30 out of `10.79.0.0/16` picked by the uid of `ci-<repo>` (host side `.1`, namespace `.2` of the block `10.79.0.0 + 4 × uid`); NAT to the internet only. The host loopback (Caddy admin, VictoriaMetrics/Logs, Bugsink), the `shared` and other Docker networks, private ranges and the metadata address are dropped; of the host only SSH/HTTP/HTTPS on the public address answer. The drops live in the nftables table `inet ci_netns`, which neither Docker nor an iptables reload touches, and a drop there is final whatever Docker puts first in `FORWARD`; its rules match every host-side veth by the name prefix `cih*`, so a new repo needs no rule change. Ports published by gate containers (rootlesskit's builtin port driver) live on the repo's own namespace, so a job of one repo cannot connect to the app, database or DAST target of another, take its port first, or reach its abstract unix sockets; the other namespace's addresses are in `10.0.0.0/8` and dropped |
 | which jobs | job-started hook `ci-job-started`: workflows of the repo's own `main` (push, `workflow_dispatch` or `schedule`) and pull requests into `main` from the repo itself (`refs/pull/<n>/merge`, head repo checked in the event payload); other branches, fork pull requests and other events fail before their first step. Pull request jobs get no deploy secrets, and a main deploy cancels them ([Pull request gate](#pull-request-gate)) |
 | CPU, memory | every repo has its slice `user-<uid of ci-<repo>>.slice` (its runner, its `dockerd` and its user manager with the containers), each with `ci-limits.conf`: 6 of 8 CPUs, CPU and IO weight 20 (production keeps priority), `MemoryHigh` 8G, `MemoryMax` 9G, no swap. Two jobs at once take at most 18G of the host's 23G; the gate sizes its mutation workers from the cgroup limit |
-| disk | `/var/lib/ci` is the ext4 image `/srv/ci.img` (240G; `CI_DISK_SIZE` for a new one): CI can never fill `/` |
+| disk | `/var/lib/ci` is the ext4 image `/srv/ci.img` (240G; `CI_DISK_SIZE` for a new one): CI can never fill `/`; mounted with `discard`, so blocks freed inside go back to `/` (the sparse image does not grow to its full size) |
 | disk quota | each repo has a hard ext4 project quota on `/var/lib/ci` (project id = uid of `ci-<repo>`, limits in GiB in `server/ci-runner/ci-disk-quota`: tasks 140, router-bot 40, observability 10, deploy-hub 35), so one repo cannot fill the disk of the others; `register` refuses a repo without a line there. Writes over the quota fail with `Disk quota exceeded`; the job hook prints an error with the usage, and `ci-job-started` refuses jobs while the quota is 95% full |
 | leftover processes | `ci-runner-reap`, run by both job hooks: SIGKILL to every process in the runner's cgroup that is not a descendant of the runner itself (`runsvc.sh` → `RunnerService.js` → `Runner.Listener` → `Runner.Worker` → steps). A step that forks into the background or daemonizes is reparented away from the runner and dies when the job ends, and again before the first step of the next job, so it cannot read the environment (`SSH_KEY`, `GH_TOKEN`) of a later job. A stop or restart of `ci-runner@<repo>` kills the whole cgroup (`KillMode=control-group`) |
 | cleanup | job-completed hook `ci-runner-clean`: removes the job's containers, networks, volumes and pushed images, trims the build cache to 15 GB, empties the workspace, `RUNNER_TEMP`, `TMPDIR`, the tool cache and the downloaded actions; above 70% disk it drops all images and the language caches |
@@ -1388,9 +1388,33 @@ hand-managed vhosts that are not deploy-hub apps.
   privileges: a user `ci-<repo>` per repo without sudo or the system Docker socket, rootless
   Docker, a network namespace that reaches only the internet, sandboxed units
   and CPU/memory/disk caps (see [Self-hosted CI runner](#self-hosted-ci-runner)).
-  Public repos and forks never get it.
+  Pull requests from forks are refused by the job-started hook.
 - Workflow actions are pinned by commit SHA; the gate toolchain is pinned by
   version and sha256.
+
+### Without branch protection
+
+The repos are private on the free plan, so GitHub offers no branch protection,
+rulesets or required checks: anyone with write access can merge or push to
+`main` before its gate. Production does not depend on that:
+
+- **Apps.** A push to `main` runs `deploy.yml`, whose one job runs the gate
+  before it pushes the image or calls the hub; those steps have no `always()`,
+  so a failed gate stops them, and the hub accepts `deploy` only with an OIDC
+  token of `deploy.yml@refs/heads/main` for that repo and commit and pulls
+  the image by the digest that job pushed (e2e
+  `TestNothingReachesProductionBeforeTheGatePasses`,
+  `TestOnlyTheHubWorkflowCanDeploy`). A commit merged before its pull request
+  gate is gated again on the push and never deployed when it fails.
+- **The hub.** `self-update` installs only a release `sha-<commit>` of a commit
+  with a successful `ci.yml` push run on `main` whose binary matches the
+  published sha256, and only one that descends from the installed commit
+  (`TestRefusesReleasesThatAreNotGatedBuilds`). The release is published only
+  by that run after its gate passed.
+- **Residual risk.** App deploys use `deploy.yml` of the hub's `main` as it is
+  at that moment: a change to `deploy.yml` that reaches `main` before its own
+  gate applies to the next app deploy. Review changes to `deploy.yml` with that
+  in mind.
 
 ## Development
 

@@ -5,7 +5,7 @@ Description=CI disk (fixed-size image)
 What=/srv/ci.img
 Where=/var/lib/ci
 Type=ext4
-Options=loop,nodev,noatime,prjquota
+Options=loop,nodev,noatime,discard,prjquota
 
 [Install]
 WantedBy=multi-user.target
