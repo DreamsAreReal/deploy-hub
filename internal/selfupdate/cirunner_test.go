@@ -45,7 +45,7 @@ func newRunnerFixture(t *testing.T) *runnerFixture {
 		f.seen = append(f.seen, testutil.Read(t, filepath.Join(f.r.Dir, hookName)))
 		return f.script.Handle(c)
 	}}
-	f.r = RunnerFiles{Files: runnerTree(), Dir: filepath.Join(t.TempDir(), "ci-runner"), Exec: f.exec}
+	f.r = RunnerFiles{Files: runnerTree(), Dir: filepath.Join(t.TempDir(), "ci-runner"), Exec: f.exec, Runners: idleHost(t, f.exec)}
 	return f
 }
 

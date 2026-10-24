@@ -282,7 +282,6 @@ host() {
       echo "warning: no disk quota for $repo until '$0 quota-enable' runs" >&2
     fi
   done
-  systemctl try-restart 'ci-docker@*.service' 'ci-runner@*.service'
 }
 
 register() {
