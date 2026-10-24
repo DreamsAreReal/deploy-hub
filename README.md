@@ -220,7 +220,10 @@ dependencies, licenses, workflows, image, DAST); the quality checks are
 reported as `n/a`. Checks that need an image or an HTTP surface are `n/a` for
 app kinds without one (`binary`, `worker`). Nothing else is ever skipped, and a
 check that cannot finish (tool crash, timeout) fails. Each check gets
-`check_timeout`; mutation testing gets `long_check_timeout`.
+`check_timeout`; mutation testing gets `long_check_timeout`. The checks run one
+after another, and the isolated stage (`dast`, `load`) runs before mutation
+testing, so a stage that does not come up is reported within minutes of the
+start rather than hours; the order changes no verdict, every check still runs.
 
 **Mutation testing** is a built-in engine with every mandatory operator:
 condition inversion, comparison and boundary changes, arithmetic and logical
