@@ -81,3 +81,40 @@ func TestRunKillsOnContextCancel(t *testing.T) {
 	testutil.Is(t, err, context.DeadlineExceeded)
 	testutil.True(t, time.Since(started) < 2*time.Second, "process was not killed promptly")
 }
+
+func showUnit(prop string, units ...string) []string {
+	return append([]string{"show", "-p", prop, "--value"}, units...)
+}
+
+func TestCIRunnerSystemctlTakesOnlyTheRunnerStateAndRestart(t *testing.T) {
+	const (
+		runner  = "ci-runner@stt.service"
+		other   = "ssh.service"
+		restart = "try-restart"
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	o := NewOS(CIRunnerSystemctl)
+	allowed := [][]string{
+		showUnit("ControlGroup", "ci-runner@deploy-hub.service"),
+		{restart, "ci-docker@stt.service", runner},
+	}
+	for _, args := range allowed {
+		_, err := o.Run(ctx, Command{Name: CIRunnerSystemctl, Args: args})
+		testutil.Is(t, err, context.Canceled)
+	}
+	refused := [][]string{
+		nil,
+		{"stop", runner},
+		{restart, other},
+		{restart, "ci-docker@*.service", "ci-runner@*.service"},
+		showUnit("ControlGroup", runner, other),
+		showUnit("ControlGroup", runner+" "+other),
+		showUnit("Environment", runner),
+		{"start", "ci-runner@../../" + other},
+	}
+	for _, args := range refused {
+		_, err := o.Run(ctx, Command{Name: CIRunnerSystemctl, Args: args})
+		testutil.Is(t, err, ErrArgsNotAllowed)
+	}
+}
