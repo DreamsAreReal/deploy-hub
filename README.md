@@ -306,6 +306,12 @@ mounts a fresh named volume on each one and removes it with the container, so
 the load test and the scan hit the app as it runs in production, not a
 fallback for a missing volume.
 
+**A stage that never comes up.** When the stage publishes no loopback port or
+never answers its health path, the gate inspects the container before removing
+it: the check's reason and the `gate stage failed` log line carry its state
+(`running`, `oom`, `restarts`, `exit`) and the last 50 lines of `docker logs`,
+the reason keeping the tail of them.
+
 **DAST.** The same isolated stage runs an OWASP ZAP full scan (or the API scan
 when the app declares an OpenAPI path) for the time budget in the policy; any
 alert of Low risk or above blocks the deploy.

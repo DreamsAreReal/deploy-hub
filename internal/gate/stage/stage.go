@@ -23,8 +23,12 @@ const (
 	readyInterval  = time.Second
 	probeTimeout   = 5 * time.Second
 	firstBadStatus = 400
-	inspectFormat  = "{{.State.Running}} {{.State.OOMKilled}} {{.RestartCount}}"
-	stateFields    = 3
+	inspectFormat  = "{{.State.Running}} {{.State.OOMKilled}} {{.RestartCount}} {{.State.ExitCode}}"
+	stateFields    = 4
+	logsTail       = "50"
+	diagTimeout    = 10 * time.Second
+	diagFormat     = "%w; container: %s; logs: %s"
+	stateFormat    = "running=%t oom=%t restarts=%d exit=%d"
 	stateTrue      = "true"
 	flagNetwork    = "--network"
 	schemeHTTP     = "http://"
@@ -50,6 +54,7 @@ type State struct {
 	Running  bool
 	OOM      bool
 	Restarts int
+	ExitCode int
 }
 
 func Start(ctx context.Context, ws gate.Workspace, purpose string) (*Stage, error) {
@@ -64,12 +69,10 @@ func Start(ctx context.Context, ws gate.Workspace, purpose string) (*Stage, erro
 		return nil, err
 	}
 	if err := s.resolve(ctx); err != nil {
-		s.Stop(ctx)
-		return nil, err
+		return nil, s.abort(ctx, err)
 	}
 	if err := s.waitReady(ctx); err != nil {
-		s.Stop(ctx)
-		return nil, err
+		return nil, s.abort(ctx, err)
 	}
 	ws.Log.Info("gate stage ready", "stage", s.Name, "addr", s.HostAddr, "cpus", ws.App.CPUs, "memory", ws.App.Memory)
 	return s, nil
@@ -160,11 +163,12 @@ func (s *Stage) State(ctx context.Context) (State, error) {
 	if len(f) != stateFields {
 		return State{}, fmt.Errorf("%w: %q", ErrState, res.Stdout)
 	}
-	restarts, err := strconv.Atoi(f[2])
-	if err != nil {
+	restarts, rerr := strconv.Atoi(f[2])
+	exit, eerr := strconv.Atoi(f[3])
+	if rerr != nil || eerr != nil {
 		return State{}, fmt.Errorf("%w: %q", ErrState, res.Stdout)
 	}
-	return State{Running: f[0] == stateTrue, OOM: f[1] == stateTrue, Restarts: restarts}, nil
+	return State{Running: f[0] == stateTrue, OOM: f[1] == stateTrue, Restarts: restarts, ExitCode: exit}, nil
 }
 
 func (s *Stage) Stop(ctx context.Context) {
@@ -181,4 +185,35 @@ func (s *Stage) remove(ctx context.Context) {
 
 func (s *Stage) volume(i int) string {
 	return fmt.Sprintf(volumeFormat, s.Name, i)
+}
+
+func (s *Stage) abort(ctx context.Context, cause error) error {
+	err := s.diagnose(ctx, cause)
+	s.Stop(ctx)
+	return err
+}
+
+func (s *Stage) diagnose(ctx context.Context, cause error) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), diagTimeout)
+	defer cancel()
+	container := s.describeState(ctx)
+	logs := s.logs(ctx)
+	s.ws.Log.Warn("gate stage failed", "stage", s.Name, "error", cause.Error(), "container", container, "logs", logs)
+	return fmt.Errorf(diagFormat, cause, container, gate.Tail(logs))
+}
+
+func (s *Stage) describeState(ctx context.Context) string {
+	st, err := s.State(ctx)
+	if err != nil {
+		return err.Error()
+	}
+	return fmt.Sprintf(stateFormat, st.Running, st.OOM, st.Restarts, st.ExitCode)
+}
+
+func (s *Stage) logs(ctx context.Context) string {
+	res, err := s.ws.Run(ctx, DockerBinary, "logs", "--tail", logsTail, s.Name)
+	if err != nil {
+		return fmt.Sprintf("docker logs: %v: %s", err, gate.Tail(procexec.Output(err)))
+	}
+	return res.Combined()
 }
