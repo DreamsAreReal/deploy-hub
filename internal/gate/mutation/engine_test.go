@@ -69,3 +69,27 @@ func TestSourceVersionFollowsTheEngineSources(t *testing.T) {
 	_, err := SourceVersion(context.Background(), ws)
 	testutil.Fails(t, err)
 }
+
+func listingExec(root, listing string) *procexectest.Fake {
+	return &procexectest.Fake{Handler: func(c procexec.Command) (procexec.Result, error) {
+		if c.Args[1] == "-m" {
+			return procexec.Result{Stdout: root + "\n"}, nil
+		}
+		return procexec.Result{Stdout: listing}, nil
+	}}
+}
+
+func TestSourceVersionSkipsWhatIsNotEngineAndFailsOnWhatIsMissing(t *testing.T) {
+	root := t.TempDir()
+	testutil.Write(t, filepath.Join(root, "internal/gate/mutation/run.go"), "package mutation\n")
+	ws := gate.Workspace{Exec: listingExec(root, root+"/internal/gate/mutation run.go\n/elsewhere/pkg x.go\n"+filepath.Dir(root)+" y.go\n\n"), Log: slog.New(slog.DiscardHandler)}
+	v, err := SourceVersion(context.Background(), ws)
+	testutil.NoErr(t, err)
+	testutil.Equal(t, v, sumOf("internal/gate/mutation/run.go", "package mutation\n"))
+	ws.Exec = listingExec(root, root+"/internal/gate/mutation gone.go\n")
+	_, err = SourceVersion(context.Background(), ws)
+	testutil.Fails(t, err)
+	ws.Exec = listingExec(root, root+"/internal/missing run.go\n")
+	_, err = SourceVersion(context.Background(), ws)
+	testutil.Fails(t, err)
+}
