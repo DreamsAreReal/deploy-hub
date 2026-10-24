@@ -772,7 +772,10 @@ apps:
 
 - `src` is a path inside `/deploy-hub/host/` of the image. The image must hold
   exactly the listed files there: an unlisted file, a symlink, a FIFO or a
-  file over 1 MiB fails the sync.
+  file over its size limit fails the sync. An executable (an x bit in `mode`,
+  no `env:`) may be up to 64 MiB. It is streamed and compared by sha256, and
+  if it changes between the check and the write, the sync is refused. Text
+  files and `env:` templates are limited to 1 MiB.
 - `dst` must be a file name directly inside one of `/usr/local/sbin/`,
   `/etc/systemd/system/`, `/etc/caddy/extra/` or `/var/lib/node_exporter/`
   (the list is in code, `policy.HostRoots`); `mode` is four octal digits

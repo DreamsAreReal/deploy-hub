@@ -10,7 +10,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/policy"
 	"github.com/DreamsAreReal/deploy-hub/internal/journal"
@@ -72,9 +71,12 @@ func (s Syncer) backup(t target, changed []plannedFile) error {
 			fmt.Fprintf(&manifest, absentEntry, p.spec.Dst)
 			continue
 		}
-		if err := os.WriteFile(filepath.Join(dir, strconv.Itoa(i)), p.old.content, tempPerm); err != nil {
+		saved := filepath.Join(dir, strconv.Itoa(i))
+		_ = os.Remove(saved)
+		if err := writeBody(saved, p.old.body); err != nil {
 			return err
 		}
+		changed[i].old.body = body{path: saved, limit: MaxBinarySize, sum: p.old.body.sum}
 		fmt.Fprintf(&manifest, manifestEntry, i, p.old.mode, p.old.uid, p.old.gid, p.spec.Dst)
 	}
 	if err := os.WriteFile(filepath.Join(dir, manifestName), []byte(manifest.String()), tempPerm); err != nil {
@@ -129,12 +131,10 @@ func (s Syncer) write(changed []plannedFile) error {
 func (s Syncer) writeFile(path string, want snapshot) error {
 	tmp := filepath.Join(filepath.Dir(path), tempPrefix+filepath.Base(path)+tempSuffix)
 	_ = os.Remove(tmp)
-	f, err := os.OpenFile(filepath.Clean(tmp), os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, tempPerm)
-	if err != nil {
-		return err
+	err := writeBody(tmp, want.body)
+	if err == nil {
+		err = errors.Join(s.Chown(tmp, want.uid, want.gid), os.Chmod(tmp, want.mode))
 	}
-	_, werr := f.Write(want.content)
-	err = errors.Join(werr, f.Sync(), f.Close(), s.Chown(tmp, want.uid, want.gid), os.Chmod(tmp, want.mode))
 	if err == nil {
 		err = os.Rename(tmp, path)
 	}
