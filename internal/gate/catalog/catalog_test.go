@@ -23,6 +23,7 @@ func TestChecksAreUniqueAndOrdered(t *testing.T) {
 		index[n] = i
 	}
 	testutil.True(t, index["tests"] < index["line-coverage"] && index["line-coverage"] < index["mutation"] && index["tests"] < index["scenarios"], "report producers run first")
+	testutil.True(t, index["dast"] < index["mutation"] && index["load"] < index["mutation"], "the stage runs before the long mutation check")
 	for _, c := range Checks() {
 		testutil.Equal(t, c.Long, c.Name == "mutation")
 	}

@@ -41,6 +41,8 @@ func Checks() []gate.Check {
 		byPack(pack.CheckBranches),
 		{Name: "scenarios", Kind: gate.KindQuality, Run: pack.Scenarios(packs)},
 		byPack(pack.CheckFuzz),
+		{Name: "dast", Kind: gate.KindSecurity, Needs: gate.NeedHTTP, Run: stage.DAST},
+		{Name: "load", Kind: gate.KindQuality, Needs: gate.NeedHTTP, Run: stage.Load},
 		byPack(pack.CheckMutation),
 		{Name: "secrets-gitleaks", Kind: gate.KindSecurity, Run: scan.Gitleaks},
 		{Name: "secrets-trufflehog", Kind: gate.KindSecurity, Run: scan.Trufflehog},
@@ -52,8 +54,6 @@ func Checks() []gate.Check {
 		{Name: "dockerfile", Kind: gate.KindSecurity, Needs: gate.NeedImage, Run: scan.Dockerfiles},
 		{Name: "iac", Kind: gate.KindSecurity, Run: scan.IaC},
 		{Name: "image", Kind: gate.KindSecurity, Needs: gate.NeedImage, Run: scan.Image},
-		{Name: "dast", Kind: gate.KindSecurity, Needs: gate.NeedHTTP, Run: stage.DAST},
-		{Name: "load", Kind: gate.KindQuality, Needs: gate.NeedHTTP, Run: stage.Load},
 	}
 }
 
