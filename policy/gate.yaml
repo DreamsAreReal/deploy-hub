@@ -479,6 +479,8 @@ apps:
     memory: 768m
     dast: {target: /health, spider: 1m, max_time: 10m}
     load: {rate: 20, duration: 30s, p95: 300ms, max_error_percent: 0, concurrency: 10, paths: [/health]}
+    env:
+      - STT_TOKENS=gate-stage-only-stt-token-000000
     localized:
       - internal/texts/
       - internal/web/static/
