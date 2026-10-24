@@ -75,12 +75,12 @@ dependencies:
   - modernc.org/memory
   - modernc.org/sqlite
   - mvdan.cc/sh/v3
+  - "npm:@alpinejs/csp"
   - "npm:@types/node"
   - "npm:@types/whatwg-mimetype"
   - "npm:@types/ws"
   - "npm:@vue/reactivity"
   - "npm:@vue/shared"
-  - "npm:alpinejs"
   - "npm:buffer-image-size"
   - "npm:entities"
   - "npm:fast-check"
