@@ -225,7 +225,7 @@ func TestMutationCacheIsStoredAndServedOnlyToTheHubWorkflow(t *testing.T) {
 	testutil.Equal(t, h.file("deploy-hub/mutation-cache/web/verdicts.json"), "")
 	put := h.ssh("mutation-cache-put web "+goodA, "oidc="+h.issuer.token(t, appRepo, goodA)+payload)
 	testutil.Equal(t, put.code, 0)
-	testutil.Contains(t, put.stdout, "mutation cache: 1 verdicts, sha256 ")
+	testutil.Contains(t, put.stdout, "mutation cache: 1 verdicts received, sha256 ")
 	got := h.ssh("mutation-cache-get web "+goodB, "oidc="+h.issuer.token(t, appRepo, goodB)+"\n")
 	testutil.Equal(t, got.code, 0)
 	sum := sha256.Sum256([]byte(h.file("deploy-hub/mutation-cache/web/verdicts.json")))

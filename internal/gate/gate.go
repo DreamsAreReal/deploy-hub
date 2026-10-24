@@ -90,24 +90,34 @@ type Check struct {
 }
 
 type Workspace struct {
-	Src           string
-	Out           string
-	PolicyDir     string
-	Image         string
-	AppName       string
-	Repo          string
-	Module        string
-	App           policy.App
-	Policy        policy.Policy
-	Exec          procexec.Runner
-	Log           *slog.Logger
-	MemoryLimit   int64
-	MutationCache CachedVerdicts
+	Src         string
+	Out         string
+	PolicyDir   string
+	Image       string
+	AppName     string
+	Repo        string
+	Module      string
+	App         policy.App
+	Policy      policy.Policy
+	Exec        procexec.Runner
+	Log         *slog.Logger
+	MemoryLimit int64
+	Mutation    MutationPlan
 }
 
-type CachedVerdicts struct {
-	Path   string
-	SHA256 string
+type MutationPlan struct {
+	Cache       string
+	CacheSHA256 string
+	Full        bool
+	Budget      time.Duration
+	Last        *FullRun
+}
+
+type FullRun struct {
+	Commit string    `json:"commit"`
+	Bases  []string  `json:"bases"`
+	Passed bool      `json:"passed"`
+	Time   time.Time `json:"time"`
 }
 
 type Subject struct {

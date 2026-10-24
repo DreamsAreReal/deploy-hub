@@ -55,10 +55,10 @@ func DecodeVerdicts(data []byte) (Verdicts, error) {
 	if v.Version != verdictsVersion {
 		return Verdicts{}, fmt.Errorf("%w: version %d, expected %d", ErrVerdicts, v.Version, verdictsVersion)
 	}
-	return v, v.check()
+	return v, v.Check()
 }
 
-func (v Verdicts) check() error {
+func (v Verdicts) Check() error {
 	for _, b := range v.Bases {
 		if !digestHex.MatchString(b) {
 			return fmt.Errorf("%w: base %q is not a sha256", ErrVerdicts, b)

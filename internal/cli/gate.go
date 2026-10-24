@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/golang"
@@ -40,12 +41,13 @@ const (
 	msgVerdicts    = "mutation verdicts: %s %s%s\n"
 )
 
-var ErrGateArgs = errors.New("usage: deploy-hub gate --app NAME --repo OWNER/NAME --commit SHA --policy FILE --src DIR --out DIR [--image REF] [--fork] [--mutation-cache FILE --mutation-cache-sha256 sha256:HEX]")
+var ErrGateArgs = errors.New("usage: deploy-hub gate --app NAME --repo OWNER/NAME --commit SHA --policy FILE --src DIR --out DIR [--image REF] [--fork] [--mutation-cache FILE --mutation-cache-sha256 sha256:HEX] [--mutation-full] [--mutation-budget DURATION] [--mutation-last FILE]")
 
 type gateArgs struct {
 	app, repo, commit, src, out, policy, image string
-	cache, cacheSum                            string
-	fork                                       bool
+	cache, cacheSum, last                      string
+	budget                                     time.Duration
+	fork, full                                 bool
 }
 
 func parseGateArgs(args []string) (gateArgs, error) {
@@ -62,6 +64,9 @@ func parseGateArgs(args []string) (gateArgs, error) {
 	fs.BoolVar(&g.fork, "fork", false, "the repository is a fork")
 	fs.StringVar(&g.cache, "mutation-cache", "", "mutation verdicts from the hub (absolute path)")
 	fs.StringVar(&g.cacheSum, "mutation-cache-sha256", "", "sha256 the hub recorded for the mutation verdicts")
+	fs.BoolVar(&g.full, "mutation-full", false, "a chunk of a full mutation run: only tests and mutation run")
+	fs.DurationVar(&g.budget, "mutation-budget", 0, "stop mutation testing after this long and keep the finished verdicts")
+	fs.StringVar(&g.last, "mutation-last", "", "the last full mutation run the hub recorded (absolute path)")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		return g, ErrGateArgs
 	}
@@ -76,7 +81,7 @@ func (g *gateArgs) normalize() error {
 	if rel, _ := filepath.Rel(g.src, g.out); !strings.HasPrefix(rel, "..") {
 		return fmt.Errorf("%w: reports must live outside the source tree", ErrGateArgs)
 	}
-	return errors.Join(validate.AppName(g.app), validate.RepoSlug(g.repo), validate.Commit(g.commit), nonEmptyArg(g.policy), g.cacheArgs())
+	return errors.Join(validate.AppName(g.app), validate.RepoSlug(g.repo), validate.Commit(g.commit), nonEmptyArg(g.policy), g.cacheArgs(), g.fullRunArgs())
 }
 
 func outside(dir, path string) bool {
@@ -126,11 +131,11 @@ func runGate(ctx context.Context, a *App, ex procexec.Runner, args []string) int
 	}
 	owner, _, _ := strings.Cut(g.repo, ownerSeparator)
 	subj := gate.Subject{App: g.app, Repo: g.repo, Commit: g.commit, Own: pol.Owns(owner) && !g.fork}
-	v := gate.Runner{Checks: a.Checks(), Now: a.Now, Log: a.Log}.Run(ctx, ws, subj)
+	v := gate.Runner{Checks: gateChecks(a.Checks(), g.full), Now: a.Now, Log: a.Log}.Run(ctx, ws, subj)
 	if err := v.Save(ws.Report(VerdictFile)); err != nil {
 		return a.failWith(gatePrefix, err)
 	}
-	if err := a.keepVerdicts(ws); err != nil {
+	if err := errors.Join(a.keepVerdicts(ws), a.keepRunSummary(ws)); err != nil {
 		return a.failWith(gatePrefix, err)
 	}
 	a.printVerdict(v)
@@ -150,9 +155,11 @@ func newWorkspace(ctx context.Context, g *gateArgs, a *App, ex procexec.Runner, 
 	}
 	app, _ := pol.App(g.app)
 	ws := gate.Workspace{Src: g.src, Out: g.out, PolicyDir: filepath.Dir(g.policy), Image: g.image, AppName: g.app, Repo: g.repo, App: app, Policy: pol, Exec: ex, Log: a.Log}
-	if g.cache != "" {
-		ws.MutationCache = gate.CachedVerdicts{Path: filepath.Clean(g.cache), SHA256: strings.TrimPrefix(g.cacheSum, digestPrefix)}
+	plan, err := g.mutationPlan()
+	if err != nil {
+		return ws, err
 	}
+	ws.Mutation = plan
 	if !exists(filepath.Join(g.src, goModFile)) {
 		return ws, nil
 	}
@@ -213,25 +220,6 @@ func runTools(ctx context.Context, a *App, ex procexec.Runner, args []string) in
 	}
 	a.Out.Printf(msgToolsDone, len(m.Binaries)+len(m.Go), *dir)
 	return ExitOK
-}
-
-func (a *App) keepVerdicts(ws gate.Workspace) error {
-	entries, err := os.ReadDir(ws.Out)
-	var projects []string
-	for _, e := range entries {
-		if p := filepath.Join(ws.Out, e.Name(), mutation.VerdictsFile); e.IsDir() && exists(p) {
-			projects = append(projects, p)
-		}
-	}
-	if err != nil || len(projects) == 0 {
-		return err
-	}
-	out := ws.Report(mutation.VerdictsFile)
-	digest, err := mutation.MergeVerdicts(out, projects)
-	if err == nil {
-		a.Out.Printf(msgVerdicts, out, digestPrefix, digest)
-	}
-	return err
 }
 
 func runEngineVersion(ctx context.Context, a *App, ex procexec.Runner, args []string) int {

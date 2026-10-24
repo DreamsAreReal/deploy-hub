@@ -85,11 +85,11 @@ func (e *engine) closure(ctx context.Context, pkgs golang.Packages) (*digests, e
 }
 
 func (e *engine) prior() Verdicts {
-	c := e.ws.MutationCache
-	if c.Path == "" {
+	c := e.ws.Mutation
+	if c.Cache == "" {
 		return Verdicts{}
 	}
-	v, err := LoadVerdicts(c.Path, c.SHA256)
+	v, err := LoadVerdicts(c.Cache, c.CacheSHA256)
 	if err != nil {
 		e.ws.Log.Error("mutation verdict cache ignored", "error", err.Error())
 		return Verdicts{}
@@ -165,6 +165,7 @@ func (e *engine) incremental(ctx context.Context, pkgs golang.Packages) (Report,
 		return Report{}, fmt.Errorf("cannot seed the worker build caches: %w", err)
 	}
 	rep, err := e.execute(ctx, targets)
+	rep.Base = d.base
 	if len(rep.Entries) == len(targets) {
 		err = errors.Join(err, e.saveVerdicts(d.base, targets, rep))
 	}

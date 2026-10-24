@@ -87,6 +87,7 @@ type engine struct {
 }
 
 type Report struct {
+	Base      string
 	Cached    int
 	Counts    map[Status]int
 	Survivors []string
@@ -108,6 +109,12 @@ func Check(ctx context.Context, ws gate.Workspace) gate.Outcome {
 }
 
 func Judge(ws gate.Workspace, rep Report, err error) gate.Outcome {
+	out := judge(ws, rep, err)
+	keepRun(ws, rep, err, out)
+	return out
+}
+
+func judge(ws gate.Workspace, rep Report, err error) gate.Outcome {
 	if err != nil {
 		return gate.Fail(err.Error())
 	}
@@ -117,6 +124,9 @@ func Judge(ws gate.Workspace, rep Report, err error) gate.Outcome {
 	values := map[string]float64{ValueScore: rep.Score(), ValueMutants: float64(totalMutants(rep.Counts)), ValueCached: float64(rep.Cached), ValueRun: float64(totalMutants(rep.Counts) - rep.Cached)}
 	for s, n := range rep.Counts {
 		values[string(s)] = float64(n)
+	}
+	if gap := fullRunGap(ws.Mutation, rep); gap != "" {
+		return gate.Judge(false, gap, values, rep.Survivors)
 	}
 	return gate.Judge(rep.Score() >= ws.Policy.Thresholds.MutationScore, reasonScore, values, rep.Survivors)
 }
@@ -137,6 +147,11 @@ func Run(ctx context.Context, ws gate.Workspace) (Report, error) {
 	ctx, stop := context.WithCancelCause(ctx)
 	defer stop(nil)
 	go guard.watch(ctx, stop, diskEvery)
+	if ws.Mutation.Budget > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, ws.Mutation.Budget)
+		defer cancel()
+	}
 	sandbox := ws.Report(sandboxDir)
 	defer func() { _ = os.RemoveAll(sandbox) }()
 	if rerr := os.RemoveAll(sandbox); rerr != nil {
