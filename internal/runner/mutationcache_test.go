@@ -56,13 +56,11 @@ func TestMutationCacheRoundTripAndMerge(t *testing.T) {
 	e := newEnv(t)
 	testutil.Equal(t, e.dispatch(getCmd, ""), ExitOK)
 	testutil.Equal(t, e.out.String(), "")
-	testutil.Equal(t, e.dispatch(putCmd, verdictsMeta(t, map[string]mutation.Status{cacheKeyA: mutation.StatusKilled})), ExitOK)
-	testutil.Equal(t, e.dispatch(putCmd, verdictsMeta(t, map[string]mutation.Status{cacheKeyB: mutation.StatusSurvived})), ExitOK)
+	testutil.Equal(t, e.put(t, map[string]mutation.Status{cacheKeyA: mutation.StatusKilled}), ExitOK)
+	testutil.Equal(t, e.put(t, map[string]mutation.Status{cacheKeyB: mutation.StatusSurvived}), ExitOK)
 	testutil.Contains(t, e.out.String(), "mutation cache: 2 verdicts, sha256 ")
 	testutil.True(t, e.locker.released, "the cache lock is released")
-	e.out.Reset()
-	testutil.Equal(t, e.dispatch(getCmd, ""), ExitOK)
-	v := e.served()
+	v := e.fetch()
 	testutil.Equal(t, v.Entries, map[string]mutation.Status{cacheKeyA: mutation.StatusKilled, cacheKeyB: mutation.StatusSurvived})
 	want := e.ident.wants[len(e.ident.wants)-1]
 	testutil.Equal(t, []string{want.Repository, want.WorkflowRef, want.Commit}, []string{appRepo, hubRef, strings.TrimPrefix(goodTag, "sha-")})
@@ -108,7 +106,7 @@ func TestMutationCachePutRejectsMalformedVerdicts(t *testing.T) {
 
 func TestTamperedStoredCacheIsNotServed(t *testing.T) {
 	e := newEnv(t)
-	testutil.Equal(t, e.dispatch(putCmd, verdictsMeta(t, map[string]mutation.Status{cacheKeyA: mutation.StatusSurvived})), ExitOK)
+	testutil.Equal(t, e.put(t, map[string]mutation.Status{cacheKeyA: mutation.StatusSurvived}), ExitOK)
 	path := filepath.Join(e.svc.Paths.MutationCache(appName), cacheFile)
 	testutil.Write(t, path, strings.Replace(testutil.Read(t, path), string(mutation.StatusSurvived), string(mutation.StatusKilled), 1))
 	e.out.Reset()
@@ -117,22 +115,18 @@ func TestTamperedStoredCacheIsNotServed(t *testing.T) {
 	testutil.Equal(t, e.out.String(), "")
 	e.expectLog("stored mutation cache does not match its sha256")
 	testutil.True(t, e.svc.samples[len(e.svc.samples)-1].Name == obs.MetricMutationCacheIntact, "intact metric recorded")
-	testutil.Equal(t, e.dispatch(putCmd, verdictsMeta(t, map[string]mutation.Status{cacheKeyB: mutation.StatusKilled})), ExitOK)
+	testutil.Equal(t, e.put(t, map[string]mutation.Status{cacheKeyB: mutation.StatusKilled}), ExitOK)
 	e.expectLog("stored mutation cache replaced")
-	e.out.Reset()
-	testutil.Equal(t, e.dispatch(getCmd, ""), ExitOK)
-	v := e.served()
+	v := e.fetch()
 	testutil.Equal(t, v.Entries, map[string]mutation.Status{cacheKeyB: mutation.StatusKilled})
 }
 
 func TestMutationCachePutFailures(t *testing.T) {
 	e := newEnv(t)
 	e.locker.err = errors.New("busy")
-	testutil.Equal(t, e.dispatch(putCmd, verdictsMeta(t, map[string]mutation.Status{cacheKeyA: mutation.StatusKilled})), ExitFail)
+	testutil.Equal(t, e.put(t, map[string]mutation.Status{cacheKeyA: mutation.StatusKilled}), ExitFail)
 	e.expectOut(e.err, msgCacheBusy)
-	e2 := newEnv(t)
-	testutil.Write(t, filepath.Join(e2.hubDir, "mutation-cache"), "a file where the directory belongs")
-	testutil.Equal(t, e2.dispatch(putCmd, verdictsMeta(t, map[string]mutation.Status{cacheKeyA: mutation.StatusKilled})), ExitFail)
+	e2 := brokenStore(t)
 	e2.expectOut(e2.err, msgCacheWrite)
 }
 
@@ -190,20 +184,18 @@ func TestMutationCacheRequestsAreLoggedAndCounted(t *testing.T) {
 	e := newEnv(t)
 	testutil.Equal(t, e.dispatch(getCmd, ""), ExitOK)
 	e.expectLog("no mutation cache yet")
-	testutil.Equal(t, e.dispatch(putCmd, verdictsMeta(t, map[string]mutation.Status{cacheKeyA: mutation.StatusKilled})), ExitOK)
+	testutil.Equal(t, e.put(t, map[string]mutation.Status{cacheKeyA: mutation.StatusKilled}), ExitOK)
 	e.expectLog("mutation cache stored")
 	testutil.Contains(t, e.logs.String(), `"received":1,"verdicts":1`)
 	testutil.Equal(t, e.dispatch(putCmd, "verdicts=\n"), ExitFail)
 	e.expectOut(e.err, msgBadCache)
-	e2 := newEnv(t)
-	testutil.Write(t, filepath.Join(e2.hubDir, "mutation-cache"), "a file where the directory belongs")
-	testutil.Equal(t, e2.dispatch(putCmd, verdictsMeta(t, map[string]mutation.Status{cacheKeyA: mutation.StatusKilled})), ExitFail)
+	e2 := brokenStore(t)
 	e2.expectLog("mutation cache not stored")
 }
 
 func TestUnreadableStoredCacheIsReportedNotEmpty(t *testing.T) {
 	e := newEnv(t)
-	testutil.Equal(t, e.dispatch(putCmd, verdictsMeta(t, map[string]mutation.Status{cacheKeyA: mutation.StatusKilled})), ExitOK)
+	testutil.Equal(t, e.put(t, map[string]mutation.Status{cacheKeyA: mutation.StatusKilled}), ExitOK)
 	dir := e.svc.Paths.MutationCache(appName)
 	testutil.NoErr(t, os.Remove(filepath.Join(dir, cacheSumFile)))
 	testutil.Equal(t, e.dispatch(getCmd, ""), ExitFail)
@@ -212,6 +204,26 @@ func TestUnreadableStoredCacheIsReportedNotEmpty(t *testing.T) {
 	testutil.NoErr(t, os.Mkdir(filepath.Join(dir, cacheFile), 0o700))
 	_, _, err := e.svc.loadCache(appName)
 	testutil.True(t, err != nil && !errors.Is(err, os.ErrNotExist), "a cache that cannot be read is an error")
-	testutil.Equal(t, e.dispatch(putCmd, verdictsMeta(t, map[string]mutation.Status{cacheKeyB: mutation.StatusKilled})), ExitFail)
+	testutil.Equal(t, e.put(t, map[string]mutation.Status{cacheKeyB: mutation.StatusKilled}), ExitFail)
 	e.expectLog("stored mutation cache replaced")
+}
+
+func (e *env) put(t *testing.T, entries map[string]mutation.Status) int {
+	t.Helper()
+	return e.dispatch(putCmd, verdictsMeta(t, entries))
+}
+
+func (e *env) fetch() mutation.Verdicts {
+	e.t.Helper()
+	e.out.Reset()
+	testutil.Equal(e.t, e.dispatch(getCmd, ""), ExitOK)
+	return e.served()
+}
+
+func brokenStore(t *testing.T) *env {
+	t.Helper()
+	e := newEnv(t)
+	testutil.Write(t, filepath.Join(e.hubDir, "mutation-cache"), "a file where the directory belongs")
+	testutil.Equal(t, e.put(t, map[string]mutation.Status{cacheKeyA: mutation.StatusKilled}), ExitFail)
+	return e
 }

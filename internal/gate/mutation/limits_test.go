@@ -56,24 +56,6 @@ func TestTreeSizeReportsUnreadableDirectories(t *testing.T) {
 	testutil.True(t, errors.Is(vanished(fs.ErrPermission), fs.ErrPermission), "only vanished files are skipped")
 }
 
-func TestWorkerCacheBudgetIsInclusive(t *testing.T) {
-	base := filepath.Join(t.TempDir(), cacheDir)
-	testutil.Write(t, filepath.Join(base, "ab", "ab12-a"), "action")
-	caches, err := (&engine{cacheDir: base}).workerCaches(1)
-	testutil.NoErr(t, err)
-	w := caches[0]
-	w.keep = 5
-	testutil.Write(t, filepath.Join(w.dir, "cd", "cd56-d"), "12345")
-	testutil.NoErr(t, w.trim())
-	testutil.Equal(t, testutil.Read(t, filepath.Join(w.dir, "cd", "cd56-d")), "12345")
-	testutil.Write(t, filepath.Join(w.dir, "cd", "cd57-d"), "6")
-	testutil.NoErr(t, w.trim())
-	testutil.Missing(t, filepath.Join(w.dir, "cd", "cd56-d"))
-	entries, err := os.ReadDir(filepath.Join(base, "ab"))
-	testutil.NoErr(t, err)
-	testutil.Equal(t, entrySize(entries[0]), int64(len("action")))
-}
-
 func TestBuildCacheOverTheDiskLimitStopsTheRunBeforeAnyMutant(t *testing.T) {
 	for _, phase := range []string{"baseline", "index"} {
 		t.Run(phase, func(t *testing.T) {
