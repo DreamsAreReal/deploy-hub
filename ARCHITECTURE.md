@@ -101,6 +101,9 @@ not, so search for the name.
    not pushed yet.
 5. **Quality gate**: `deploy-hub gate ... --image ...` writes `verdict.json`
    and exits non-zero on any failed check (`internal/cli/gate.go`, `runGate`).
+   Before it, `mutation-cache-get` fetches the app's mutation verdict cache
+   from the hub; after it, pass or fail, `mutation-cache-put` uploads the
+   verdicts of this run (README "Verdict cache"). Both only warn on failure.
 6. **Report** (pass or fail; skipped only when the workflow inputs were
    invalid): the verdict is sent
    over SSH as `report <app> sha-<commit>` together with a GitHub OIDC token.
