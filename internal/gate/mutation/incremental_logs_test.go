@@ -23,7 +23,7 @@ func TestCacheDecisionsAreLogged(t *testing.T) {
 	first := logged(&ws)
 	runOnce(t, ws, fg)
 	testutil.Excludes(t, first.String(), logStaleCache, logCacheLoaded)
-	ws.MutationCache = keepVerdicts(t, ws)
+	ws.Mutation = keepVerdicts(t, ws)
 	loaded := logged(&ws)
 	runOnce(t, ws, fg)
 	testutil.Contains(t, loaded.String(), `"msg":"`+logCacheLoaded+`","verdicts":`)
@@ -32,7 +32,7 @@ func TestCacheDecisionsAreLogged(t *testing.T) {
 	stale := logged(&ws)
 	runOnce(t, ws, fg)
 	testutil.Contains(t, stale.String(), logStaleCache)
-	ws.MutationCache.SHA256 = Digest([]byte("other"))
+	ws.Mutation.CacheSHA256 = Digest([]byte("other"))
 	ignored := logged(&ws)
 	runOnce(t, ws, fg)
 	testutil.Contains(t, ignored.String(), `"msg":"mutation verdict cache ignored"`)
@@ -47,7 +47,7 @@ func TestEmptyCacheOfAnotherBaseIsNotStale(t *testing.T) {
 	path := filepath.Join(t.TempDir(), VerdictsFile)
 	digest, err := Verdicts{Version: verdictsVersion, Bases: []string{baseOne}, Entries: map[string]Status{}}.Save(path)
 	testutil.NoErr(t, err)
-	ws.MutationCache = gate.CachedVerdicts{Path: path, SHA256: digest}
+	ws.Mutation = gate.MutationPlan{Cache: path, CacheSHA256: digest}
 	buf := logged(&ws)
 	runOnce(t, ws, fg)
 	testutil.Excludes(t, buf.String(), logStaleCache)

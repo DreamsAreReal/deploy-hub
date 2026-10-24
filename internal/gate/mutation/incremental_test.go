@@ -263,15 +263,16 @@ func cachedSetup(t *testing.T) (gate.Workspace, *fakeGo) {
 		listing.Write(data)
 	}
 	fg.closure = listing.String()
+	ws.Policy.Thresholds.MutationScore = 10
 	return ws, fg
 }
 
-func keepVerdicts(t *testing.T, ws gate.Workspace) gate.CachedVerdicts {
+func keepVerdicts(t *testing.T, ws gate.Workspace) gate.MutationPlan {
 	t.Helper()
 	data := testutil.Read(t, ws.Report(VerdictsFile))
 	path := filepath.Join(t.TempDir(), VerdictsFile)
 	testutil.Write(t, path, data)
-	return gate.CachedVerdicts{Path: path, SHA256: Digest([]byte(data))}
+	return gate.MutationPlan{Cache: path, CacheSHA256: Digest([]byte(data))}
 }
 
 func runOnce(t *testing.T, ws gate.Workspace, fg *fakeGo) (Report, int) {
@@ -286,7 +287,7 @@ func TestCachedVerdictsAreReusedUntilTheClosureChanges(t *testing.T) {
 	ws, fg := cachedSetup(t)
 	full, ran := runOnce(t, ws, fg)
 	testutil.True(t, ran > 0 && full.Cached == 0, "the first run has no cache")
-	ws.MutationCache = keepVerdicts(t, ws)
+	ws.Mutation = keepVerdicts(t, ws)
 	again, ran := runOnce(t, ws, fg)
 	testutil.Equal(t, ran, 0)
 	testutil.Equal(t, again.Cached, totalMutants(again.Counts))
@@ -304,16 +305,16 @@ func TestCachedVerdictsAreReusedUntilTheClosureChanges(t *testing.T) {
 func TestCacheIsIgnoredWhenTamperedOrStale(t *testing.T) {
 	ws, fg := cachedSetup(t)
 	runOnce(t, ws, fg)
-	ws.MutationCache = keepVerdicts(t, ws)
-	ws.MutationCache.SHA256 = Digest([]byte("other"))
+	ws.Mutation = keepVerdicts(t, ws)
+	ws.Mutation.CacheSHA256 = Digest([]byte("other"))
 	tampered, ran := runOnce(t, ws, fg)
 	testutil.True(t, ran > 0 && tampered.Cached == 0, "a cache with a wrong sha256 is not used")
-	ws.MutationCache = keepVerdicts(t, ws)
+	ws.Mutation = keepVerdicts(t, ws)
 	fg.env = goEnvNew
 	stale, ran := runOnce(t, ws, fg)
 	testutil.True(t, ran > 0 && stale.Cached == 0, "a new go version reruns every mutant")
 	ws.Policy.Limits = policy.Limits{MutantFloor: ws.Policy.Limits.MutantFloor * 2, MutantFactor: 2}
-	ws.MutationCache = keepVerdicts(t, ws)
+	ws.Mutation = keepVerdicts(t, ws)
 	fg.testLogs = ""
 	volatile, ran := runOnce(t, ws, fg)
 	testutil.True(t, ran > 0 && volatile.Cached == 0, "a package without a test log is never cached")
@@ -394,7 +395,7 @@ func versioned(t *testing.T) {
 func TestUnversionedEngineNeverCachesOrReuses(t *testing.T) {
 	ws, fg := cachedSetup(t)
 	runOnce(t, ws, fg)
-	ws.MutationCache = keepVerdicts(t, ws)
+	ws.Mutation = keepVerdicts(t, ws)
 	EngineVersion = ""
 	rep, ran := runOnce(t, ws, fg)
 	testutil.True(t, ran > 0 && rep.Cached == 0, "an engine without a version reuses nothing")

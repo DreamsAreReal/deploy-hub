@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -20,11 +21,14 @@ const (
 	VerbCacheGet    = "mutation-cache-get"
 	VerbCachePut    = "mutation-cache-put"
 	cacheFile       = "verdicts.json"
-	cacheSumFile    = "verdicts.sha256"
+	sessionFile     = "session.json"
+	stateFile       = "state.json"
+	sumSuffix       = ".sha256"
 	cacheDirPerm    = 0o700
 	tmpSuffix       = ".tmp"
 	MaxCacheEntries = 100000
 	MaxCacheBytes   = 16 << 20
+	modeFull        = "full"
 )
 
 var (
@@ -33,66 +37,130 @@ var (
 	errCacheTooBig  = errors.New("mutation cache over its size limit")
 )
 
-func (s *Service) cacheRequest(ctx context.Context, raw, verb string, entry registry.Entry, tag string, stdin io.Reader) (Meta, int, bool) {
+type cacheCall struct {
+	raw   string
+	entry registry.Entry
+	tag   string
+	meta  Meta
+}
+
+func (s *Service) cacheRequest(ctx context.Context, raw, verb string, entry registry.Entry, tag string, stdin io.Reader) (cacheCall, int, bool) {
 	conf, err := s.loadConf(entry.Dir, entry.Name)
 	if err != nil {
-		return Meta{}, ExitFail, false
+		return cacheCall{}, ExitFail, false
 	}
 	meta, err := ReadMeta(stdin)
 	if err == nil {
 		err = s.authorize(ctx, verb, entry, conf, tag, meta.OIDC)
 	}
 	if err != nil {
-		return meta, s.refuse(raw, refusalMessage(err)), false
+		return cacheCall{}, s.refuse(raw, refusalMessage(err)), false
 	}
-	return meta, ExitOK, true
+	return cacheCall{raw: raw, entry: entry, tag: tag, meta: meta}, ExitOK, true
 }
 
 func (s *Service) cacheGet(ctx context.Context, raw string, entry registry.Entry, tag string, stdin io.Reader) int {
-	if _, code, ok := s.cacheRequest(ctx, raw, VerbCacheGet, entry, tag, stdin); !ok {
+	c, code, ok := s.cacheRequest(ctx, raw, VerbCacheGet, entry, tag, stdin)
+	if !ok {
 		return code
 	}
-	data, sum, err := s.loadCache(entry.Name)
+	st, err := s.loadState(entry.Name)
+	if err != nil {
+		s.Err.Println(msgCacheCorrupt)
+		return ExitFail
+	}
+	name := cacheFile
+	if c.meta.Mode == modeFull {
+		plan, err := s.planFull(entry.Name, &st)
+		if err != nil {
+			return s.cacheWriteFailed(entry.Name, err)
+		}
+		if plan != planContinue {
+			return ExitOK
+		}
+		name = sessionFile
+	}
+	s.printLast(st)
+	return s.serve(entry.Name, name)
+}
+
+func (s *Service) serve(app, name string) int {
+	data, sum, err := s.loadStored(app, name)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		s.Log.Info("no mutation cache yet", "app", entry.Name)
+		s.Log.Info("no mutation cache yet", "app", app, "file", name)
 		return ExitOK
 	case err != nil:
 		s.Err.Println(msgCacheCorrupt)
 		return ExitFail
 	}
 	s.Out.Printf(msgCacheServed, sum, base64.StdEncoding.EncodeToString(data))
-	s.Log.Info("mutation cache served", "app", entry.Name, "tag", tag, "bytes", len(data), "sha256", sum)
+	s.Log.Info("mutation cache served", "app", app, "file", name, "bytes", len(data), "sha256", sum)
 	return ExitOK
 }
 
-func (s *Service) loadCache(app string) ([]byte, string, error) {
+func (s *Service) printLast(st cacheState) {
+	if st.Last == nil {
+		return
+	}
+	data, err := json.Marshal(st.Last)
+	if err == nil {
+		s.Out.Printf(msgCacheLast, base64.StdEncoding.EncodeToString(data))
+	}
+}
+
+func (s *Service) loadStored(app, name string) ([]byte, string, error) {
 	root, err := os.OpenRoot(s.Paths.MutationCache(app))
 	if err != nil {
 		return nil, "", err
 	}
 	defer func() { _ = root.Close() }()
-	data, err := root.ReadFile(cacheFile)
+	data, err := root.ReadFile(name)
 	if err != nil {
 		return nil, "", err
 	}
-	want, err := root.ReadFile(cacheSumFile)
+	want, err := root.ReadFile(name + sumSuffix)
 	sum := mutation.Digest(data)
 	intact := err == nil && strings.TrimSpace(string(want)) == sum
 	s.samples = append(s.samples, obs.Sample{Name: obs.MetricMutationCacheIntact, Labels: obs.Labels{obs.LabelApp: app}, Value: obs.Bool(intact)})
 	if !intact {
-		s.Log.Error("stored mutation cache does not match its sha256", "app", app, "sha256", sum, "recorded", strings.TrimSpace(string(want)))
+		s.Log.Error("stored mutation cache does not match its sha256", "app", app, "file", name, "sha256", sum, "recorded", strings.TrimSpace(string(want)))
 		return nil, "", errCacheCorrupt
 	}
 	return data, sum, nil
 }
 
+func (s *Service) store(app, name string, data []byte) (string, error) {
+	dir := s.Paths.MutationCache(app)
+	sum := mutation.Digest(data)
+	if len(data) > MaxCacheBytes {
+		return sum, fmt.Errorf("%w: %s is %d bytes, the limit is %d", errCacheTooBig, name, len(data), MaxCacheBytes)
+	}
+	err := os.MkdirAll(dir, cacheDirPerm)
+	if err == nil {
+		err = writeAtomic(filepath.Join(dir, name), data)
+	}
+	if err == nil {
+		err = writeAtomic(filepath.Join(dir, name+sumSuffix), []byte(sum+"\n"))
+	}
+	return sum, err
+}
+
+func (s *Service) drop(app, name string) error {
+	dir := s.Paths.MutationCache(app)
+	err := errors.Join(os.Remove(filepath.Join(dir, name)), os.Remove(filepath.Join(dir, name+sumSuffix)))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
 func (s *Service) cachePut(ctx context.Context, raw string, entry registry.Entry, tag string, stdin io.Reader) int {
-	meta, code, ok := s.cacheRequest(ctx, raw, VerbCachePut, entry, tag, stdin)
+	c, code, ok := s.cacheRequest(ctx, raw, VerbCachePut, entry, tag, stdin)
 	if !ok {
 		return code
 	}
-	incoming, err := decodeCache(meta.Verdicts)
+	incoming, run, err := decodeUpload(c.meta)
 	if err != nil {
 		s.Log.Warn("mutation verdicts rejected", "app", entry.Name, "tag", tag, "error", err.Error())
 		return s.refuse(raw, msgBadCache)
@@ -103,16 +171,50 @@ func (s *Service) cachePut(ctx context.Context, raw string, entry registry.Entry
 		return ExitFail
 	}
 	defer release()
-	merged := s.mergedCache(entry.Name, incoming)
-	sum, err := s.saveCache(entry.Name, merged)
+	return s.keepUpload(c, incoming, run)
+}
+
+func (s *Service) keepUpload(c cacheCall, incoming mutation.Verdicts, run *mutation.RunSummary) int {
+	app := c.entry.Name
+	st, err := s.loadState(app)
 	if err != nil {
-		s.Log.Error("mutation cache not stored", "app", entry.Name, "error", err.Error())
-		s.Err.Println(msgCacheWrite)
-		return ExitFail
+		st = cacheState{}
 	}
-	s.Log.Info("mutation cache stored", "app", entry.Name, "tag", tag, "received", len(incoming.Entries), "verdicts", len(merged.Entries), "sha256", sum)
-	s.Out.Printf(msgCacheStored, len(merged.Entries), sum)
+	sum, err := s.mergeInto(app, cacheFile, incoming)
+	if err == nil && c.meta.Mode == modeFull && st.SessionStarted != nil {
+		_, err = s.mergeInto(app, sessionFile, incoming)
+	}
+	if err == nil && run != nil {
+		err = s.recordRun(app, c, &st, *run)
+	}
+	if err != nil {
+		return s.cacheWriteFailed(app, err)
+	}
+	s.Log.Info("mutation cache stored", "app", app, "tag", c.tag, "mode", c.meta.Mode, "received", len(incoming.Entries), "sha256", sum)
+	s.Out.Printf(msgCacheStored, len(incoming.Entries), sum)
 	return ExitOK
+}
+
+func (s *Service) cacheWriteFailed(app string, err error) int {
+	s.Log.Error("mutation cache not stored", "app", app, "error", err.Error())
+	s.Err.Println(msgCacheWrite)
+	return ExitFail
+}
+
+func decodeUpload(m Meta) (mutation.Verdicts, *mutation.RunSummary, error) {
+	v, err := decodeCache(m.Verdicts)
+	if err != nil || m.Run == "" {
+		return v, nil, err
+	}
+	data, err := base64.StdEncoding.DecodeString(m.Run)
+	var run mutation.RunSummary
+	if err == nil {
+		err = json.Unmarshal(data, &run)
+	}
+	if err == nil {
+		err = mutation.Verdicts{Version: 1, Bases: run.Bases}.Check()
+	}
+	return v, &run, err
 }
 
 func decodeCache(encoded string) (mutation.Verdicts, error) {
@@ -123,43 +225,26 @@ func decodeCache(encoded string) (mutation.Verdicts, error) {
 	return mutation.DecodeVerdicts(data)
 }
 
-func (s *Service) mergedCache(app string, incoming mutation.Verdicts) mutation.Verdicts {
-	data, _, err := s.loadCache(app)
+func (s *Service) mergeInto(app, name string, incoming mutation.Verdicts) (string, error) {
+	merged := incoming
+	data, _, err := s.loadStored(app, name)
 	var existing mutation.Verdicts
 	if err == nil {
 		existing, err = mutation.DecodeVerdicts(data)
 	}
+	switch {
+	case err == nil && len(existing.Entries)+len(incoming.Entries) <= MaxCacheEntries:
+		merged = existing.Merge(incoming)
+	case err == nil:
+		s.Log.Info("mutation cache over its size limit, keeping only the latest run", "app", app, "file", name)
+	case !errors.Is(err, fs.ErrNotExist):
+		s.Log.Warn("stored mutation cache replaced", "app", app, "file", name, "error", err.Error())
+	}
+	encoded, err := merged.Encode()
 	if err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
-			s.Log.Warn("stored mutation cache replaced", "app", app, "error", err.Error())
-		}
-		return incoming
+		return "", err
 	}
-	merged := existing.Merge(incoming)
-	if len(merged.Entries) > MaxCacheEntries {
-		s.Log.Info("mutation cache over its size limit, keeping only the latest run", "app", app, "verdicts", len(merged.Entries))
-		return incoming
-	}
-	return merged
-}
-
-func (s *Service) saveCache(app string, v mutation.Verdicts) (string, error) {
-	dir := s.Paths.MutationCache(app)
-	data, err := v.Encode()
-	if err == nil && len(data) > MaxCacheBytes {
-		err = fmt.Errorf("%w: %d bytes, the limit is %d", errCacheTooBig, len(data), MaxCacheBytes)
-	}
-	if err == nil {
-		err = os.MkdirAll(dir, cacheDirPerm)
-	}
-	sum := mutation.Digest(data)
-	if err == nil {
-		err = writeAtomic(filepath.Join(dir, cacheFile), data)
-	}
-	if err == nil {
-		err = writeAtomic(filepath.Join(dir, cacheSumFile), []byte(sum+"\n"))
-	}
-	return sum, err
+	return s.store(app, name, encoded)
 }
 
 func writeAtomic(path string, data []byte) error {

@@ -642,7 +642,7 @@ func TestExecuteHandsWorkersTheirIndex(t *testing.T) {
 	testutil.Equal(t, Workers(), max(minWorkers, procexec.CPUs()/cpuShare))
 	out := Judge(gate.Workspace{Out: t.TempDir(), Policy: policy.Policy{Thresholds: policy.Thresholds{MutationScore: 90}}}, rep, nil)
 	testutil.Equal(t, out.Status, gate.StatusPass)
-	testutil.Equal(t, Judge(ws, Report{}, ErrIncomplete).Reason, reasonIncomplet)
+	testutil.Equal(t, Judge(gate.Workspace{Out: t.TempDir()}, Report{}, ErrIncomplete).Reason, reasonIncomplet)
 }
 
 func TestOnlyTestsThatCoverTheLineRun(t *testing.T) {
