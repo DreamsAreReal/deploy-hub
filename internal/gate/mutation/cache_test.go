@@ -79,13 +79,16 @@ func TestWorkerCacheKeepsMutantBuildsUntilItsBudget(t *testing.T) {
 	testutil.NoErr(t, err)
 	w := caches[0]
 	testutil.Equal(t, w.keep, workerCacheKeep)
-	w.keep = 10
-	testutil.Write(t, filepath.Join(w.dir, "cd", "cd56-d"), "small")
+	w.keep = 5
+	testutil.Write(t, filepath.Join(w.dir, "cd", "cd56-d"), "12345")
 	testutil.NoErr(t, w.trim())
-	testutil.Equal(t, testutil.Read(t, filepath.Join(w.dir, "cd", "cd56-d")), "small")
-	testutil.Write(t, filepath.Join(w.dir, "cd", "cd78-d"), "now over ten bytes")
+	testutil.Equal(t, testutil.Read(t, filepath.Join(w.dir, "cd", "cd56-d")), "12345")
+	testutil.Write(t, filepath.Join(w.dir, "cd", "cd78-d"), "6")
 	testutil.NoErr(t, w.trim())
 	testutil.Missing(t, filepath.Join(w.dir, "cd", "cd56-d"))
 	testutil.Missing(t, filepath.Join(w.dir, "cd", "cd78-d"))
 	testutil.Equal(t, testutil.Read(t, filepath.Join(w.dir, "ab", "ab12-a")), "action")
+	entries, err := os.ReadDir(filepath.Join(base, "ab"))
+	testutil.NoErr(t, err)
+	testutil.Equal(t, entrySize(entries[0]), int64(len("action")))
 }
