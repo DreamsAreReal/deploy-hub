@@ -17,8 +17,8 @@ import (
 const (
 	busyRepo = "stt"
 	idleRepo = "tasks"
-	showCmd  = "systemctl show -p ControlGroup --value ci-runner@"
-	restart  = "systemctl try-restart ci-docker@"
+	showCmd  = procexec.CIRunnerSystemctl + " show -p ControlGroup --value ci-runner@"
+	restart  = procexec.CIRunnerSystemctl + " try-restart ci-docker@"
 )
 
 func idleHost(t *testing.T, ex procexec.Runner) Runners {

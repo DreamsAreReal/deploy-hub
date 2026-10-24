@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -60,7 +61,16 @@ func ExitCode(err error) int {
 
 const waitDelay = 5 * time.Second
 
-var ErrNotAllowed = errors.New("binary is not in the allowlist")
+var (
+	ErrNotAllowed     = errors.New("binary is not in the allowlist")
+	ErrArgsNotAllowed = errors.New("arguments are not in the allowlist")
+)
+
+const CIRunnerSystemctl = "systemctl-ci-runner"
+
+var argRules = map[string]*regexp.Regexp{
+	CIRunnerSystemctl: regexp.MustCompile(`^(show -p ControlGroup --value ci-runner@[a-z0-9][a-z0-9_-]{0,28}\.service|try-restart ci-docker@[a-z0-9][a-z0-9_-]{0,28}\.service ci-runner@[a-z0-9][a-z0-9_-]{0,28}\.service)$`),
+}
 
 type builder func(ctx context.Context, args []string) *exec.Cmd
 
@@ -97,6 +107,9 @@ var known = map[string]builder{
 	"ci-runner-setup": func(ctx context.Context, a []string) *exec.Cmd {
 		return exec.CommandContext(ctx, "/opt/deploy-hub/ci-runner/ci-runner-setup", a...)
 	},
+	CIRunnerSystemctl: func(ctx context.Context, a []string) *exec.Cmd {
+		return exec.CommandContext(ctx, "systemctl", a...)
+	},
 	"systemd-analyze": func(ctx context.Context, a []string) *exec.Cmd {
 		return exec.CommandContext(ctx, "systemd-analyze", a...)
 	},
@@ -132,6 +145,9 @@ func (o OS) Run(ctx context.Context, c Command) (Result, error) {
 	build, ok := o.allowed[c.Name]
 	if !ok {
 		return Result{}, fmt.Errorf("%w: %s", ErrNotAllowed, c.Name)
+	}
+	if rule, ok := argRules[c.Name]; ok && !rule.MatchString(strings.Join(c.Args, " ")) {
+		return Result{}, fmt.Errorf("%w: %s %s", ErrArgsNotAllowed, c.Name, strings.Join(c.Args, " "))
 	}
 	var stdout, stderr bytes.Buffer
 	cmd := build(ctx, c.Args)
