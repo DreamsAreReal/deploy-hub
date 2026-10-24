@@ -131,3 +131,23 @@ func TestNothingReachesProductionBeforeTheGatePasses(t *testing.T) {
 		testutil.True(t, found, "no step "+name)
 	}
 }
+
+func TestNoWorkflowRunsOnAGitHubHostedRunner(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join(workflows, "*.y*ml"))
+	testutil.NoErr(t, err)
+	testutil.True(t, len(files) > 0, "no workflows")
+	for _, file := range files {
+		w, _ := readWorkflow(t, filepath.Base(file))
+		for name, job := range w.Jobs {
+			if job.RunsOn == nil {
+				continue
+			}
+			testutil.Equal(t, filepath.Base(file)+"/"+name+" "+toString(job.RunsOn), "deploy.yml/deploy "+`${{ fromJSON('["self-hosted", "linux", "eu"]') }}`)
+		}
+	}
+}
+
+func toString(v any) string {
+	s, _ := v.(string)
+	return s
+}
