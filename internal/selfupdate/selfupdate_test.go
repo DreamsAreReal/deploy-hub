@@ -162,7 +162,7 @@ func newFixture(t *testing.T) *fixture {
 		Exec:    f.exec,
 		Sudo: Sudoers{Path: filepath.Join(dir, "sudoers"), Binary: DefaultBinary, Exec: f.exec,
 			Hub: policy.Hub{SudoUser: "deploy", SudoCommands: []string{policy.SudoCaddySync, policy.SudoHostSync, policy.SudoSelfUpdate}}},
-		Runner:  RunnerFiles{Files: runnerTree(), Dir: filepath.Join(dir, "ci-runner"), Exec: f.exec},
+		Runner:  RunnerFiles{Files: runnerTree(), Dir: filepath.Join(dir, "ci-runner"), Exec: f.exec, Runners: idleHost(t, f.exec)},
 		Journal: journal.Journal{Path: filepath.Join(dir, "deploys.log"), Now: now},
 		Metrics: f.metrics, Now: now, Out: console.New(f.out), Log: slog.New(slog.DiscardHandler),
 	}

@@ -69,7 +69,7 @@ func runSelfUpdate(ctx context.Context, a *App, ex procexec.Runner, args []strin
 	}
 	u := selfupdate.Updater{
 		Source: selfupdate.Source{API: selfupdate.DefaultAPI, Repo: defaultHubRepo, Token: token, Client: &http.Client{}},
-		Binary: selfupdate.DefaultBinary, Current: Commit, Exec: ex, Sudo: sudo, Runner: runnerFiles(ex),
+		Binary: selfupdate.DefaultBinary, Current: Commit, Exec: ex, Sudo: sudo, Runner: a.runnerFiles(ex),
 		Journal: a.journal(), Metrics: a.metrics(), Now: a.Now, Out: a.Out, Log: a.Log,
 	}
 	if err := u.Run(ctx, tag); err != nil {
@@ -78,15 +78,18 @@ func runSelfUpdate(ctx context.Context, a *App, ex procexec.Runner, args []strin
 	return ExitOK
 }
 
-func runnerFiles(ex procexec.Runner) selfupdate.RunnerFiles {
-	return selfupdate.RunnerFiles{Files: cirunner.Files(), Dir: selfupdate.DefaultRunnerDir, Exec: ex}
+func (a *App) runnerFiles(ex procexec.Runner) selfupdate.RunnerFiles {
+	return selfupdate.RunnerFiles{Files: cirunner.Files(), Dir: selfupdate.DefaultRunnerDir, Exec: ex, Runners: selfupdate.Runners{
+		Pending: selfupdate.DefaultRestartDir, Wants: selfupdate.DefaultWantsDir, Cgroups: selfupdate.DefaultCgroupRoot,
+		Proc: selfupdate.DefaultProcRoot, Exec: ex, Log: a.Log,
+	}}
 }
 
 func runRunnerSync(ctx context.Context, a *App, ex procexec.Runner, _ []string) int {
 	if a.Config.Paths.Binary() != selfupdate.DefaultBinary {
 		return a.failWith(runnerSyncPrefix, ErrNotInstalled)
 	}
-	changed, err := runnerFiles(ex).Sync(ctx)
+	changed, err := a.runnerFiles(ex).Sync(ctx)
 	if err != nil {
 		return a.failWith(runnerSyncPrefix, err)
 	}

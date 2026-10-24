@@ -422,7 +422,7 @@ commands:
 | `host-sync <app> <tag>` | root (via a narrow sudoers rule, called by `runner`) | installs the host files of an app's gated image, as listed in the policy (see [Host files](#host-files-host-sync)) |
 | `self-update [sha-<commit>]` | root (systemd timer every 10 minutes) | replaces the binary with the newest gated release of this repo (see [Releases and self-update](#releases-and-self-update)) |
 | `sudoers-sync` | root (called by `self-update`) | writes `/etc/sudoers.d/deploy-hub` from `hub:` in the policy |
-| `ci-runner-sync` | root (called by `self-update`) | installs the embedded `server/ci-runner` into `/opt/deploy-hub/ci-runner` and runs `ci-runner-setup host` when it changed |
+| `ci-runner-sync` | root (called by `self-update`) | installs the embedded `server/ci-runner` into `/opt/deploy-hub/ci-runner` and runs `ci-runner-setup host` when it changed; restarts the idle runners after a change and the busy ones after their job |
 | `version` | anyone | prints the commit the binary was built from |
 | `prune` | root (systemd timer) | keeps the running image + 2 previous per app |
 | `provision --app … ` | root (from `onboard`) | prepares `/opt/<app>/` and the allowlist line |
@@ -617,8 +617,16 @@ that passed the full gate on `main`:
    it writes the tree to `ci-runner.new`, keeps the current one as
    `ci-runner.prev`, swaps them and runs `ci-runner-setup host` from the new
    tree. If `host` fails, it puts `ci-runner.prev` back and runs its `host`
-   again. `host` restarts the runners (`try-restart`), so a job running at that
-   moment fails; this happens only when the runner files change.
+   again. `host` does not restart the runners: after a successful `host`,
+   `ci-runner-sync` leaves a pending restart per enabled runner in
+   `/opt/deploy-hub/ci-runner-restart/<repo>` and restarts
+   (`systemctl try-restart ci-docker@<repo> ci-runner@<repo>`) only the runners
+   with no `Runner.Worker` in their cgroup, so a running job (a PR gate, a
+   deploy) is not cut off. A busy runner keeps its pending restart; every later
+   `ci-runner-sync` (each self-update timer run, every 10 minutes) restarts it
+   once its job is done. A job that a runner picks up in the instant between
+   the check and the restart can still fail. A rollback runs `host` of the
+   previous tree, and trees older than this change restart every runner.
 
 Every installed or refused release is journaled (`deploy-hub@<sha7> self-update
 ok|fail`, a restore adds `restored=ok|fail`); a run that finds the installed

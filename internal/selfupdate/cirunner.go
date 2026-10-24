@@ -27,12 +27,19 @@ const (
 var ErrRunnerSetup = errors.New("ci-runner-setup host failed")
 
 type RunnerFiles struct {
-	Files fs.FS
-	Dir   string
-	Exec  procexec.Runner
+	Files   fs.FS
+	Dir     string
+	Exec    procexec.Runner
+	Runners Runners
 }
 
 func (r RunnerFiles) Sync(ctx context.Context) (bool, error) {
+	changed, err := r.install(ctx)
+	r.Runners.RestartIdle(ctx)
+	return changed, err
+}
+
+func (r RunnerFiles) install(ctx context.Context) (bool, error) {
 	same, err := r.installed()
 	if err != nil || same {
 		return false, err
@@ -57,7 +64,7 @@ func (r RunnerFiles) Sync(ctx context.Context) (bool, error) {
 	if err := r.setup(ctx); err != nil {
 		return false, errors.Join(err, r.rollback(ctx, hadPrevious))
 	}
-	return true, nil
+	return true, r.Runners.MarkAll()
 }
 
 func (r RunnerFiles) setup(ctx context.Context) error {
