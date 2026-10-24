@@ -85,7 +85,7 @@ jobs:
       - name: Toolchain
         id: hub
         if: env.HUB != 'true'
-        uses: DreamsAreReal/deploy-hub/.github/actions/hub@bd69595bcf9cd78274e51dd2e5c8152b1cd5ddd3
+        uses: DreamsAreReal/deploy-hub/.github/actions/hub@b2929c09983cf737ee950cd0b71207e96fd6518e
 
       - name: Set up Go for the hub commit under test
         if: env.HUB == 'true'
