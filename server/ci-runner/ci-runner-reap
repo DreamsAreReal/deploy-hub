@@ -4,29 +4,30 @@ PATH=/usr/bin:/bin
 ROUNDS=50
 
 log() {
-  echo "ci-runner-reap: $*" >&2
+	echo "ci-runner-reap: $*" >&2
 }
 
 proc_cgroup() {
-  sed -n 's/^0:://p' "/proc/$1/cgroup" 2>/dev/null
+	sed -n 's/^0:://p' "/proc/$1/cgroup" 2>/dev/null
 }
 
 proc_ppid() {
-  awk '{sub(/.*\) /, ""); print $2}' "/proc/$1/stat" 2>/dev/null
+	awk '{sub(/.*\) /, ""); print $2}' "/proc/$1/stat" 2>/dev/null
 }
 
 top_of() {
-  pid=$1
-  cg=$(proc_cgroup "$pid")
-  while parent=$(proc_ppid "$pid") && [ -n "$parent" ]; do
-    [ "$parent" -gt 1 ] && [ "$(proc_cgroup "$parent")" = "$cg" ] || break
-    pid=$parent
-  done
-  echo "$pid"
+	pid=$1
+	while :; do
+		parent=$(proc_ppid "${pid}")
+		parent_cg=$(proc_cgroup "${parent:-0}")
+		[ "${parent_cg}" = "${cg}" ] || break
+		pid=${parent}
+	done
+	echo "${pid}"
 }
 
 strays() {
-  sed 's|.*|/proc/&/stat|' "/sys/fs/cgroup$1/cgroup.procs" | xargs -r cat 2>/dev/null | awk -v top="$2" '
+	sed 's|.*|/proc/&/stat|' "/sys/fs/cgroup$1/cgroup.procs" | xargs -r cat 2>/dev/null | awk -v top="$2" '
     {
       pid = $1
       sub(/.*\) /, "")
@@ -44,25 +45,27 @@ strays() {
 }
 
 cg=$(proc_cgroup $$)
-top=$(top_of $$)
-if [ -z "$cg" ] || [ ! -r "/sys/fs/cgroup$cg/cgroup.procs" ]; then
-  log "no cgroup v2 to reap"
-  exit 0
+if [ -z "${cg}" ] || [ ! -r "/sys/fs/cgroup${cg}/cgroup.procs" ]; then
+	log "no cgroup v2 to reap"
+	exit 0
 fi
+top=$(top_of $$)
 round=0
-while [ "$round" -lt "$ROUNDS" ]; do
-  list=$(strays "$cg" "$top")
-  [ -n "$list" ] || break
-  if echo "$list" | awk '$2 != "T" && $2 != "t" {found = 1} END {exit !found}'; then
-    echo "$list" | awk '{print $1}' | xargs -r kill -STOP 2>/dev/null
-  else
-    log "killing $(echo "$list" | wc -l) leftover processes in $cg"
-    echo "$list" | awk '{print $1}' | xargs -r kill -KILL 2>/dev/null
-  fi
-  round=$((round + 1))
+while [ "${round}" -lt "${ROUNDS}" ]; do
+	list=$(strays "${cg}" "${top}")
+	[ -n "${list}" ] || break
+	if echo "${list}" | awk '$2 != "T" && $2 != "t" {found = 1} END {exit !found}'; then
+		echo "${list}" | awk '{print $1}' | xargs -r kill -STOP 2>/dev/null
+	else
+		count=$(echo "${list}" | wc -l)
+		log "killing ${count} leftover processes in ${cg}"
+		echo "${list}" | awk '{print $1}' | xargs -r kill -KILL 2>/dev/null
+	fi
+	round=$((round + 1))
 done
-if [ -n "$(strays "$cg" "$top")" ]; then
-  log "processes still left in $cg after $ROUNDS rounds"
-  exit 1
+left=$(strays "${cg}" "${top}")
+if [ -n "${left}" ]; then
+	log "processes still left in ${cg} after ${ROUNDS} rounds"
+	exit 1
 fi
 exit 0

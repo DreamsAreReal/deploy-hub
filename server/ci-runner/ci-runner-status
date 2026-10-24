@@ -4,77 +4,77 @@ URL=${DEPLOY_HUB_METRICS_URL-http://127.0.0.1:8428/api/v1/import/prometheus}
 WANTS=/etc/systemd/system/multi-user.target.wants
 
 connected() {
-  cg=$(systemctl show -p ControlGroup --value "ci-runner@$1.service")
-  [ -n "$cg" ] || return 1
-  pids=$(tr '\n' '|' <"/sys/fs/cgroup$cg/cgroup.procs" 2>/dev/null) || return 1
-  [ -n "$pids" ] || return 1
-  ip netns exec "ci-$1" ss -Htnp state established '( dport = :443 )' | grep -Eq "pid=(${pids%|}),"
+	cg=$(systemctl show -p ControlGroup --value "ci-runner@$1.service")
+	[ -n "${cg}" ] || return 1
+	pids=$(tr '\n' '|' <"/sys/fs/cgroup${cg}/cgroup.procs" 2>/dev/null) || return 1
+	[ -n "${pids}" ] || return 1
+	ip netns exec "ci-$1" ss -Htnp state established '( dport = :443 )' | grep -Eq "pid=(${pids%|}),"
 }
 
 isolated() {
-  mountpoint -q /var/lib/ci && nft list table inet ci_netns >/dev/null 2>&1
+	mountpoint -q /var/lib/ci && nft list table inet ci_netns >/dev/null 2>&1
 }
 
 in_netns() {
-  pid=$(systemctl show -p MainPID --value "$1")
-  [ "${pid:-0}" -gt 0 ] || return 0
-  [ "$(stat -L -c %i "/proc/$pid/ns/net" 2>/dev/null)" = "$(stat -L -c %i "$2")" ]
+	pid=$(systemctl show -p MainPID --value "$1")
+	[ "${pid:-0}" -gt 0 ] || return 0
+	[ "$(stat -L -c %i "/proc/${pid}/ns/net" 2>/dev/null)" = "$(stat -L -c %i "$2")" ]
 }
 
 netns_ok() {
-  uid=$(id -u "ci-$1" 2>/dev/null) || return 1
-  /usr/local/lib/ci-runner/ci-netns check "$1" &&
-    in_netns "ci-runner@$1.service" "/run/netns/ci-$1" &&
-    in_netns "ci-docker@$1.service" "/run/netns/ci-$1" &&
-    in_netns "user@$uid.service" "/run/netns/ci-$1"
+	uid=$(id -u "ci-$1" 2>/dev/null) || return 1
+	/usr/local/lib/ci-runner/ci-netns check "$1" &&
+		in_netns "ci-runner@$1.service" "/run/netns/ci-$1" &&
+		in_netns "ci-docker@$1.service" "/run/netns/ci-$1" &&
+		in_netns "user@${uid}.service" "/run/netns/ci-$1"
 }
 
 # Project quota of each runner: df of a directory under a project quota
 # reports that quota; deploy_hub_ci_quota_on says the quota really applies.
 quota_metrics() {
-  on=0
-  uid=$(id -u "ci-$1" 2>/dev/null) &&
-    findmnt -no OPTIONS /var/lib/ci | tr ',' '\n' | grep -qx prjquota &&
-    [ "$(lsattr -pd "/var/lib/ci/$1" 2>/dev/null | awk '{print $1}')" = "$uid" ] &&
-    on=1
-  printf 'deploy_hub_ci_quota_on{runner="%s"} %s\n' "$1" "$on"
-  [ "$on" = 1 ] || return 0
-  df -B1 --output=used,size "/var/lib/ci/$1" |
-    awk -v r="$1" 'NR == 2 {printf "deploy_hub_ci_quota_used_ratio{runner=\"%s\"} %.4f\n", r, $1 / $2}'
+	on=0
+	uid=$(id -u "ci-$1" 2>/dev/null) &&
+		findmnt -no OPTIONS /var/lib/ci | tr ',' '\n' | grep -qx prjquota &&
+		[ "$(lsattr -pd "/var/lib/ci/$1" 2>/dev/null | awk '{print $1}')" = "${uid}" ] &&
+		on=1
+	printf 'deploy_hub_ci_quota_on{runner="%s"} %s\n' "$1" "${on}"
+	[ "${on}" = 1 ] || return 0
+	df -B1 --output=used,size "/var/lib/ci/$1" |
+		awk -v r="$1" 'NR == 2 {printf "deploy_hub_ci_quota_used_ratio{runner=\"%s\"} %.4f\n", r, $1 / $2}'
 }
 
 metrics() {
-  base=0
-  if isolated; then
-    base=1
-  else
-    systemctl stop 'ci-runner@*.service'
-  fi
-  iso=$base
-  runners=""
-  for link in "$WANTS"/ci-runner@*.service; do
-    [ -e "$link" ] || continue
-    unit=$(basename "$link")
-    repo=${unit#ci-runner@}
-    repo=${repo%.service}
-    up=0
-    if [ "$base" = 1 ] && ! netns_ok "$repo"; then
-      iso=0
-      systemctl stop "$unit"
-    elif [ "$base" = 1 ] && systemctl -q is-active "$unit" && connected "$repo"; then
-      up=1
-    fi
-    runners="${runners}deploy_hub_ci_runner_up{runner=\"$repo\"} $up
+	base=0
+	if isolated; then
+		base=1
+	else
+		systemctl stop 'ci-runner@*.service'
+	fi
+	iso=${base}
+	runners=""
+	for link in "${WANTS}"/ci-runner@*.service; do
+		[ -e "${link}" ] || continue
+		unit=$(basename "${link}")
+		repo=${unit#ci-runner@}
+		repo=${repo%.service}
+		up=0
+		if [ "${base}" = 1 ] && ! netns_ok "${repo}"; then
+			iso=0
+			systemctl stop "${unit}"
+		elif [ "${base}" = 1 ] && systemctl -q is-active "${unit}" && connected "${repo}"; then
+			up=1
+		fi
+		runners="${runners}deploy_hub_ci_runner_up{runner=\"${repo}\"} ${up}
 "
-    runners="${runners}$(quota_metrics "$repo")
+		runners="${runners}$(quota_metrics "${repo}")
 "
-  done
-  printf 'deploy_hub_ci_isolation_ok %s\n%s' "$iso" "$runners"
-  if mountpoint -q /var/lib/ci; then
-    df -B1 --output=used,size /var/lib/ci | awk 'NR == 2 {printf "deploy_hub_ci_disk_used_ratio %.4f\n", $1 / $2}'
-  fi
+	done
+	printf 'deploy_hub_ci_isolation_ok %s\n%s' "${iso}" "${runners}"
+	if mountpoint -q /var/lib/ci; then
+		df -B1 --output=used,size /var/lib/ci | awk 'NR == 2 {printf "deploy_hub_ci_disk_used_ratio %.4f\n", $1 / $2}'
+	fi
 }
 
 body=$(metrics)
-printf '%s\n' "$body"
-[ -z "$URL" ] || printf '%s\n' "$body" | curl -fsS --max-time 10 --data-binary @- "$URL"
+printf '%s\n' "${body}"
+[ -z "${URL}" ] || printf '%s\n' "${body}" | curl -fsS --max-time 10 --data-binary @- "${URL}"
