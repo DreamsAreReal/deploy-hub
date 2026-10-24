@@ -141,6 +141,7 @@ jobs:
           OWNER="$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
           IMAGE="ghcr.io/${OWNER}/${APP}"
           TAG="sha-${GITHUB_SHA}"
+          chmod -R go+rX,go-w -- "$CONTEXT"
           docker build \
             -f "$DOCKERFILE" \
             --build-arg GIT_SHA="$GITHUB_SHA" \
