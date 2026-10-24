@@ -29,7 +29,7 @@ check_quota() {
 	echo "ci-job-started: disk quota of ${user}: ${quota:-unknown}"
 	case "${quota}" in
 	*"(9"[5-9]"%)" | *"(100%)") refuse "the disk quota of ${user} is full even after the last cleanup, refusing the job; free ${HOME} or raise its line in server/ci-runner/ci-disk-quota of deploy-hub" ;;
-	*) exit 0 ;;
+	*) ;;
 	esac
 }
 
@@ -42,3 +42,7 @@ esac
 [ "${GITHUB_REF:-}" = "${ref}" ] || refuse "this runner takes only ${ref}, got ${GITHUB_REF:-?}"
 check_workflow
 check_quota
+flag=${DOCKER_HOST:-unix:///nonexistent/docker.sock}
+flag=${flag#unix://}
+: >"${flag%/docker.sock}/job-running"
+exit 0

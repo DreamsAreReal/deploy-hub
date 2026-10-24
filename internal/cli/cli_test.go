@@ -37,6 +37,8 @@ type harness struct {
 	err        *bytes.Buffer
 	hubDir     string
 	owned      []string
+	grouped    []string
+	groupErr   error
 	gateChecks []gate.Check
 }
 
@@ -75,6 +77,9 @@ func (h *harness) run(args ...string) int {
 		Exec: func(...string) procexec.Runner { return h.exec },
 		Owner: func(string) func(string) error {
 			return func(p string) error { h.owned = append(h.owned, p); return nil }
+		},
+		Group: func(g string) func(string) error {
+			return func(p string) error { h.grouped = append(h.grouped, g+":"+p); return h.groupErr }
 		},
 		Now:          time.Now,
 		Checks:       h.checks,
