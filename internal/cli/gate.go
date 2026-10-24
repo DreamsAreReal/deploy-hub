@@ -41,11 +41,11 @@ const (
 	msgVerdicts    = "mutation verdicts: %s %s%s\n"
 )
 
-var ErrGateArgs = errors.New("usage: deploy-hub gate --app NAME --repo OWNER/NAME --commit SHA --policy FILE --src DIR --out DIR [--image REF] [--fork] [--mutation-cache FILE --mutation-cache-sha256 sha256:HEX] [--mutation-full] [--mutation-budget DURATION] [--mutation-last FILE]")
+var ErrGateArgs = errors.New("usage: deploy-hub gate --app NAME --repo OWNER/NAME --commit SHA --policy FILE --src DIR --out DIR [--image REF] [--fork] [--mutation-cache FILE --mutation-cache-sha256 sha256:HEX] [--mutation-full] [--mutation-budget DURATION] [--mutation-last FILE] [--mutation-yield FILE]")
 
 type gateArgs struct {
 	app, repo, commit, src, out, policy, image string
-	cache, cacheSum, last                      string
+	cache, cacheSum, last, yield               string
 	budget                                     time.Duration
 	fork, full                                 bool
 }
@@ -67,6 +67,7 @@ func parseGateArgs(args []string) (gateArgs, error) {
 	fs.BoolVar(&g.full, "mutation-full", false, "a chunk of a full mutation run: only tests and mutation run")
 	fs.DurationVar(&g.budget, "mutation-budget", 0, "stop mutation testing after this long and keep the finished verdicts")
 	fs.StringVar(&g.last, "mutation-last", "", "the last full mutation run the hub recorded (absolute path)")
+	fs.StringVar(&g.yield, "mutation-yield", "", "stop mutation testing as soon as this file exists (absolute path)")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		return g, ErrGateArgs
 	}

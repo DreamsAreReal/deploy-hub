@@ -18,14 +18,14 @@ const (
 )
 
 func (g *gateArgs) fullRunArgs() error {
-	if g.budget < 0 || (g.last != "" && (!filepath.IsAbs(g.last) || !outside(g.src, filepath.Clean(g.last)))) {
-		return fmt.Errorf("%w: --mutation-budget must not be negative and --mutation-last needs an absolute path outside the source tree", ErrGateArgs)
+	if g.budget < 0 || !outsidePath(g.src, g.last) || !outsidePath(g.src, g.yield) {
+		return fmt.Errorf("%w: --mutation-budget must not be negative; --mutation-last and --mutation-yield need absolute paths outside the source tree", ErrGateArgs)
 	}
 	return nil
 }
 
 func (g *gateArgs) mutationPlan() (gate.MutationPlan, error) {
-	plan := gate.MutationPlan{Full: g.full, Budget: g.budget}
+	plan := gate.MutationPlan{Full: g.full, Budget: g.budget, Yield: g.yield}
 	if g.cache != "" {
 		plan.Cache, plan.CacheSHA256 = filepath.Clean(g.cache), g.cacheSum[len(digestPrefix):]
 	}
@@ -47,7 +47,7 @@ func gateChecks(all []gate.Check, full bool) []gate.Check {
 	if !full {
 		return all
 	}
-	return slices.DeleteFunc(slices.Clone(all), func(c gate.Check) bool { return c.Name != pack.CheckTests && c.Name != pack.CheckMutation })
+	return slices.DeleteFunc(slices.Clone(all), func(c gate.Check) bool { return c.Name != pack.CheckMutation })
 }
 
 func projectFiles(out, name string) ([]string, error) {
@@ -92,4 +92,8 @@ func (a *App) keepRunSummary(ws gate.Workspace) error {
 		a.Out.Printf(msgRunSummary, out, s.Complete, s.Passed, s.Fresh, s.Stale)
 	}
 	return err
+}
+
+func outsidePath(src, path string) bool {
+	return path == "" || (filepath.IsAbs(path) && outside(src, filepath.Clean(path)))
 }

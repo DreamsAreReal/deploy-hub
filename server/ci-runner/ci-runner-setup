@@ -2,7 +2,8 @@
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 LIB=/usr/local/lib/ci-runner
-UNITS=/etc/systemd/system
+UNITS=${CI_RUNNER_UNITS:-/etc/systemd/system}
+SYSTEMCTL=${CI_RUNNER_SYSTEMCTL:-systemctl}
 WANTS=$UNITS/multi-user.target.wants
 OWNER=DreamsAreReal
 RUNNER_VERSION=2.338.1
@@ -57,7 +58,8 @@ jail() {
   repo=$1
   uid=$2
   slice=user-$uid.slice
-  install -d -m 755 "$UNITS/$slice.d" "$UNITS/user@$uid.service.d" "$UNITS/ci-docker@$repo.service.d" "$UNITS/ci-runner@$repo.service.d"
+  install -d -m 755 "$UNITS/$slice.d" "$UNITS/user@$uid.service.d" "$UNITS/ci-docker@$repo.service.d" "$UNITS/ci-runner@$repo.service.d" \
+    "$UNITS/ci-mutation@$repo.service.d"
   install -m 644 "$HERE/ci-limits.conf" "$UNITS/$slice.d/50-ci-limits.conf"
   cat >"$UNITS/user@$uid.service.d/50-ci-jail.conf" <<UNIT
 [Unit]
@@ -86,6 +88,10 @@ UNIT
 [Service]
 Slice=$slice
 UNIT
+  cat >"$UNITS/ci-mutation@$repo.service.d/50-ci-user.conf" <<UNIT
+[Service]
+Slice=$slice
+UNIT
 }
 
 in_netns() {
@@ -109,6 +115,8 @@ prepare() {
   netns "$1"
   in_netns "user@$uid.service" "/run/netns/ci-$1" || systemctl restart "user@$uid.service"
   loginctl enable-linger "ci-$1"
+  install -d -m 755 /var/lib/ci-mutation
+  timers "$1"
 }
 
 shared_netns() {
@@ -248,6 +256,21 @@ registered() {
   done
 }
 
+units() {
+  for f in "$HERE"/*.service "$HERE"/*.timer; do
+    install -m 644 "$f" "$UNITS/${f##*/}"
+  done
+  rm -f "$UNITS/ci-docker@.service.d/50-ci-user.conf" "$UNITS/ci-runner@.service.d/50-ci-user.conf"
+  "$SYSTEMCTL" daemon-reload
+}
+
+timers() {
+  for f in "$HERE"/*@.timer; do
+    unit=${f##*/}
+    "$SYSTEMCTL" enable --now "${unit%@.timer}@$1.timer"
+  done
+}
+
 host() {
   # quota_v2 (ext4 project quotas) ships in modules-extra, which linux-virtual
   # lacks; the meta package keeps it in step with every new kernel.
@@ -264,12 +287,7 @@ host() {
   install -m 755 "$HERE/ci-job-started" "$LIB/ci-job-started.sh"
   install -m 755 "$HERE/ci-runner-clean" "$LIB/ci-runner-clean.sh"
   rm -f "$LIB/ci-runner-clean"
-  for f in ci-netns@.service ci-docker@.service ci-runner@.service \
-    ci-runner-status.service ci-runner-status.timer; do
-    install -m 644 "$HERE/$f" "$UNITS/$f"
-  done
-  rm -f "$UNITS/ci-docker@.service.d/50-ci-user.conf" "$UNITS/ci-runner@.service.d/50-ci-user.conf"
-  systemctl daemon-reload
+  units
   "$LIB/ci-netns" guard
   disk
   systemctl enable --now ci-runner-status.timer
@@ -314,8 +332,10 @@ case "${1:-}" in
   host) host ;;
   register) register "${2:?repository}" ;;
   quota-enable) quota_enable ;;
+  units) units ;;
+  timers) timers "${2:?repository}" ;;
   *)
-    echo "usage: $0 host | quota-enable | register <repo> < registration-token" >&2
+    echo "usage: $0 host | quota-enable | register <repo> < registration-token | units | timers <repo>" >&2
     exit 2
     ;;
 esac

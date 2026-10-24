@@ -291,6 +291,26 @@ jobs:
                 "$VPS_USER@$VPS_HOST" "mutation-cache-put $APP sha-${GITHUB_SHA}" \
             || echo "::warning::the hub did not take the mutation verdicts; the next run mutates them again"
 
+      - name: Keep the source for the hub's full mutation run
+        if: always() && runner.environment == 'self-hosted' && steps.checkout.outcome == 'success' && steps.hub.outcome == 'success'
+        env:
+          TOOLCHAIN: ${{ steps.hub.outputs.bin }}
+          POLICY: ${{ steps.hub.outputs.policy }}
+        run: |
+          set -euo pipefail
+          root="$HOME/mutation"
+          next="$root/stash.next"
+          rm -rf "$next"
+          install -d -m 700 "$root" "$next"
+          git archive --format=tar -o "$next/src.tar" HEAD
+          install -m 700 "$TOOLCHAIN/deploy-hub" "$next/deploy-hub"
+          cp -r "$(dirname "$POLICY")" "$next/policy"
+          cp -a "$(go env GOROOT)" "$next/go"
+          printf '%s\n' "$GITHUB_SHA" > "$next/commit"
+          rm -rf "$root/stash"
+          mv "$next" "$root/stash"
+          du -sh "$root/stash"
+
       - name: Report the verdict to the hub
         if: always() && steps.inputs.outcome == 'success' && env.GATE_ONLY != 'true'
         env:

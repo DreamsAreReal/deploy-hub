@@ -111,3 +111,18 @@ func TestBlocksNeverOverflow(t *testing.T) {
 	testutil.Equal(t, blocks(7), int64(7))
 	testutil.Equal(t, blocks(^uint64(0)), int64(math.MaxInt64>>maxBlockShift))
 }
+
+func TestRunnerJobStopsTheChunk(t *testing.T) {
+	flag := filepath.Join(t.TempDir(), "job-running")
+	g := diskGuard{yield: flag}
+	testutil.NoErr(t, g.check())
+	testutil.Write(t, flag, "")
+	err := g.check()
+	testutil.True(t, errors.Is(err, ErrYield), "a running CI job stops the chunk")
+	testutil.Contains(t, err.Error(), flag+" appeared")
+	ws, fg := cachedSetup(t)
+	ws.Mutation.Yield = flag
+	_, err = Run(context.Background(), ws)
+	testutil.True(t, errors.Is(err, ErrIncomplete) && errors.Is(err, ErrYield), "a chunk does not start while a job runs")
+	testutil.Equal(t, len(fg.overlays), 0)
+}
