@@ -35,4 +35,7 @@ case "$quota" in
     exit 1
     ;;
 esac
+flag=${DOCKER_HOST:-unix:///nonexistent/docker.sock}
+flag=${flag#unix://}
+: >"${flag%/docker.sock}/job-running"
 exit 0

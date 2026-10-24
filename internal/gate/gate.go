@@ -111,6 +111,7 @@ type MutationPlan struct {
 	Full        bool
 	Budget      time.Duration
 	Last        *FullRun
+	Yield       string
 }
 
 type FullRun struct {
