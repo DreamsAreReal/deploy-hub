@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/junit"
@@ -52,6 +53,8 @@ const (
 	idSeparator       = " > "
 	unusedVariable    = 2034
 	unusedFunction    = 2329
+	testProcesses     = 4096
+	limitScript       = `ulimit -u "$1" && shift && exec "$@"`
 )
 
 var (
@@ -59,6 +62,35 @@ var (
 	traceLine = regexp.MustCompile(`^\++(.+?):(\d+): `)
 	deadCodes = []int{unusedVariable, unusedFunction}
 )
+
+var (
+	userProcesses = countUserProcesses
+	procDir       = "/proc"
+)
+
+func countUserProcesses() int {
+	entries, err := os.ReadDir(procDir)
+	if err != nil {
+		return 0
+	}
+	uid := int64(os.Getuid())
+	n := 0
+	for _, e := range entries {
+		if _, aerr := strconv.Atoi(e.Name()); aerr != nil {
+			continue
+		}
+		if info, ierr := e.Info(); ierr == nil {
+			if st, ok := info.Sys().(*syscall.Stat_t); ok && int64(st.Uid) == uid {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+func batsArgs(args ...string) []string {
+	return append([]string{"-c", limitScript, BashBinary, strconv.Itoa(userProcesses() + testProcesses), BatsBinary}, args...)
+}
 
 var (
 	Integrity    = gate.NotApplicable(reasonNoDeps)
@@ -186,7 +218,7 @@ func Tests(ctx context.Context, ws gate.Workspace) gate.Outcome {
 		return gate.Fail(err.Error())
 	}
 	_ = os.Remove(ws.Report(traceLog))
-	_, runErr := ws.RunEnv(ctx, env, BatsBinary, append([]string{"--report-formatter", "junit", "--output", ws.Out}, tests...)...)
+	_, runErr := ws.RunEnv(ctx, env, BashBinary, batsArgs(append([]string{"--report-formatter", "junit", "--output", ws.Out}, tests...)...)...)
 	cases, lerr := junit.Load(ws.Report(JUnitReport))
 	if lerr != nil {
 		return gate.Fail(reasonNoReport + ": " + gate.Tail(errors.Join(runErr, lerr).Error()))

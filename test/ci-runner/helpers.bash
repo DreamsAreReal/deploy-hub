@@ -12,6 +12,8 @@ stub() {
 	local name=$1 body=${2:-}
 	cat >"${STUBS}/${name}" <<STUB
 #!/bin/bash
+[ "\${STUB_DEPTH:-0}" -lt 3 ] || exit 125
+export STUB_DEPTH=\$((\${STUB_DEPTH:-0} + 1))
 printf '%s\n' "${name} \$*" >>"\${CALLS}"
 ${body}
 STUB

@@ -46,7 +46,8 @@ repo_home() {
 	user=ci-$1
 	home=${CI_ROOT}/$1
 	[ -d "${home}" ] || install -d -m 700 -o "${user}" -g "${user}" "${home}"
-	[ "$(stat -c %U "${home}")" = "${user}" ] || {
+	owner=$(stat -c %U "${home}")
+	[ "${owner}" = "${user}" ] || {
 		echo "${home} exists but is not owned by ${user}: remove it first" >&2
 		exit 1
 	}
@@ -88,10 +89,19 @@ Slice=${slice}
 UNIT
 }
 
-in_netns() {
+needs_restart() {
 	pid=$(systemctl show -p MainPID --value "$1")
-	[ "${pid:-0}" -gt 0 ] || return 0
-	[ "$(stat -L -c %i "/proc/${pid}/ns/net")" = "$(stat -L -c %i "$2")" ]
+	if [ "${pid:-0}" -le 0 ]; then
+		echo no
+		return 0
+	fi
+	inner=$(stat -L -c %i "/proc/${pid}/ns/net" 2>/dev/null) || inner=
+	outer=$(stat -L -c %i "$2")
+	if [ "${inner}" = "${outer}" ]; then
+		echo no
+	else
+		echo yes
+	fi
 }
 
 netns() {
@@ -107,7 +117,8 @@ prepare() {
 	jail "$1" "${uid}"
 	systemctl daemon-reload
 	netns "$1"
-	in_netns "user@${uid}.service" "/run/netns/ci-$1" || systemctl restart "user@${uid}.service"
+	restart=$(needs_restart "user@${uid}.service" "/run/netns/ci-$1")
+	[ "${restart}" = no ] || systemctl restart "user@${uid}.service"
 	loginctl enable-linger "ci-$1"
 }
 
@@ -116,13 +127,19 @@ shared_netns() {
 	echo "moving the runners from the shared network namespace ci to one per repository" >&2
 	out=$(ip -4 route get 1.1.1.1 | grep -o 'dev [^ ]*' | awk '{print $2}')
 	systemctl stop 'ci-runner@*.service' 'ci-docker@*.service'
-	systemctl disable --now ci-netns.service 2>/dev/null || true
-	rm -f "${UNITS}/ci-netns.service"
+	if [ -e "${UNITS}/ci-netns.service" ]; then
+		systemctl disable --now ci-netns.service
+		rm "${UNITS}/ci-netns.service"
+	fi
 	while iptables -D FORWARD -i ci-host -o "${out}" -j ACCEPT 2>/dev/null; do :; done
 	while iptables -D FORWARD -o ci-host -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null; do :; done
 	while iptables -t nat -D POSTROUTING -s 10.79.0.0/30 -o "${out}" -j MASQUERADE 2>/dev/null; do :; done
-	ip link del ci-host 2>/dev/null || true
-	ip netns del ci 2>/dev/null || true
+	if ip link show ci-host >/dev/null 2>&1; then
+		ip link del ci-host
+	fi
+	if [ -e /run/netns/ci ]; then
+		ip netns del ci
+	fi
 	rm -rf /etc/netns/ci
 }
 
@@ -136,12 +153,12 @@ legacy() {
 	echo "removing the shared runner user ${LEGACY_USER}: register every repository again" >&2
 	for link in "${WANTS}"/ci-runner@*.service; do
 		[ -L "${link}" ] || continue
-		systemctl disable --now "$(basename "${link}")"
+		systemctl disable --now "${link##*/}"
 	done
 	systemctl stop 'ci-runner@*.service' 'ci-docker@*.service'
 	loginctl disable-linger "${LEGACY_USER}"
 	systemctl stop "user@${uid}.service"
-	pkill -KILL -U "${uid}" || true
+	pkill -KILL -U "${uid}" || [ $? -eq 1 ]
 	rm -rf "${UNITS}/user-${uid}.slice.d" "${UNITS}/user@${uid}.service.d"
 	find "${CI_ROOT}" -mindepth 1 -maxdepth 1 -user "${LEGACY_USER}" -exec rm -rf {} +
 	userdel "${LEGACY_USER}"
@@ -162,8 +179,6 @@ disk() {
 	chmod 755 "${CI_ROOT}"
 }
 
-# The prjquota mount option fails to mount an image without the project
-# feature, so the unit gets it only once quota-enable has run.
 mount_unit() {
 	if tune2fs -l "${DISK_IMAGE}" 2>/dev/null | grep -q '^Filesystem features:.* project'; then
 		install -m 644 "${HERE}/var-lib-ci.mount" "${UNITS}/var-lib-ci.mount"
@@ -178,13 +193,17 @@ quota_gib() {
 }
 
 quota_enabled() {
-	tune2fs -l "${DISK_IMAGE}" | grep -q '^Filesystem features:.* project' &&
-		findmnt -no OPTIONS "${CI_ROOT}" | tr ',' '\n' | grep -qx prjquota
+	if tune2fs -l "${DISK_IMAGE}" 2>/dev/null | grep -q '^Filesystem features:.* project' &&
+		findmnt -no OPTIONS "${CI_ROOT}" | tr ',' '\n' | grep -qx prjquota; then
+		echo yes
+	else
+		echo no
+	fi
 }
 
-# Project quotas need the image unmounted once: only when no job runs.
 quota_enable() {
-	quota_enabled && return 0
+	enabled=$(quota_enabled)
+	[ "${enabled}" = no ] || return 0
 	if pgrep -x Runner.Worker >/dev/null; then
 		echo "a CI job is running: enable the quotas when the runners are idle" >&2
 		exit 1
@@ -193,36 +212,46 @@ quota_enable() {
 		echo "a deploy holds ${DEPLOY_LOCK}: enable the quotas when it is done" >&2
 		exit 1
 	fi
-	echo "stopping the runners to enable project quotas on ${DISK_IMAGE}: $(date -u +%FT%TZ)" >&2
+	now=$(date -u +%FT%TZ)
+	echo "stopping the runners to enable project quotas on ${DISK_IMAGE}: ${now}" >&2
 	systemctl stop 'ci-runner@*.service' 'ci-docker@*.service'
-	for repo in $(registered); do
-		systemctl stop "user@$(id -u "ci-${repo}").service"
+	repos=$(registered)
+	for repo in ${repos}; do
+		uid=$(id -u "ci-${repo}")
+		systemctl stop "user@${uid}.service"
 	done
 	systemctl stop var-lib-ci.mount
 	tune2fs -O quota,project -Q prjquota "${DISK_IMAGE}" >/dev/null
 	install -m 644 "${HERE}/var-lib-ci.mount" "${UNITS}/var-lib-ci.mount"
 	systemctl daemon-reload
 	systemctl start var-lib-ci.mount
-	quota_enabled || {
+	enabled=$(quota_enabled)
+	[ "${enabled}" = yes ] || {
 		echo "project quotas are still off on ${CI_ROOT}" >&2
 		exit 1
 	}
-	for repo in $(registered); do
+	for repo in ${repos}; do
 		repo_quota "${repo}"
-		systemctl start "user@$(id -u "ci-${repo}").service"
+		uid=$(id -u "ci-${repo}")
+		systemctl start "user@${uid}.service"
 	done
 	for link in "${WANTS}"/ci-runner@*.service; do
-		[ -L "${link}" ] && systemctl start "$(basename "${link}")"
+		if [ -L "${link}" ]; then
+			systemctl start "${link##*/}"
+		fi
 	done
-	echo "runners started again: $(date -u +%FT%TZ)" >&2
+	now=$(date -u +%FT%TZ)
+	echo "runners started again: ${now}" >&2
 }
 
 quota_ready() {
-	[ -n "$(quota_gib "$1")" ] || {
+	gib=$(quota_gib "$1")
+	[ -n "${gib}" ] || {
 		echo "no disk quota for $1 in ${QUOTAS}: add a line '$1 <GiB>' first" >&2
 		exit 1
 	}
-	quota_enabled || {
+	enabled=$(quota_enabled)
+	[ "${enabled}" = yes ] || {
 		echo "project quotas are off on ${CI_ROOT}: run '$0 quota-enable' while no job runs" >&2
 		exit 1
 	}
@@ -230,10 +259,10 @@ quota_ready() {
 
 repo_quota() {
 	quota_ready "$1"
-	gib=$(quota_gib "$1")
 	uid=$(id -u "ci-$1")
 	home=${CI_ROOT}/$1
-	if [ "$(lsattr -pd "${home}" | awk '{print $1}')" != "${uid}" ]; then
+	project=$(lsattr -pd "${home}" | awk '{print $1}')
+	if [ "${project}" != "${uid}" ]; then
 		find "${home}" -xdev -type d -exec chattr +P -p "${uid}" {} + &&
 			find "${home}" -xdev -type f -exec chattr -p "${uid}" {} + ||
 			echo "warning: some files of ${home} keep another project and count outside the quota of $1" >&2
@@ -245,13 +274,11 @@ registered() {
 	for runner in "${CI_ROOT}"/*/runner/.runner; do
 		[ -f "${runner}" ] || continue
 		repo=${runner%/runner/.runner}
-		basename "${repo}"
+		echo "${repo##*/}"
 	done
 }
 
 host() {
-	# quota_v2 (ext4 project quotas) ships in modules-extra, which linux-virtual
-	# lacks; the meta package keeps it in step with every new kernel.
 	DEBIAN_FRONTEND=noninteractive apt-get install -y -q uidmap slirp4netns nftables quota linux-image-extra-virtual \
 		libicu74 libkrb5-3 liblttng-ust1t64 libssl3t64 zlib1g >/dev/null
 	install -m 644 "${HERE}/rootlesskit.apparmor" /etc/apparmor.d/rootlesskit
@@ -274,9 +301,11 @@ host() {
 	"${LIB}/ci-netns" guard
 	disk
 	systemctl enable --now ci-runner-status.timer
-	for repo in $(registered); do
+	repos=$(registered)
+	for repo in ${repos}; do
 		prepare "${repo}"
-		if quota_enabled; then
+		enabled=$(quota_enabled)
+		if [ "${enabled}" = yes ]; then
 			repo_quota "${repo}"
 		else
 			echo "warning: no disk quota for ${repo} until '$0 quota-enable' runs" >&2

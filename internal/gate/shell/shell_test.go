@@ -3,7 +3,9 @@ package shell
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -116,6 +118,9 @@ type world struct {
 
 func newWorld(t *testing.T, files map[string]string) *world {
 	t.Helper()
+	saved := userProcesses
+	t.Cleanup(func() { userProcesses = saved })
+	userProcesses = func() int { return 7 }
 	w := &world{World: packtest.New(t, files, shellPolicy)}
 	w.Hook = w.hook
 	return w
@@ -127,7 +132,7 @@ func project(t *testing.T) *world {
 }
 
 func (w *world) hook(c procexec.Command, line string) (procexec.Result, error) {
-	if c.Name != BatsBinary {
+	if !slices.Contains(c.Args, BatsBinary) {
 		return procexec.Result{}, packtest.ErrPass
 	}
 	if w.Kill != nil && strings.Contains(line, "--abort") {
@@ -200,7 +205,8 @@ func TestTestsAndCoverage(t *testing.T) {
 	out := Tests(context.Background(), w.WS)
 	testutil.Equal(t, out.Status, gate.StatusPass)
 	run, _ := w.Fake.Find(BatsBinary)
-	testutil.Equal(t, run.Args, []string{"--report-formatter", "junit", "--output", w.WS.Out, fileTest})
+	testutil.Equal(t, run.Name, BashBinary)
+	testutil.Equal(t, run.Args, append(limited(), "--report-formatter", "junit", "--output", w.WS.Out, fileTest))
 	testutil.Equal(t, run.Env, []string{envBashEnv + w.WS.Report(traceScript), envTrace + w.WS.Report(traceLog)})
 	testutil.Equal(t, testutil.Read(t, w.WS.Report(traceScript)), traceSetup)
 	cov, err := linecov.Load(w.WS)
@@ -268,7 +274,7 @@ func TestShellMutation(t *testing.T) {
 		testutil.Missing(t, w.WS.Report(tokmut.SandboxPrefix+strconv.Itoa(i)))
 	}
 	abort, _ := w.Fake.Find("--abort")
-	testutil.Equal(t, abort.Args, []string{"--abort", fileTest})
+	testutil.Equal(t, abort.Args, append(limited(), "--abort", fileTest))
 	syntax, _ := w.Fake.Find("bash -n")
 	testutil.Equal(t, syntax.Args, []string{"-n", fileGrade})
 	unviable := project(t)
@@ -308,4 +314,23 @@ func TestScriptsWithoutExtensionAreChecked(t *testing.T) {
 	check, _ := w.Fake.Find(ShellcheckBinary)
 	testutil.Equal(t, check.Args[len(check.Args)-1], "agent/apply")
 	testutil.Equal(t, Complexity(context.Background(), w.WS).Values[ValueFunctions], float64(1))
+}
+
+func limited() []string {
+	return []string{"-c", limitScript, BashBinary, "4103", BatsBinary}
+}
+
+func TestTestsRunUnderAProcessLimit(t *testing.T) {
+	out, err := exec.CommandContext(context.Background(), BashBinary, "-c", limitScript, BashBinary, "64", BashBinary, "-c", "ulimit -u").Output()
+	testutil.NoErr(t, err)
+	testutil.Equal(t, strings.TrimSpace(string(out)), "64")
+	testutil.True(t, countUserProcesses() > 0, "the test process itself belongs to the user")
+	saved := procDir
+	t.Cleanup(func() { procDir = saved })
+	procDir = filepath.Join(t.TempDir(), "absent")
+	testutil.Equal(t, countUserProcesses(), 0)
+	procDir = t.TempDir()
+	testutil.Mkdir(t, filepath.Join(procDir, "self"))
+	testutil.Mkdir(t, filepath.Join(procDir, "42"))
+	testutil.Equal(t, countUserProcesses(), 1)
 }
