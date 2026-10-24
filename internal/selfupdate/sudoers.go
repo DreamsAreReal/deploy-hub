@@ -51,7 +51,7 @@ func (s Sudoers) Sync(ctx context.Context) error {
 	}
 	staged := filepath.Join(filepath.Dir(s.Path), sudoersStaging)
 	_ = os.Remove(staged)
-	if err := os.WriteFile(staged, want, sudoersPerm); err != nil {
+	if err := writeMode(staged, want, sudoersPerm); err != nil {
 		return err
 	}
 	if _, err := s.Exec.Run(ctx, procexec.Command{Name: VisudoCommand, Args: []string{"-cf", staged}}); err != nil {
