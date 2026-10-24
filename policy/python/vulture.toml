@@ -5,3 +5,7 @@ ignore_decorators = [
     "@*.fixture", "@pytest.fixture", "@*.command", "@*.group", "@*.task", "@*.on_event", "@*.middleware",
     "@*.exception_handler", "@*.validator", "@*.field_validator", "@*.model_validator", "@*.receiver", "@*.handler",
 ]
+ignore_names = [
+    "do_*", "log_message", "server_version",
+    "intra_op_num_threads", "inter_op_num_threads", "enable_cpu_mem_arena", "enable_mem_pattern",
+]
