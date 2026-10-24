@@ -3,6 +3,7 @@ package hostsync
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"log/slog"
 	"os"
@@ -66,6 +67,7 @@ func (r *recorder) value(name string) float64 {
 }
 
 type fixture struct {
+	bundle  string
 	syncer  Syncer
 	exec    *procexectest.Fake
 	script  procexectest.Script
@@ -140,6 +142,7 @@ func (f *fixture) writeBundle(_ *testing.T, files map[string]string) {
 
 func (f *fixture) populate(t *testing.T, dir string) {
 	t.Helper()
+	f.bundle = dir
 	for rel, body := range f.files {
 		testutil.Write(t, filepath.Join(dir, rel), body)
 	}
@@ -314,8 +317,16 @@ func TestRefusesBundlesOutsideTheList(t *testing.T) {
 				testutil.NoErr(t, syscall.Mkfifo(filepath.Join(dir, "pipe"), 0o600))
 			})
 		}, want: ErrNotRegular},
-		"file too large": {prepare: func(t *testing.T, f *fixture) {
-			f.writeBundle(t, map[string]string{srcPy: strings.Repeat("x", MaxFileSize+1)})
+		"text config over 1 MiB": {prepare: func(t *testing.T, f *fixture) {
+			f.writeBundle(t, map[string]string{srcUnit: strings.Repeat("x", MaxFileSize+1)})
+		}, want: ErrTooLarge},
+		"env template over 1 MiB": {prepare: func(t *testing.T, f *fixture) {
+			f.writeBundle(t, map[string]string{srcSite: strings.Repeat("x", MaxFileSize+1)})
+		}, want: ErrTooLarge},
+		"executable over 64 MiB": {prepare: func(_ *testing.T, f *fixture) {
+			f.extra = append(f.extra, func(t *testing.T, dir string) {
+				testutil.NoErr(t, os.Truncate(filepath.Join(dir, srcPy), MaxBinarySize+1))
+			})
 		}, want: ErrTooLarge},
 	}
 	for name, tc := range cases {
@@ -479,4 +490,61 @@ func TestFailedWriteRestoresWhatWasWritten(t *testing.T) {
 	testutil.Missing(t, f.host(script))
 	matches, _ := filepath.Glob(f.host("/etc/systemd/system/.*"))
 	testutil.Equal(t, len(matches), 0)
+}
+
+func sum(t *testing.T, path string) [sha256.Size]byte {
+	t.Helper()
+	return sha256.Sum256([]byte(testutil.Read(t, path)))
+}
+
+func TestExecutableUpToTheBinaryLimitIsStreamedIn(t *testing.T) {
+	f := newFixture(t)
+	f.extra = append(f.extra, func(t *testing.T, dir string) {
+		testutil.NoErr(t, os.Truncate(filepath.Join(dir, srcPy), MaxBinarySize))
+	})
+	var want [sha256.Size]byte
+	f.syncer.Accounts = func(string, string) (int, int, error) {
+		want = sum(t, filepath.Join(f.bundle, srcPy))
+		return os.Getuid(), os.Getgid(), nil
+	}
+	testutil.NoErr(t, f.run(t))
+	testutil.Equal(t, sum(t, f.host(script)), want)
+	testutil.Perm(t, f.host(script), 0o755)
+	testutil.NoErr(t, f.run(t))
+	testutil.Contains(t, f.journal(t), "host-sync ok 0s changed=0")
+}
+
+func TestLargeExecutableIsRestoredFromItsBackup(t *testing.T) {
+	f := newFixture(t)
+	old := strings.Repeat("o", MaxFileSize+1)
+	testutil.Write(t, f.host(script), old)
+	f.writeBundle(t, map[string]string{srcPy: strings.Repeat("n", MaxFileSize+2)})
+	f.script[check] = procexectest.Reply{Err: errors.New("exit status 1")}
+	testutil.Is(t, f.run(t), ErrActivate)
+	testutil.Equal(t, testutil.Read(t, f.host(script)), old)
+	testutil.Equal(t, testutil.Read(t, filepath.Join(f.syncer.Backups, app, "20261023T010000Z-"+sha7, "0")), old)
+}
+
+func TestExecutableChangedAfterTheCheckIsRefused(t *testing.T) {
+	f := newFixture(t)
+	f.syncer.Accounts = func(string, string) (int, int, error) {
+		testutil.Write(t, filepath.Join(f.bundle, srcPy), "swapped\n")
+		return os.Getuid(), os.Getgid(), nil
+	}
+	testutil.Is(t, f.run(t), ErrChanged)
+	testutil.Missing(t, f.host(script))
+}
+
+func TestBodyFailuresAreReported(t *testing.T) {
+	dir := t.TempDir()
+	gone := body{path: filepath.Join(dir, "gone"), limit: MaxBinarySize}
+	testutil.Fails(t, gone.copyTo(&bytes.Buffer{}))
+	testutil.Fails(t, writeBody(filepath.Join(dir, "missing", "file"), bytesBody([]byte("x"))))
+	exact := filepath.Join(dir, "exact")
+	testutil.Write(t, exact, strings.Repeat("x", MaxFileSize))
+	data, err := readLimited(exact, MaxFileSize)
+	testutil.NoErr(t, err)
+	testutil.Equal(t, len(data), MaxFileSize)
+	_, err = readLimited(exact, MaxFileSize-1)
+	testutil.Is(t, err, ErrTooLarge)
 }

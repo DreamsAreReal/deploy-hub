@@ -1,10 +1,8 @@
 package hostsync
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -14,8 +12,6 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/policy"
 	"github.com/DreamsAreReal/deploy-hub/internal/registry"
 )
-
-const MaxFileSize = 1 << 20
 
 var (
 	ErrTooLarge    = errors.New("file is larger than the host-sync limit")
@@ -27,10 +23,10 @@ var (
 )
 
 type snapshot struct {
-	content []byte
-	mode    fs.FileMode
-	uid     int
-	gid     int
+	body body
+	mode fs.FileMode
+	uid  int
+	gid  int
 }
 
 type plannedFile struct {
@@ -62,9 +58,9 @@ func (s Syncer) plan(t target, bundle string) ([]plannedFile, error) {
 }
 
 func (s Syncer) planFile(t target, bundle string, f policy.HostFile) (plannedFile, error) {
-	content, err := readLimited(filepath.Join(bundle, filepath.FromSlash(f.Src)))
+	content, err := readBody(filepath.Join(bundle, filepath.FromSlash(f.Src)), f)
 	if err == nil && f.Env != "" {
-		content, err = render(content, filepath.Join(t.dir, f.Env))
+		content, err = render(content.data, filepath.Join(t.dir, f.Env))
 	}
 	if err != nil {
 		return plannedFile{}, err
@@ -74,36 +70,23 @@ func (s Syncer) planFile(t target, bundle string, f policy.HostFile) (plannedFil
 	if err != nil {
 		return plannedFile{}, err
 	}
-	p := plannedFile{spec: f, path: s.hostPath(f.Dst), want: snapshot{content: content, mode: fs.FileMode(mode), uid: uid, gid: gid}}
+	p := plannedFile{spec: f, path: s.hostPath(f.Dst), want: snapshot{body: content, mode: fs.FileMode(mode), uid: uid, gid: gid}}
 	if derr := realDir(filepath.Dir(p.path)); derr != nil {
 		return plannedFile{}, derr
 	}
-	p.old, p.existed, err = current(p.path)
+	p.old, p.existed, err = current(p.path, f)
 	p.changed = !p.existed || !p.old.same(p.want)
 	return p, err
 }
 
 func (a *snapshot) same(b snapshot) bool {
-	return bytes.Equal(a.content, b.content) && a.mode == b.mode && a.uid == b.uid && a.gid == b.gid
+	return a.body.sum == b.body.sum && a.mode == b.mode && a.uid == b.uid && a.gid == b.gid
 }
 
-func readLimited(path string) ([]byte, error) {
-	f, err := os.OpenFile(filepath.Clean(path), os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+func render(content []byte, envPath string) (body, error) {
+	raw, err := readLimited(envPath, MaxFileSize)
 	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = f.Close() }()
-	data, err := io.ReadAll(io.LimitReader(f, MaxFileSize+1))
-	if err == nil && len(data) > MaxFileSize {
-		err = fmt.Errorf("%w: %s", ErrTooLarge, path)
-	}
-	return data, err
-}
-
-func render(content []byte, envPath string) ([]byte, error) {
-	raw, err := readLimited(envPath)
-	if err != nil {
-		return nil, err
+		return body{}, err
 	}
 	values := registry.ParseKV(string(raw))
 	var missing error
@@ -116,7 +99,7 @@ func render(content []byte, envPath string) ([]byte, error) {
 		}
 		return []byte(v)
 	})
-	return out, missing
+	return bytesBody(out), missing
 }
 
 func realDir(dir string) error {
@@ -131,7 +114,7 @@ func realDir(dir string) error {
 	return nil
 }
 
-func current(path string) (snapshot, bool, error) {
+func current(path string, f policy.HostFile) (snapshot, bool, error) {
 	info, err := os.Lstat(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return snapshot{}, false, nil
@@ -145,10 +128,10 @@ func current(path string) (snapshot, bool, error) {
 	if !info.Mode().IsRegular() {
 		return snapshot{}, false, fmt.Errorf("%w: %s", ErrNotRegular, path)
 	}
-	content, err := readLimited(path)
+	content, err := readBody(path, f)
 	if err != nil {
 		return snapshot{}, false, err
 	}
 	st, _ := info.Sys().(*syscall.Stat_t)
-	return snapshot{content: content, mode: info.Mode().Perm(), uid: int(st.Uid), gid: int(st.Gid)}, true, nil
+	return snapshot{body: content, mode: info.Mode().Perm(), uid: int(st.Uid), gid: int(st.Gid)}, true, nil
 }
