@@ -148,17 +148,58 @@ jobs:
             -t "$IMAGE:$TAG" "$CONTEXT"
           { echo "image=$IMAGE"; echo "tag=$TAG"; } >> "$GITHUB_OUTPUT"
 
+      - name: Connect to the VPS
+        if: always() && env.GATE_ONLY != 'true'
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          HOST_KEY: ${{ secrets.VPS_HOST_KEY }}
+        run: |
+          install -d -m 700 "$RUNNER_TEMP/ssh"
+          install -m 600 /dev/null "$RUNNER_TEMP/ssh/deploy_key"
+          printf '%s\n' "$SSH_KEY" > "$RUNNER_TEMP/ssh/deploy_key"
+          printf '%s\n' "$HOST_KEY" > "$RUNNER_TEMP/ssh/known_hosts"
+
+      - name: Fetch the mutation cache from the hub
+        id: cache
+        if: env.GATE_ONLY != 'true'
+        continue-on-error: true
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/mutation-cache"
+          install -d -m 700 "$dir"
+          oidc="$(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$OIDC_AUDIENCE" | jq -r .value)"
+          if ! printf 'oidc=%s\n' "$oidc" | ssh -i "$RUNNER_TEMP/ssh/deploy_key" -o IdentitiesOnly=yes \
+              -o UserKnownHostsFile="$RUNNER_TEMP/ssh/known_hosts" "$VPS_USER@$VPS_HOST" \
+              "mutation-cache-get $APP sha-${GITHUB_SHA}" > "$dir/served"; then
+            echo "::warning::the hub did not serve the mutation cache; every mutant runs"
+            exit 0
+          fi
+          sum="$(sed -n 's/^sha256=//p' "$dir/served")"
+          if [ -z "$sum" ]; then
+            echo "no mutation cache for $APP yet; every mutant runs"
+            exit 0
+          fi
+          sed -n 's/^verdicts=//p' "$dir/served" | base64 -d > "$dir/verdicts.json"
+          rm -f "$dir/served"
+          { echo "file=$dir/verdicts.json"; echo "sha256=sha256:$sum"; } >> "$GITHUB_OUTPUT"
+
       - name: Quality gate
         id: gate
         env:
           POLICY: ${{ steps.hub.outputs.policy || steps.own.outputs.policy }}
           IMAGE: ${{ steps.image.outputs.image }}:${{ steps.image.outputs.tag }}
           TOOLCHAIN: ${{ steps.hub.outputs.bin || steps.own.outputs.bin }}
+          CACHE_FILE: ${{ steps.cache.outputs.file }}
+          CACHE_SHA256: ${{ steps.cache.outputs.sha256 }}
         run: |
           set -o pipefail
           export PATH="$TOOLCHAIN:$PATH"
           extra=()
           if [ "$HUB" != true ]; then extra+=(--image "$IMAGE"); fi
+          if [ -n "$CACHE_FILE" ]; then extra+=(--mutation-cache "$CACHE_FILE" --mutation-cache-sha256 "$CACHE_SHA256"); fi
           while sleep 30; do
             echo "resources: $(free -m | awk '/^Mem:/ {print "mem_available_mb=" $7}') $(df -m / "$RUNNER_TEMP" | awk 'NR > 1 {print $6 "_free_mb=" $4}' | tr '\n' ' ')top_dirs_mb=$(du -xsm "$RUNNER_TEMP"/gate/* /tmp 2>/dev/null | sort -rn | head -3 | awk '{printf "%s:%s,", $2, $1}')"
           done &
@@ -222,16 +263,25 @@ jobs:
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "deploy-hub $GITHUB_SHA" \
             --notes "Built by deploy.yml after the gate passed on main at $GITHUB_SHA."
 
-      - name: Connect to the VPS
-        if: always() && env.GATE_ONLY != 'true'
+      - name: Upload the mutation verdicts to the hub
+        if: always() && steps.inputs.outcome == 'success' && env.GATE_ONLY != 'true'
         env:
-          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-          HOST_KEY: ${{ secrets.VPS_HOST_KEY }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
         run: |
-          install -d -m 700 "$RUNNER_TEMP/ssh"
-          install -m 600 /dev/null "$RUNNER_TEMP/ssh/deploy_key"
-          printf '%s\n' "$SSH_KEY" > "$RUNNER_TEMP/ssh/deploy_key"
-          printf '%s\n' "$HOST_KEY" > "$RUNNER_TEMP/ssh/known_hosts"
+          set -euo pipefail
+          verdicts="$RUNNER_TEMP/gate/mutation-verdicts.json"
+          if [ ! -s "$verdicts" ]; then
+            echo "the gate left no mutation verdicts"
+            exit 0
+          fi
+          oidc="$(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$OIDC_AUDIENCE" | jq -r .value)"
+          {
+            printf 'oidc=%s\n' "$oidc"
+            printf 'verdicts=%s\n' "$(base64 -w0 "$verdicts")"
+          } | ssh -i "$RUNNER_TEMP/ssh/deploy_key" -o IdentitiesOnly=yes -o UserKnownHostsFile="$RUNNER_TEMP/ssh/known_hosts" \
+                "$VPS_USER@$VPS_HOST" "mutation-cache-put $APP sha-${GITHUB_SHA}" \
+            || echo "::warning::the hub did not take the mutation verdicts; the next run mutates them again"
 
       - name: Report the verdict to the hub
         if: always() && steps.inputs.outcome == 'success' && env.GATE_ONLY != 'true'

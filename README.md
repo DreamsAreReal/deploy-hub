@@ -26,7 +26,9 @@ push to default branch
         toolchain: deploy-hub + pinned scanners (sha256-verified)
         [repo has a compose file] deploy-hub render
         docker build (local, not pushed yet)
+        ssh deploy@vps "mutation-cache-get <app> <tag>"  → the app's mutation verdicts
         deploy-hub gate  → verdict.json + SBOMs (kept as workflow artifacts)
+        ssh deploy@vps "mutation-cache-put <app> <tag>"  ← always, pass or fail
         ssh deploy@vps "report <app> <tag>"  ← always, pass or fail
         gate failed → stop: nothing is pushed or deployed
         docker push → digest
@@ -292,8 +294,15 @@ mutant runs. A cached verdict counts in the score exactly like a fresh one. Each
 entry of `mutation.json` says `"source": "cache"` or `"run"`, and the check
 reports `mutants_cached` and `mutants_run`. After every run the gate merges
 the verdicts of all Go projects into `<out>/mutation-verdicts.json` and prints
-its sha256. `deploy.yml` does not pass a cache yet, so in CI every run is
-still a full one.
+its sha256. In CI, `deploy.yml` fetches the app's cache from the hub before the
+gate (`mutation-cache-get`, see [Runner interface](#runner-interface)) into
+`$RUNNER_TEMP/mutation-cache/`, outside the checkout, passes it with the sha256
+the hub reported, and after the gate, passed or not, uploads
+`mutation-verdicts.json` (`mutation-cache-put`). When the hub serves no cache or
+refuses, every mutant runs and the step only warns; a failed upload only warns
+too. The cache is as trustworthy as the job that wrote it: the gate, the image
+build and the upload run in the same job with the app's tests, the trust
+boundary the verdict and the pushed image already have.
 
 **Load test, done for a 1-CPU VPS.** The image runs in an isolated docker
 network on the CI runner with the production limits from the policy (`cpus`,
