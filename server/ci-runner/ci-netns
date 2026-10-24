@@ -73,8 +73,12 @@ NFT
 
 down() {
 	uid=$(repo_uid "$1")
-	ip link del "${HOST_IFS}${uid}" 2>/dev/null || true
-	ip netns del "ci-$1" 2>/dev/null || true
+	if ip link show "${HOST_IFS}${uid}" >/dev/null 2>&1; then
+		ip link del "${HOST_IFS}${uid}"
+	fi
+	if [ -e "/run/netns/ci-$1" ]; then
+		ip netns del "ci-$1"
+	fi
 }
 
 up() {
@@ -83,6 +87,7 @@ up() {
 	host_if=${HOST_IFS}${uid}
 	ns_if=${NS_IFS}${uid}
 	host_ip=$(addr "${uid}" 1)
+	ns_ip=$(addr "${uid}" 2)
 	down "$1"
 	guard
 	ip netns add "${ns}"
@@ -91,7 +96,7 @@ up() {
 	ip link set "${ns_if}" netns "${ns}"
 	ip addr add "${host_ip}/30" dev "${host_if}"
 	ip link set "${host_if}" up
-	ip -n "${ns}" addr add "$(addr "${uid}" 2)/30" dev "${ns_if}"
+	ip -n "${ns}" addr add "${ns_ip}/30" dev "${ns_if}"
 	ip -n "${ns}" link set "${ns_if}" up
 	ip -n "${ns}" route add default via "${host_ip}"
 	ip netns exec "${ns}" sysctl -qw net.ipv6.conf.all.disable_ipv6=1
