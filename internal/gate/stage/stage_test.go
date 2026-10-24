@@ -26,8 +26,10 @@ const (
 	argPort      = "port"
 	pathHealth   = "/health"
 	pathAPI      = "/api"
-	badState     = "true false x"
-	stoppedState = "false " + "false 0"
+	badState     = "true false x 0"
+	stoppedState = "false " + "false 0 0"
+	exitedState  = "false " + "false 0 1"
+	unpublished  = "garbage"
 )
 
 type dockerSim struct {
@@ -37,6 +39,8 @@ type dockerSim struct {
 	portOut string
 	zapOut  string
 	catErr  error
+	logsOut string
+	logsErr error
 }
 
 func (d *dockerSim) handle(c procexec.Command) (procexec.Result, error) {
@@ -50,6 +54,8 @@ func (d *dockerSim) handle(c procexec.Command) (procexec.Result, error) {
 		return procexec.Result{Stdout: "0.0.0.0:1\n[::]:1\n" + d.addr + "\n"}, nil
 	case "inspect":
 		return procexec.Result{Stdout: d.state}, nil
+	case "logs":
+		return procexec.Result{Stderr: d.logsOut}, d.logsErr
 	}
 	return procexec.Result{}, nil
 }
@@ -70,7 +76,7 @@ func app(t *testing.T, handler http.Handler) (gate.Workspace, *dockerSim) {
 	t.Helper()
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
-	sim := &dockerSim{addr: strings.TrimPrefix(srv.URL, "http://"), state: "true false 0\n"}
+	sim := &dockerSim{addr: strings.TrimPrefix(srv.URL, "http://"), state: "true false 0 0\n"}
 	ws := gate.Workspace{
 		AppName: "web", Image: "web:gate", Exec: &procexectest.Fake{Handler: sim.handle}, Log: slog.New(slog.DiscardHandler),
 		App: policy.App{
@@ -135,7 +141,7 @@ func TestStartFailures(t *testing.T) {
 	testutil.Contains(t, err.Error(), "docker run")
 	testutil.Equal(t, cleanups(ws), 2)
 	ws2, sim2 := app(t, okHandler())
-	sim2.portOut = "garbage"
+	sim2.portOut = unpublished
 	_, err = Start(context.Background(), ws2, "x")
 	testutil.Is(t, err, ErrState)
 	testutil.Equal(t, cleanups(ws2), 2)
@@ -188,14 +194,43 @@ func TestStartWaitsForHealth(t *testing.T) {
 	testutil.True(t, !healthy(context.Background(), http.DefaultClient, "http://127.0.0.1:1/"), "closed port is not healthy")
 }
 
+func TestStartKeepsTheCrashedContainerEvidenceBeforeRemovingIt(t *testing.T) {
+	ws, sim := app(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadGateway) }))
+	ws.Policy.Limits.StageReady = 50 * time.Millisecond
+	var logs bytes.Buffer
+	ws.Log = slog.New(slog.NewJSONHandler(&logs, nil))
+	sim.state = "false true 0 137"
+	sim.logsOut = "panic: out of memory\n"
+	_, err := Start(context.Background(), ws, "x")
+	testutil.Is(t, err, ErrNotReady)
+	testutil.Contains(t, err.Error(), "container: running=false oom=true restarts=0 exit=137", "logs: panic: out of memory")
+	testutil.Contains(t, logs.String(), `"msg":"gate stage failed","stage":"deploy-hub-gate-web-x"`, `"container":"running=false oom=true restarts=0 exit=137"`, `"logs":"panic: out of memory"`)
+	lines := strings.Join(procexectest.LinesOf(ws.Exec), "\n")
+	testutil.Contains(t, lines, "docker logs --tail 50 deploy-hub-gate-web-x\ndocker rm -f deploy-hub-gate-web-x")
+
+	noPort, usim := app(t, okHandler())
+	usim.portOut = unpublished
+	usim.state = exitedState
+	usim.logsErr = errExit
+	_, err = Start(context.Background(), noPort, "x")
+	testutil.Is(t, err, ErrState)
+	testutil.Contains(t, err.Error(), "container: running=false oom=false restarts=0 exit=1", "logs: docker logs: exit status 1")
+
+	gone, gsim := app(t, okHandler())
+	gsim.portOut = unpublished
+	gsim.state = ""
+	_, err = Start(context.Background(), gone, "x")
+	testutil.Contains(t, err.Error(), "container: unexpected container state")
+}
+
 func TestState(t *testing.T) {
 	ws, sim := app(t, okHandler())
 	st := &Stage{ws: ws, Name: "n"}
-	sim.state = "false true 3"
+	sim.state = "false true 3 137"
 	s, err := st.State(context.Background())
 	testutil.NoErr(t, err)
-	testutil.Equal(t, s, State{Running: false, OOM: true, Restarts: 3})
-	for _, bad := range []string{"true", badState} {
+	testutil.Equal(t, s, State{Running: false, OOM: true, Restarts: 3, ExitCode: 137})
+	for _, bad := range []string{"true", badState, "true false 0 x"} {
 		sim.state = bad
 		_, serr := st.State(context.Background())
 		testutil.Is(t, serr, ErrState)
