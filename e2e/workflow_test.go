@@ -17,10 +17,11 @@ const (
 )
 
 type workflowStep struct {
-	Name string            `yaml:"name"`
-	If   string            `yaml:"if"`
-	Env  map[string]string `yaml:"env"`
-	Run  string            `yaml:"run"`
+	Name     string            `yaml:"name"`
+	If       string            `yaml:"if"`
+	Continue any               `yaml:"continue-on-error"`
+	Env      map[string]string `yaml:"env"`
+	Run      string            `yaml:"run"`
 }
 
 type workflowJob struct {
@@ -104,4 +105,29 @@ func TestTheHubGatesItselfThroughDeployYML(t *testing.T) {
 		testutil.Equal(t, job.RunsOn, nil)
 	}
 	testutil.Excludes(t, string(data), "runs-on")
+}
+
+func TestNothingReachesProductionBeforeTheGatePasses(t *testing.T) {
+	w, _ := readWorkflow(t, "deploy.yml")
+	steps := w.Jobs["deploy"].Steps
+	gate := -1
+	for i, s := range steps {
+		testutil.Equal(t, s.Continue, nil)
+		if s.Name == "Quality gate" {
+			gate = i
+		}
+	}
+	testutil.True(t, gate >= 0, "no Quality gate step")
+	for _, name := range []string{"Push the gated image", "Deploy on the VPS", "Publish the hub release"} {
+		found := false
+		for i, s := range steps {
+			if s.Name != name {
+				continue
+			}
+			found = true
+			testutil.True(t, i > gate, name+" runs before the gate")
+			testutil.Excludes(t, s.If, "always()", "failure()", "cancelled()", "!(", "||")
+		}
+		testutil.True(t, found, "no step "+name)
+	}
 }
