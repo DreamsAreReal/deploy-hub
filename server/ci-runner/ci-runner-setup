@@ -201,9 +201,7 @@ quota_enabled() {
 	fi
 }
 
-quota_enable() {
-	enabled=$(quota_enabled)
-	[ "${enabled}" = no ] || return 0
+wait_for_idle() {
 	if pgrep -x Runner.Worker >/dev/null; then
 		echo "a CI job is running: enable the quotas when the runners are idle" >&2
 		exit 1
@@ -212,6 +210,12 @@ quota_enable() {
 		echo "a deploy holds ${DEPLOY_LOCK}: enable the quotas when it is done" >&2
 		exit 1
 	fi
+}
+
+quota_enable() {
+	enabled=$(quota_enabled)
+	[ "${enabled}" = no ] || return 0
+	wait_for_idle
 	now=$(date -u +%FT%TZ)
 	echo "stopping the runners to enable project quotas on ${DISK_IMAGE}: ${now}" >&2
 	systemctl stop 'ci-runner@*.service' 'ci-docker@*.service'

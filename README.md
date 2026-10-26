@@ -192,9 +192,10 @@ What each stack expects from an app repo:
   (`#!/usr/bin/ucode`, `#!/usr/bin/python3`) makes the file an orphan and the
   `stacks` check fails, so no executable file escapes the gate by having no
   extension. Coverage comes from bash xtrace, so tests run `#!/bin/sh` scripts
-  with `bash script`. bats runs under `ulimit -u` set to the processes the
-  user already has plus 4096: a test that forks without end fails instead of
-  exhausting the runner.
+  with `bash script`. bats runs under `ulimit -u` set to the threads the user
+  already runs plus 4096 (the limit counts threads, and it is only ever
+  lowered): a test that forks without end fails instead of exhausting the
+  runner.
 - **Static site.** Markup and styles carry no executable code: complexity,
   dead code, tests, coverage, fuzzing and mutation are `n/a`. Every
   cross-origin script or stylesheet needs an `integrity` hash. JavaScript

@@ -321,9 +321,14 @@ func limited() []string {
 }
 
 func TestTestsRunUnderAProcessLimit(t *testing.T) {
-	out, err := exec.CommandContext(context.Background(), BashBinary, "-c", limitScript, BashBinary, "64", BashBinary, "-c", "ulimit -u").Output()
+	budget := strconv.Itoa(countUserProcesses() + 128)
+	out, err := exec.CommandContext(context.Background(), BashBinary, "-c", limitScript, BashBinary, budget, BashBinary, "-c", "ulimit -u").Output()
 	testutil.NoErr(t, err)
-	testutil.Equal(t, strings.TrimSpace(string(out)), "64")
+	testutil.Equal(t, strings.TrimSpace(string(out)), budget)
+	hard := strconv.Itoa(countUserProcesses() + 256)
+	lower, err := exec.CommandContext(context.Background(), BashBinary, "-c", `ulimit -u "$1" && shift && exec "$@"`, BashBinary, hard, BashBinary, "-c", limitScript, BashBinary, "1000000", BashBinary, "-c", "ulimit -u").Output()
+	testutil.NoErr(t, err)
+	testutil.Equal(t, strings.TrimSpace(string(lower)), hard)
 	testutil.True(t, countUserProcesses() > 0, "the test process itself belongs to the user")
 	saved := procDir
 	t.Cleanup(func() { procDir = saved })
@@ -333,4 +338,8 @@ func TestTestsRunUnderAProcessLimit(t *testing.T) {
 	testutil.Mkdir(t, filepath.Join(procDir, "self"))
 	testutil.Mkdir(t, filepath.Join(procDir, "42"))
 	testutil.Equal(t, countUserProcesses(), 1)
+	testutil.Mkdir(t, filepath.Join(procDir, "42", "task", "42"))
+	testutil.Mkdir(t, filepath.Join(procDir, "42", "task", "43"))
+	testutil.Mkdir(t, filepath.Join(procDir, "7", "task"))
+	testutil.Equal(t, countUserProcesses(), 3)
 }

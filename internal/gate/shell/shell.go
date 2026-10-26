@@ -54,7 +54,7 @@ const (
 	unusedVariable    = 2034
 	unusedFunction    = 2329
 	testProcesses     = 4096
-	limitScript       = `ulimit -u "$1" && shift && exec "$@"`
+	limitScript       = `cur=$(ulimit -u); if [ "$cur" = unlimited ] || [ "$cur" -gt "$1" ]; then ulimit -u "$1" || exit; fi; shift; exec "$@"`
 )
 
 var (
@@ -81,11 +81,19 @@ func countUserProcesses() int {
 		}
 		if info, ierr := e.Info(); ierr == nil {
 			if st, ok := info.Sys().(*syscall.Stat_t); ok && int64(st.Uid) == uid {
-				n++
+				n += threads(e.Name())
 			}
 		}
 	}
 	return n
+}
+
+func threads(pid string) int {
+	tasks, err := os.ReadDir(filepath.Join(procDir, pid, "task"))
+	if err != nil || len(tasks) == 0 {
+		return 1
+	}
+	return len(tasks)
 }
 
 func batsArgs(args ...string) []string {
