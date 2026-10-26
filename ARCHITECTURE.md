@@ -225,6 +225,15 @@ release (`hostFailed`). Why a separate root command and not more rights for
 `deploy`: the policy, not the app repo, decides where root writes, and every
 write is tied to a gated digest. Details in README "Host files".
 
+An app of `kind: host` (`server-ops`) has no container at all: its image only
+carries the host files. The runner learns which apps these are from the policy
+compiled into the binary (`HostOnly`, `internal/runner/hostonly.go`). For them
+a deploy stops after the pull: `deployHost` runs host-sync and, on success,
+advances the state like any healthy deploy; on failure host-sync has already
+restored the files, so only the journal records the failed deploy. A rollback
+or redeploy runs host-sync for the earlier tag instead of a blue-green swap,
+and `status` derives up and healthy from the last `host-sync` journal line.
+
 `report` (`report.go`) runs the same identity check, decodes the verdict,
 checks it belongs to this app and commit, and records `gate ok|fail` plus
 per-check metrics. `rollback` (`rollback.go`) needs no OIDC but only accepts
