@@ -58,7 +58,8 @@ CALLS
   for d in "$GITHUB_WORKSPACE" "$RUNNER_TEMP" "$TMPDIR" "$RUNNER_TOOL_CACHE" "${WORLD}/work/_actions"; do
     emptied "$d"
   done
-  [ -f "$HOME/.cache/sub/file" ] && [ -f "$HOME/runner/sub/file" ]
+  [ -f "$HOME/.cache/sub/file" ]
+  [ -f "$HOME/runner/sub/file" ]
   [ "$(head -1 "$CALLS")" = "reap " ]
 }
 

@@ -118,7 +118,8 @@ not_called() {
   CI_DISK_SIZE=10G run bash "$SETUP" host
   [ "$status" -eq 0 ]
   [ ! -e "${WORLD}/lib/ci-runner-clean" ]
-  [ ! -e "${WORLD}/units/ci-docker@.service.d/50-ci-user.conf" ] && [ ! -e "${WORLD}/units/ci-runner@.service.d/50-ci-user.conf" ]
+  [ ! -e "${WORLD}/units/ci-docker@.service.d/50-ci-user.conf" ]
+  [ ! -e "${WORLD}/units/ci-runner@.service.d/50-ci-user.conf" ]
   not_called truncate
   not_called mkfs.ext4
   called "mount -o remount,discard ${WORLD}/ci"
@@ -235,7 +236,8 @@ userdel ci
 CALLS
 )" ]
   not_called plain
-  [ ! -e "${WORLD}/units/user-999.slice.d" ] && [ ! -e "${WORLD}/units/user@999.service.d" ]
+  [ ! -e "${WORLD}/units/user-999.slice.d" ]
+  [ ! -e "${WORLD}/units/user@999.service.d" ]
 }
 
 @test "a failing kill of the shared user stops the setup" {
@@ -255,7 +257,8 @@ CALLS
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = "moving the runners from the shared network namespace ci to one per repository" ]
   called 'systemctl disable --now ci-netns.service'
-  [ ! -e "${WORLD}/units/ci-netns.service" ] && [ ! -e "${WORLD}/etc/netns/ci" ]
+  [ ! -e "${WORLD}/units/ci-netns.service" ]
+  [ ! -e "${WORLD}/etc/netns/ci" ]
   [ "$(grep -c '^iptables -D FORWARD -i ci-host -o eth0 -j ACCEPT$' "$CALLS")" -eq 5 ]
   [ "$(grep -c '^iptables -D FORWARD -o ci-host -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT$' "$CALLS")" -eq 1 ]
   [ "$(grep -c '^iptables -t nat -D POSTROUTING -s 10.79.0.0/30 -o eth0 -j MASQUERADE$' "$CALLS")" -eq 1 ]
@@ -279,7 +282,8 @@ CALLS
   called 'usermod --add-subuids 165536-231071 ci-router-bot'
   called 'usermod --add-subgids 365536-431071 ci-router-bot'
   called "curl -fsSL -o ${WORLD}/cache/actions-runner-2.338.1.tar.gz.part https://github.com/actions/runner/releases/download/v2.338.1/actions-runner-linux-x64-2.338.1.tar.gz"
-  [ -f "${WORLD}/cache/actions-runner-2.338.1.tar.gz" ] && [ ! -e "${WORLD}/cache/actions-runner-2.338.1.tar.gz.part" ]
+  [ -f "${WORLD}/cache/actions-runner-2.338.1.tar.gz" ]
+  [ ! -e "${WORLD}/cache/actions-runner-2.338.1.tar.gz.part" ]
   called "runuser -u ci-router-bot -- mkdir -p -m 700 ${WORLD}/ci/router-bot/runner ${WORLD}/ci/router-bot/tmp ${WORLD}/ci/router-bot/docker"
   called "setquota -P 1001 0 41943040 0 0 ${WORLD}/ci"
   [ "$(cat "${WORLD}/configured")" = "configured --unattended --url https://github.com/DreamsAreReal/router-bot --token token-123 --name eu-router-bot --labels eu --work _work --replace" ]
