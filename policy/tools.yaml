@@ -87,3 +87,8 @@ sources:
     url: https://github.com/openwrt/jsonpath/archive/b9034210bd331749673416c6bf389cccd4e23610.tar.gz
     sha256: b66682e8d66cd86cabe209aba6f395936817656c9a3078df7f33ee6922d5eb38
     tree: jsonpath-b9034210bd331749673416c6bf389cccd4e23610
+  - name: busybox
+    url: https://www.busybox.net/downloads/busybox-1.37.0.tar.bz2
+    sha256: 3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4
+    tree: busybox-1.37.0
+    config: busybox.config

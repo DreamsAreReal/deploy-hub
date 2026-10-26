@@ -40,6 +40,7 @@ const (
 	archiveFile     = "archive"
 	rootDir         = "root"
 	wholeArchive    = "."
+	dirFlag         = "-C"
 )
 
 var (
@@ -51,6 +52,7 @@ var (
 		regexp.MustCompile(`^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/releases/download/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`),
 		regexp.MustCompile(`^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/archive/refs/tags/[A-Za-z0-9_.-]+\.tar\.gz$`),
 		regexp.MustCompile(`^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/archive/[0-9a-f]{40}\.tar\.gz$`),
+		regexp.MustCompile(`^https://www\.busybox\.net/downloads/busybox-[0-9]+\.[0-9]+\.[0-9]+\.tar\.bz2$`),
 		regexp.MustCompile(`^https://nodejs\.org/dist/v[0-9]+\.[0-9]+\.[0-9]+/[A-Za-z0-9_.-]+$`),
 		regexp.MustCompile(`^https://builds\.dotnet\.microsoft\.com/dotnet/Sdk/[0-9]+\.[0-9]+\.[0-9]+/[A-Za-z0-9_.-]+$`),
 	}
@@ -72,6 +74,7 @@ type Manifest struct {
 	Binaries []Binary `yaml:"binaries"`
 	Go       []string `yaml:"go"`
 	Sources  []Source `yaml:"sources"`
+	dir      string
 }
 
 func LoadManifest(path string) (Manifest, error) {
@@ -85,6 +88,7 @@ func LoadManifest(path string) (Manifest, error) {
 	if err := dec.Decode(&m); err != nil {
 		return Manifest{}, fmt.Errorf("%w: %w", ErrManifest, err)
 	}
+	m.dir = filepath.Dir(path)
 	return m, m.Validate()
 }
 
@@ -162,13 +166,18 @@ func (i Installer) Install(ctx context.Context, m Manifest) error {
 		}
 		i.Log.Info("tool installed", "tool", g)
 	}
-	if len(m.Sources) == 0 {
-		return nil
+	if sources := m.jsonfilterSources(); len(sources) > 0 {
+		if err := i.buildJSONFilter(ctx, sources); err != nil {
+			return fmt.Errorf("%s: %w", JSONFilter, err)
+		}
+		i.Log.Info("tool built", "tool", JSONFilter, "sources", len(sources))
 	}
-	if err := i.buildJSONFilter(ctx, m.Sources); err != nil {
-		return fmt.Errorf("%s: %w", JSONFilter, err)
+	if s, ok := m.busybox(); ok {
+		if err := i.buildBusybox(ctx, s, filepath.Join(m.dir, filepath.FromSlash(s.Config))); err != nil {
+			return fmt.Errorf("%s: %w", sourceBusybox, err)
+		}
+		i.Log.Info("tool built", "tool", sourceBusybox, "sha256", s.SHA256)
 	}
-	i.Log.Info("tool built", "tool", JSONFilter, "sources", len(m.Sources))
 	return nil
 }
 
@@ -260,7 +269,7 @@ func (i Installer) untar(ctx context.Context, stage string, data []byte) (string
 	if err := os.Mkdir(root, dirPerm); err != nil {
 		return "", err
 	}
-	if _, err := i.Exec.Run(ctx, procexec.Command{Name: TarBinary, Args: []string{"-xf", archive, "-C", root}, Dir: stage}); err != nil {
+	if _, err := i.Exec.Run(ctx, procexec.Command{Name: TarBinary, Args: []string{"-xf", archive, dirFlag, root}, Dir: stage}); err != nil {
 		return "", fmt.Errorf("unpack: %w: %s", err, procexec.Output(err))
 	}
 	return root, nil

@@ -45,7 +45,7 @@ type builder struct {
 func (b *builder) run(c procexec.Command) (procexec.Result, error) {
 	line := procexectest.Line(c)
 	if b.failOn != "" && strings.Contains(line, b.failOn) {
-		return procexec.Result{Stderr: "boom"}, errors.New("exit 1")
+		return procexec.Result{Stderr: failMsg}, errors.New("exit 1")
 	}
 	if c.Name == TarBinary {
 		root := c.Args[3]
@@ -144,7 +144,7 @@ func TestJSONFilterHeadersReachTheBuild(t *testing.T) {
 
 func TestJSONFilterBuildFailures(t *testing.T) {
 	data := []byte(payload)
-	for _, step := range []string{"cmake -S", "cmake --build", "cmake --install", "cc -std=gnu17", "jsonpath-lemon", "cc -Os", "tar -xf"} {
+	for _, step := range []string{"cmake -S", "cmake --build", "cmake --install", "cc -std=gnu17", "jsonpath-lemon", "cc -Os", tarStep} {
 		fake := &procexectest.Fake{Handler: newBuilder(t, step).run}
 		tr := assets(t, data)
 		m := jsonfilterManifest(digest(data))

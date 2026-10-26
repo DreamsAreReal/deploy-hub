@@ -24,6 +24,10 @@ func mutationSuite(ctx context.Context, ws gate.Workspace) (tokmut.Suite, error)
 	if err != nil {
 		return tokmut.Suite{}, err
 	}
+	utils, err := utilities(ws)
+	if err != nil {
+		return tokmut.Suite{}, err
+	}
 	files, err := scripts(ctx, ws)
 	inside := func(dir string) gate.Workspace {
 		sandboxed := ws
@@ -40,7 +44,7 @@ func mutationSuite(ctx context.Context, ws gate.Workspace) (tokmut.Suite, error)
 			return cerr
 		},
 		Test: func(ctx context.Context, _ int, dir string, _ []string) error {
-			_, terr := inside(dir).Run(ctx, BashBinary, batsArgs(append([]string{"--abort"}, tests...)...)...)
+			_, terr := inside(dir).RunEnv(ctx, utils, BashBinary, batsArgs(append([]string{"--abort"}, tests...)...)...)
 			return terr
 		},
 	}, err

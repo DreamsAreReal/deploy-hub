@@ -19,6 +19,7 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/junit"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/linecov"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/policy"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/source"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
 )
@@ -54,6 +55,9 @@ const (
 	unusedVariable    = 2034
 	unusedFunction    = 2329
 	testProcesses     = 4096
+	BusyboxDir        = "busybox.d"
+	busyboxBinary     = "busybox"
+	pathVar           = "PATH"
 	limitScript       = `cur=$(ulimit -u); if [ "$cur" = unlimited ] || [ "$cur" -gt "$1" ]; then ulimit -u "$1" || exit; fi; shift; exec "$@"`
 )
 
@@ -62,6 +66,8 @@ var (
 	traceLine = regexp.MustCompile(`^\++(.+?):(\d+): `)
 	deadCodes = []int{unusedVariable, unusedFunction}
 )
+
+var ErrNoBusybox = errors.New("the app tests against busybox, but no busybox.d with busybox is on PATH: run deploy-hub tools")
 
 var (
 	userProcesses = countUserProcesses
@@ -101,6 +107,29 @@ func threads(pid string) int {
 		return 1
 	}
 	return len(tasks)
+}
+
+func utilities(ws gate.Workspace) ([]string, error) {
+	if ws.App.Shell != policy.ShellBusybox {
+		return nil, nil
+	}
+	for _, dir := range filepath.SplitList(os.Getenv(pathVar)) {
+		applets := filepath.Join(dir, BusyboxDir)
+		if hasBusybox(applets) {
+			return []string{pathVar + "=" + applets}, nil
+		}
+	}
+	return nil, ErrNoBusybox
+}
+
+func hasBusybox(applets string) bool {
+	root, err := os.OpenRoot(applets)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = root.Close() }()
+	info, err := root.Stat(busyboxBinary)
+	return err == nil && info.Mode().IsRegular()
 }
 
 func batsArgs(args ...string) []string {
@@ -232,6 +261,11 @@ func Tests(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	if err != nil {
 		return gate.Fail(err.Error())
 	}
+	utils, err := utilities(ws)
+	if err != nil {
+		return gate.Fail(err.Error())
+	}
+	env = append(env, utils...)
 	_ = os.Remove(ws.Report(traceLog))
 	_, runErr := ws.RunEnv(ctx, env, BashBinary, batsArgs(append([]string{"--report-formatter", "junit", "--output", ws.Out}, tests...)...)...)
 	cases, lerr := junit.Load(ws.Report(JUnitReport))

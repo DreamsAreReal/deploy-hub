@@ -217,7 +217,7 @@ func TestManifestValidation(t *testing.T) {
 	trees := []Binary{
 		{Name: nodeName, URL: treeURL, SHA256: good.SHA256, Tree: treeTop, Links: []string{nodeLink, npmLink}},
 		{Name: dotnet, URL: "https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.302/dotnet-sdk-10.0.302-linux-x64.tar.gz", SHA256: good.SHA256, Tree: wholeArchive, Links: []string{dotnet}},
-		{Name: "bats", URL: "https://github.com/bats-core/bats-core/archive/refs/tags/v1.14.0.tar.gz", SHA256: good.SHA256, Tree: "bats-core-1.14.0", Links: []string{"bin/bats"}},
+		{Name: batsName, URL: "https://github.com/bats-core/bats-core/archive/refs/tags/v1.14.0.tar.gz", SHA256: good.SHA256, Tree: "bats-core-1.14.0", Links: []string{"bin/bats"}},
 	}
 	testutil.NoErr(t, Manifest{Binaries: trees}.Validate())
 	bad := []Binary{

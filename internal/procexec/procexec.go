@@ -123,6 +123,7 @@ var known = map[string]builder{
 	"bats":       func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "bats", a...) },
 	"cmake":      func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "cmake", a...) },
 	"cc":         func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "cc", a...) },
+	"make":       func(ctx context.Context, a []string) *exec.Cmd { return exec.CommandContext(ctx, "make", a...) },
 	"jsonpath-lemon": func(ctx context.Context, a []string) *exec.Cmd {
 		return exec.CommandContext(ctx, "./contrib/lemon", a...)
 	},

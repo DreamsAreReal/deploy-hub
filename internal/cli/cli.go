@@ -125,7 +125,7 @@ var handlers = map[string]handler{
 	CmdFacts:      {run: runFacts, onServer: true},
 	CmdOnboard:    {run: runOnboard, binaries: []string{binGH, binGit, binSSH, onboard.SSHKeygen}},
 	CmdGate:       {run: runGate, binaries: gateBinaries, verbose: true},
-	CmdTools:      {run: runTools, binaries: []string{tools.GoBinary, tools.TarBinary, tools.CmakeBinary, tools.CCBinary, tools.LemonBinary}, verbose: true},
+	CmdTools:      {run: runTools, binaries: []string{tools.GoBinary, tools.TarBinary, tools.CmakeBinary, tools.CCBinary, tools.LemonBinary, tools.MakeBinary}, verbose: true},
 	CmdMCP:        {run: runMCP, binaries: []string{binSSH}},
 	CmdSelfUpdate: {run: runSelfUpdate, binaries: []string{selfupdate.InstalledCommand, selfupdate.CandidateCommand, selfupdate.VisudoCommand, selfupdate.SetupCommand, procexec.CIRunnerSystemctl}, onServer: true},
 	CmdRunnerSync: {run: runRunnerSync, binaries: []string{selfupdate.SetupCommand, procexec.CIRunnerSystemctl}, onServer: true},

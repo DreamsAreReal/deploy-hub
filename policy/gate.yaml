@@ -522,6 +522,7 @@ apps:
   router-bot:
     repo: DreamsAreReal/router-bot
     kind: service
+    shell_utilities: busybox
     port: 8080
     health: /healthz
     cpus: "0.5"

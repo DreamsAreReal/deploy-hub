@@ -93,6 +93,7 @@ apps:
     load: {rate: 20, duration: 30s, p95: 300ms, max_error_percent: 0, concurrency: 10, paths: [/health]}
   bot:
     repo: Owner/bot
+    shell_utilities: busybox
     kind: worker
 `
 
@@ -113,6 +114,7 @@ func TestParseValidPolicy(t *testing.T) {
 	testutil.True(t, bot.HasImage() && !bot.HasHTTP(), "worker has an image only")
 	_, err = p.App("ghost")
 	testutil.Is(t, err, ErrUnknownApp)
+	testutil.Equal(t, p.Apps["bot"].Shell, ShellBusybox)
 }
 
 func TestLoadFile(t *testing.T) {
@@ -172,6 +174,7 @@ func TestParseRejects(t *testing.T) {
 		"declared purl":      {declaredLine, `"pypi/legacy": MIT`},
 		"declared version":   {declaredLine, `"pkg:pypi/legacy@1": MIT`},
 		"markers":            {"markers: [todo]", "markers: []"},
+		"shell utilities":    {"shell_utilities: busybox", "shell_utilities: coreutils"},
 		"reviewed key":       {reviewedKey, `"md5:abc"`},
 		"reviewed license":   {reviewedExpr, `"GPL-3.0-only"`},
 		"reviewed trailing":  {reviewedExpr, `"MIT AND"`},

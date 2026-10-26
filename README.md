@@ -195,7 +195,12 @@ What each stack expects from an app repo:
   with `bash script`. bats runs under `ulimit -u` set to the threads the user
   already runs plus 4096 (the limit counts threads, and it is only ever
   lowered): a test that forks without end fails instead of exhausting the
-  runner.
+  runner. An app whose
+  scripts run on OpenWrt sets `shell_utilities: busybox` in its policy: its bats
+  tests (and every mutant's) then run with `PATH` set to `busybox.d` only, so a
+  command the router lacks fails the test, and awk, sed, grep and the rest
+  behave as on the router (busybox awk, for one, keeps `-v` values as strings
+  and reads backslashes in `gsub` replacements differently).
 - **Static site.** Markup and styles carry no executable code: complexity,
   dead code, tests, coverage, fuzzing and mutation are `n/a`. Every
   cross-origin script or stylesheet needs an `integrity` hash. JavaScript
@@ -427,6 +432,19 @@ and the manifest cannot change it: json-c as a static library with the pinned
 `cc` call that links jsonpath, the libubox sources it uses and json-c into
 `jsonfilter`. The C compiler comes from the runner, like bash. When the router
 gets new package versions, move all three commits and their hashes together.
+
+`busybox` is built the same way for the apps whose shell code runs on OpenWrt.
+The source is the release tarball of busybox.net (its SHA-256 is the
+`PKG_HASH` of OpenWrt's busybox package), and `policy/busybox.config` is the
+full `.config` of the router's build: the `BUSYBOX_DEFAULT_*` values of
+`package/utils/busybox/Config-defaults.in` at the firmware commit (OpenWrt
+25.12.5, `f5dae5ece4`) with `FEATURE_IPV6` on, as the router has IPv6. The
+recipe copies it in, runs `make oldconfig`, `make busybox` and
+`make busybox.links` and puts the binary with one link per applet into
+`busybox.d` next to the other tools. `busybox.d` also holds what the test
+harness itself needs and the router lacks: `bash` and `nl` of the runner, and
+the `bats` and `jsonfilter` of the toolchain. The applets match the router's
+except `lock` and `netmsg`, which come from OpenWrt patches.
 
 **Run it locally** (Go toolchain plus the tools from `policy/tools.yaml` on
 `PATH`; `make toolchain` installs them on linux/amd64):

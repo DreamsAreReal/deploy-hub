@@ -42,11 +42,12 @@ type Source struct {
 	URL    string `yaml:"url"`
 	SHA256 string `yaml:"sha256"`
 	Tree   string `yaml:"tree"`
+	Config string `yaml:"config"`
 }
 
 func (s Source) validate() error {
 	switch {
-	case !slices.Contains(jsonfilterSources, s.Name):
+	case !slices.Contains(jsonfilterSources, s.Name) && s.Name != sourceBusybox:
 		return fmt.Errorf("%w: source %q is not part of a known build", ErrManifest, s.Name)
 	case !trusted(s.URL):
 		return fmt.Errorf("%w: %s: url must be a release or commit archive of a trusted host", ErrManifest, s.Name)
@@ -54,6 +55,8 @@ func (s Source) validate() error {
 		return fmt.Errorf("%w: %s: sha256 must be 64 hex characters", ErrManifest, s.Name)
 	case !inside(s.Tree):
 		return fmt.Errorf("%w: %s: bad tree", ErrManifest, s.Name)
+	case (s.Name == sourceBusybox) != (s.Config != "") || (s.Config != "" && !inside(s.Config)):
+		return fmt.Errorf("%w: %s: only busybox takes a config, a file next to the manifest", ErrManifest, s.Name)
 	default:
 		return nil
 	}
@@ -61,21 +64,44 @@ func (s Source) validate() error {
 
 func (m Manifest) Count() int {
 	n := len(m.Binaries) + len(m.Go)
-	if len(m.Sources) > 0 {
+	if len(m.jsonfilterSources()) > 0 {
+		n++
+	}
+	if _, ok := m.busybox(); ok {
 		n++
 	}
 	return n
 }
 
-func validateSources(m Manifest) error {
-	if len(m.Sources) == 0 {
-		return nil
+func (m Manifest) jsonfilterSources() []Source {
+	return slices.DeleteFunc(slices.Clone(m.Sources), func(s Source) bool { return s.Name == sourceBusybox })
+}
+
+func (m Manifest) busybox() (Source, bool) {
+	i := slices.IndexFunc(m.Sources, func(s Source) bool { return s.Name == sourceBusybox })
+	if i < 0 {
+		return Source{}, false
 	}
+	return m.Sources[i], true
+}
+
+func validateSources(m Manifest) error {
 	errs := make([]error, 0, len(m.Sources))
 	names := make([]string, 0, len(m.Sources))
+	busyboxes := 0
 	for _, s := range m.Sources {
 		errs = append(errs, s.validate())
-		names = append(names, s.Name)
+		if s.Name == sourceBusybox {
+			busyboxes++
+		} else {
+			names = append(names, s.Name)
+		}
+	}
+	if busyboxes > 1 {
+		errs = append(errs, fmt.Errorf("%w: one %s source at most", ErrManifest, sourceBusybox))
+	}
+	if len(names) == 0 {
+		return errors.Join(errs...)
 	}
 	slices.Sort(names)
 	want := slices.Sorted(slices.Values(jsonfilterSources))

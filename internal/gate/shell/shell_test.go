@@ -348,3 +348,42 @@ func TestTestsRunUnderAProcessLimit(t *testing.T) {
 	testutil.Mkdir(t, filepath.Join(procDir, "7", "task"))
 	testutil.Equal(t, countUserProcesses(), 3)
 }
+
+func TestBusyboxAppsRunTheirTestsAgainstTheAppletsOnly(t *testing.T) {
+	tools := t.TempDir()
+	applets := filepath.Join(tools, BusyboxDir)
+	testutil.Write(t, filepath.Join(applets, busyboxBinary), "elf")
+	t.Setenv(pathVar, filepath.Join(t.TempDir(), "empty")+string(os.PathListSeparator)+tools)
+	w := project(t)
+	w.WS.App.Shell = policy.ShellBusybox
+	w.junit = junitGreen
+	w.trace = gradeTrace()
+	testutil.Equal(t, Tests(context.Background(), w.WS).Status, gate.StatusPass)
+	run, _ := w.Fake.Find(BatsBinary)
+	testutil.Equal(t, run.Env[len(run.Env)-1], pathVar+"="+applets)
+	suite, err := mutationSuite(context.Background(), w.WS)
+	testutil.NoErr(t, err)
+	testutil.NoErr(t, suite.Test(context.Background(), 0, w.WS.Src, nil))
+	abort, _ := w.Fake.Find("--abort")
+	testutil.Equal(t, abort.Env, []string{pathVar + "=" + applets})
+	plain := project(t)
+	plain.junit = junitGreen
+	Tests(context.Background(), plain.WS)
+	plainRun, _ := plain.Fake.Find(BatsBinary)
+	testutil.Equal(t, len(plainRun.Env), 2)
+}
+
+func TestBusyboxAppsNeedTheApplets(t *testing.T) {
+	notFile := t.TempDir()
+	testutil.Mkdir(t, filepath.Join(notFile, BusyboxDir, busyboxBinary))
+	t.Setenv(pathVar, notFile)
+	w := project(t)
+	w.WS.App.Shell = policy.ShellBusybox
+	out := Tests(context.Background(), w.WS)
+	testutil.Equal(t, out.Status, gate.StatusFail)
+	testutil.Contains(t, out.Reason, "busybox.d")
+	testutil.Write(t, w.WS.Report(linecov.ReportFile), "{}")
+	testutil.Write(t, w.WS.Report(JUnitReport), junitGreen)
+	_, err := mutationSuite(context.Background(), w.WS)
+	testutil.Is(t, err, ErrNoBusybox)
+}
