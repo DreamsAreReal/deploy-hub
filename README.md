@@ -415,6 +415,19 @@ puts them into one directory for `PATH`. Archives that ship a whole tree (node,
 the .NET SDK, bats, shellcheck) are unpacked under `trees.d` with links to their
 executables. Bash itself comes from the CI runner (4.1 or newer).
 
+`jsonfilter`, the JSON tool of OpenWrt that the router agent of router-bot
+calls, has no release binary, so `make toolchain` builds it. The `sources`
+section of `policy/tools.yaml` pins json-c, libubox and jsonpath by archive URL
+and SHA-256 (GitHub mirrors of the OpenWrt repositories, at the commits of the
+packages installed on the router: `apk list -I | grep -E 'libubox|json-c|jsonfilter'`
+shows `jsonfilter-<date>~<commit>`, `libubox…-<date>~<commit>` and
+`libjson-c5-<version>`). The recipe is fixed in `internal/tools/jsonfilter.go`
+and the manifest cannot change it: json-c as a static library with the pinned
+`cmake` binary, the jsonpath parser generated with its own `lemon`, then one
+`cc` call that links jsonpath, the libubox sources it uses and json-c into
+`jsonfilter`. The C compiler comes from the runner, like bash. When the router
+gets new package versions, move all three commits and their hashes together.
+
 **Run it locally** (Go toolchain plus the tools from `policy/tools.yaml` on
 `PATH`; `make toolchain` installs them on linux/amd64):
 

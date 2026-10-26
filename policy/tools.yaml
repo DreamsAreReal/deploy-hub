@@ -49,6 +49,11 @@ binaries:
     sha256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
     tree: shellcheck-v0.11.0
     links: [shellcheck]
+  - name: cmake
+    url: https://github.com/Kitware/CMake/releases/download/v4.4.4/cmake-4.4.4-linux-x86_64.tar.gz
+    sha256: e5bb807f7728cb60cd8b27ebc97a2edb469b68655f21e844a600c3575b76f5bb
+    tree: cmake-4.4.4-linux-x86_64
+    links: [bin/cmake]
   - name: bats
     url: https://github.com/bats-core/bats-core/archive/refs/tags/v1.14.0.tar.gz
     sha256: bb537b70b15b732f6d8827dd6578e3d8ce166636ce1f18ea9a074184fcce9177
@@ -69,3 +74,16 @@ go:
   - github.com/uudashr/gocognit/cmd/gocognit@v1.3.0
   - golang.org/x/tools/cmd/deadcode@v0.52.0
   - golang.org/x/vuln/cmd/govulncheck@v1.9.0
+sources:
+  - name: json-c
+    url: https://github.com/json-c/json-c/archive/refs/tags/json-c-0.18-20240915.tar.gz
+    sha256: 3112c1f25d39eca661fe3fc663431e130cc6e2f900c081738317fba49d29e298
+    tree: json-c-json-c-0.18-20240915
+  - name: libubox
+    url: https://github.com/openwrt/libubox/archive/7dd127841e82eb1cfb61185da37dde7b9bd9ba6d.tar.gz
+    sha256: 7599cd1818c89714cc19e53f8c65983e5b552d0fe363055bc0e150a4254381ee
+    tree: libubox-7dd127841e82eb1cfb61185da37dde7b9bd9ba6d
+  - name: jsonpath
+    url: https://github.com/openwrt/jsonpath/archive/b9034210bd331749673416c6bf389cccd4e23610.tar.gz
+    sha256: b66682e8d66cd86cabe209aba6f395936817656c9a3078df7f33ee6922d5eb38
+    tree: jsonpath-b9034210bd331749673416c6bf389cccd4e23610

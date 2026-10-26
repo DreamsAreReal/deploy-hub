@@ -50,6 +50,7 @@ var (
 	trustedURLs = []*regexp.Regexp{
 		regexp.MustCompile(`^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/releases/download/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`),
 		regexp.MustCompile(`^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/archive/refs/tags/[A-Za-z0-9_.-]+\.tar\.gz$`),
+		regexp.MustCompile(`^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/archive/[0-9a-f]{40}\.tar\.gz$`),
 		regexp.MustCompile(`^https://nodejs\.org/dist/v[0-9]+\.[0-9]+\.[0-9]+/[A-Za-z0-9_.-]+$`),
 		regexp.MustCompile(`^https://builds\.dotnet\.microsoft\.com/dotnet/Sdk/[0-9]+\.[0-9]+\.[0-9]+/[A-Za-z0-9_.-]+$`),
 	}
@@ -70,6 +71,7 @@ type Binary struct {
 type Manifest struct {
 	Binaries []Binary `yaml:"binaries"`
 	Go       []string `yaml:"go"`
+	Sources  []Source `yaml:"sources"`
 }
 
 func LoadManifest(path string) (Manifest, error) {
@@ -96,14 +98,14 @@ func (m Manifest) Validate() error {
 			errs = append(errs, fmt.Errorf("%w: go tool %q must be module/path@vX.Y.Z", ErrManifest, g))
 		}
 	}
-	return errors.Join(errs...)
+	return errors.Join(append(errs, validateSources(m))...)
 }
 
 func (b Binary) validate() error {
 	switch {
 	case !toolName.MatchString(b.Name):
 		return fmt.Errorf("%w: name %q", ErrManifest, b.Name)
-	case !slices.ContainsFunc(trustedURLs, func(re *regexp.Regexp) bool { return re.MatchString(b.URL) }):
+	case !trusted(b.URL):
 		return fmt.Errorf("%w: %s: url must be a release asset of a trusted host", ErrManifest, b.Name)
 	case !sha256Hex.MatchString(b.SHA256):
 		return fmt.Errorf("%w: %s: sha256 must be 64 hex characters", ErrManifest, b.Name)
@@ -127,6 +129,10 @@ func (b Binary) validateTree() error {
 	default:
 		return nil
 	}
+}
+
+func trusted(url string) bool {
+	return slices.ContainsFunc(trustedURLs, func(re *regexp.Regexp) bool { return re.MatchString(url) })
 }
 
 func inside(member string) bool {
@@ -156,17 +162,32 @@ func (i Installer) Install(ctx context.Context, m Manifest) error {
 		}
 		i.Log.Info("tool installed", "tool", g)
 	}
+	if len(m.Sources) == 0 {
+		return nil
+	}
+	if err := i.buildJSONFilter(ctx, m.Sources); err != nil {
+		return fmt.Errorf("%s: %w", JSONFilter, err)
+	}
+	i.Log.Info("tool built", "tool", JSONFilter, "sources", len(m.Sources))
 	return nil
 }
 
-func (i Installer) fetch(ctx context.Context, b Binary) error {
-	data, err := i.download(ctx, b.URL)
+func (i Installer) verified(ctx context.Context, url, want string) ([]byte, error) {
+	data, err := i.download(ctx, url)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	sum := sha256.Sum256(data)
-	if got := hex.EncodeToString(sum[:]); got != b.SHA256 {
-		return fmt.Errorf("%w: got %s", ErrChecksum, got)
+	if got := hex.EncodeToString(sum[:]); got != want {
+		return nil, fmt.Errorf("%w: got %s", ErrChecksum, got)
+	}
+	return data, nil
+}
+
+func (i Installer) fetch(ctx context.Context, b Binary) error {
+	data, err := i.verified(ctx, b.URL, b.SHA256)
+	if err != nil {
+		return err
 	}
 	if b.Tree != "" {
 		return i.unpack(ctx, b, data)
