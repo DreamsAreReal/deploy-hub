@@ -26,6 +26,7 @@ const (
 	freshApp   = "fresh"
 	webImage   = "ghcr.io/owner/web"
 	opsImage   = "ghcr.io/owner/ops"
+	opsRepo    = "owner/ops"
 )
 
 const webRepo = "owner/web"
@@ -243,7 +244,7 @@ func TestEnsureStatError(t *testing.T) {
 
 func TestProvisionHostAppWritesOnlyItsConf(t *testing.T) {
 	f := newFixture(t)
-	r := Request{App: "ops", Profile: registry.ProfileHost, Port: "9100", CPort: "80", Mem: botMem, HealthPath: "/", Image: opsImage, Repo: "owner/ops"}
+	r := Request{App: "ops", Profile: registry.ProfileHost, Port: "9100", CPort: "80", Mem: botMem, HealthPath: "/", Image: opsImage, Repo: opsRepo}
 	testutil.NoErr(t, r.Validate())
 	testutil.NoErr(t, f.provisioner().Run(context.Background(), r))
 	dir := filepath.Join(f.root, "ops")
@@ -254,7 +255,7 @@ func TestProvisionHostAppWritesOnlyItsConf(t *testing.T) {
 	}
 	conf, err := registry.LoadAppConf(dir)
 	testutil.NoErr(t, err)
-	testutil.Equal(t, conf, registry.AppConf{Profile: registry.ProfileHost, HealthPath: "/", Image: opsImage, Repo: "owner/ops"})
+	testutil.Equal(t, conf, registry.AppConf{Profile: registry.ProfileHost, HealthPath: "/", Image: opsImage, Repo: opsRepo})
 	testutil.Equal(t, f.metrics.samples[0].Value, 3.0)
 	if e, lerr := f.apps.Lookup("ops"); lerr != nil || e.Dir != dir {
 		t.Fatalf("lookup %+v %v", e, lerr)
