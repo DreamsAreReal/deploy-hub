@@ -34,7 +34,7 @@ jobs:
   deploy:
     name: ${{ (github.event_name == 'pull_request' || (github.repository == 'DreamsAreReal/deploy-hub' && inputs.app == 'deploy-hub')) && 'gate' || 'gate and deploy' }}
     runs-on: ${{ fromJSON('["self-hosted", "linux", "eu"]') }}
-    timeout-minutes: 330
+    timeout-minutes: 360
     permissions:
       contents: read
       packages: write

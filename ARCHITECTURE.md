@@ -481,7 +481,7 @@ stale; that is intended. Continuous counters depend on
 **The gate is slow and memory hungry.** Mutation testing dominates. Each
 mutant runs in its own process group with a memory budget and is killed
 (counted as detected) when it exceeds it. CI has a 120-minute limit for this
-repo, 330 minutes for app deploys.
+repo, 360 minutes for app deploys.
 
 **History is guarded.** The repo was recreated public on 2026-10-20;
 `history-guard.yml` deletes every branch and tag whose root is not the public
