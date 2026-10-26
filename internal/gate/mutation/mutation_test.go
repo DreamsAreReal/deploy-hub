@@ -249,6 +249,8 @@ type fakeGo struct {
 	profiles map[string]string
 	alone    map[string]bool
 	listErr  error
+	depsErr  error
+	grow     string
 	badIndex bool
 }
 
@@ -292,6 +294,7 @@ func (f *fakeGo) index(c procexec.Command) (procexec.Result, error, bool) {
 			testutil.Write(f.t, path, profile)
 		}
 	}
+	f.growCache("index", c.Env)
 	return procexec.Result{Stdout: outOK}, nil, true
 }
 
@@ -302,7 +305,7 @@ func (f *fakeGo) handle(c procexec.Command) (procexec.Result, error) {
 	case c.Args[0] == "env":
 		return procexec.Result{Stdout: f.env}, nil
 	case c.Args[0] == goList && slices.Contains(c.Args, "-deps"):
-		return procexec.Result{Stdout: strings.ReplaceAll(f.closure, srcMarker, c.Dir)}, nil
+		return procexec.Result{Stdout: strings.ReplaceAll(f.closure, srcMarker, c.Dir)}, f.depsErr
 	case c.Args[0] == goList:
 		return procexec.Result{Stdout: strings.ReplaceAll(f.pkgs, srcMarker, c.Dir)}, nil
 	}
@@ -312,6 +315,7 @@ func (f *fakeGo) handle(c procexec.Command) (procexec.Result, error) {
 	if !strings.HasPrefix(c.Env[0], overlayEnv) {
 		f.writeTestLog(c.Args)
 		testutil.Mkdir(f.t, strings.TrimPrefix(c.Env[0], cacheEnv))
+		f.growCache("baseline", c.Env)
 		return procexec.Result{Stdout: outOK}, f.baseErr
 	}
 	ov := strings.TrimPrefix(c.Env[0], overlayEnv)
@@ -713,6 +717,24 @@ func (f *fakeGo) writeTestLog(args []string) {
 	for _, a := range args {
 		if path, ok := strings.CutPrefix(a, testLogFlag); ok && f.testLogs != "" {
 			testutil.Write(f.t, path, f.testLogs)
+		}
+	}
+}
+
+func (f *fakeGo) growCache(phase string, env []string) {
+	if f.grow != phase {
+		return
+	}
+	for _, kv := range env {
+		if dir, ok := strings.CutPrefix(kv, cacheEnv); ok {
+			testutil.Mkdir(f.t, dir)
+			root, err := os.OpenRoot(dir)
+			testutil.NoErr(f.t, err)
+			big, err := root.Create("huge-d")
+			testutil.NoErr(f.t, err)
+			defer func() { _ = root.Close() }()
+			testutil.NoErr(f.t, big.Truncate(2<<30))
+			testutil.NoErr(f.t, big.Close())
 		}
 	}
 }

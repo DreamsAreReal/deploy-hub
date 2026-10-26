@@ -36,7 +36,8 @@ const (
 	opWords      = 3
 )
 
-var maxWords = map[string]int{VerbStatus: statusWords, VerbHistory: historyWords, VerbDeploy: opWords, VerbRollback: opWords, VerbReport: opWords}
+var maxWords = map[string]int{VerbStatus: statusWords, VerbHistory: historyWords, VerbDeploy: opWords, VerbRollback: opWords, VerbReport: opWords,
+	VerbCacheGet: opWords, VerbCachePut: opWords}
 
 func ParseRequest(raw string) (Request, error) {
 	f := strings.Fields(raw)
@@ -51,7 +52,7 @@ func ParseRequest(raw string) (Request, error) {
 		return Request{Verb: r.Verb}, nil
 	case VerbHistory:
 		return Request{Verb: r.Verb, App: r.App}, appErr(r.App)
-	case VerbDeploy, VerbReport:
+	case VerbDeploy, VerbReport, VerbCacheGet, VerbCachePut:
 		return r, errors.Join(appErr(r.App), tagErr(r.Tag))
 	case VerbRollback:
 		return r, errors.Join(appErr(r.App), optionalTagErr(r.Tag))
@@ -81,7 +82,7 @@ func optionalTagErr(tag string) error {
 	return tagErr(tag)
 }
 
-var refusals = []error{errUnknownApp, errBadTag, errNoIdentity, errNoRepo, errNotGated, errBadDigest, errBadVerdict}
+var refusals = []error{errUnknownApp, errBadTag, errNoIdentity, errNoRepo, errNotGated, errBadDigest, errBadVerdict, errBadCache}
 
 func refusalMessage(err error) string {
 	for _, known := range refusals {

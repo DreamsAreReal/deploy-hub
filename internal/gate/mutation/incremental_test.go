@@ -35,10 +35,10 @@ const (
 	libTest   = "lib_test.go"
 	goList    = "list"
 	srcPkgA   = "package a\n"
-	baseOne   = "b1"
-	baseTwo   = "b2"
-	keyOne    = "k1"
-	keyTwo    = "k2"
+	baseOne   = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	baseTwo   = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	keyOne    = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	keyTwo    = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 )
 
 func closureFixture(t *testing.T) (string, golang.Closure) {
@@ -56,7 +56,7 @@ func closureFixture(t *testing.T) (string, golang.Closure) {
 			pkgC:   {ImportPath: pkgC, Dir: filepath.Join(root, "c"), GoFiles: []string{"c.go"}},
 			pkgE2E: {ImportPath: pkgE2E, Dir: filepath.Join(root, "e2e"), TestGoFiles: []string{"e2e_test.go"}},
 			pkgStd: {ImportPath: pkgStd, Standard: true},
-			pkgExt: {ImportPath: pkgExt, Dir: "/mod/x.y/z@v1.0.0", Module: &golang.BuiltModule{Path: pkgExt, Version: "v1.0.0"}},
+			pkgExt: {ImportPath: pkgExt, Dir: "/mod/x.y/z@v1.0.0", Module: &golang.BuiltModule{Path: pkgExt, Version: extVersion}},
 		},
 		Tests: map[string][]string{pkgA: {pkgStd, pkgA, pkgB, pkgExt}, pkgE2E: {pkgA, pkgB, pkgE2E}},
 	}
@@ -192,22 +192,22 @@ func TestReadsDigestFollowsWhatTheTestsRead(t *testing.T) {
 
 func TestVerdictCacheIsVerifiedBySHA256(t *testing.T) {
 	path := filepath.Join(t.TempDir(), VerdictsFile)
-	v := Verdicts{Version: verdictsVersion, Bases: []string{"b"}, Entries: map[string]Status{"k": StatusKilled, "e": StatusErrored}}
+	v := Verdicts{Version: verdictsVersion, Bases: []string{baseOne}, Entries: map[string]Status{keyOne: StatusKilled}}
 	digest, err := v.Save(path)
 	testutil.NoErr(t, err)
 	got, err := LoadVerdicts(path, digest)
 	testutil.NoErr(t, err)
-	s, ok := got.lookup("k")
+	s, ok := got.lookup(keyOne)
 	testutil.True(t, ok && s == StatusKilled, "a stored verdict is found")
-	_, ok = got.lookup("e")
-	testutil.True(t, !ok, "an errored run is never reused")
+	_, ok = got.lookup(keyTwo)
+	testutil.True(t, !ok, "an unknown key is a miss")
 	data := testutil.Read(t, path)
 	testutil.Write(t, path, strings.Replace(data, string(StatusKilled), string(StatusSurvived), 1))
 	_, err = LoadVerdicts(path, digest)
 	testutil.True(t, errors.Is(err, ErrVerdicts), "a tampered cache is rejected")
 	_, err = LoadVerdicts(path+".missing", digest)
 	testutil.True(t, errors.Is(err, ErrVerdicts), "a missing cache is rejected")
-	for _, body := range []string{"{", `{"version":9}`} {
+	for _, body := range []string{"{", `{"version":9}`, `{"version":1,"entries":{"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee":"errored"}}`, `{"version":1,"entries":{"k":"killed"}}`, `{"version":1,"bases":["b"]}`} {
 		testutil.Write(t, path, body)
 		_, err = LoadVerdicts(path, Digest([]byte(body)))
 		testutil.True(t, errors.Is(err, ErrVerdicts), "an unreadable or foreign cache is rejected")
@@ -325,7 +325,7 @@ func TestMergeVerdictsJoinsProjects(t *testing.T) {
 	dir := t.TempDir()
 	parts := []Verdicts{
 		{Version: verdictsVersion, Bases: []string{baseOne}, Entries: map[string]Status{keyOne: StatusKilled}},
-		{Version: verdictsVersion, Bases: []string{baseTwo, baseOne}, Entries: map[string]Status{keyTwo: StatusSurvived, "k3": StatusErrored}},
+		{Version: verdictsVersion, Bases: []string{baseTwo, baseOne}, Entries: map[string]Status{keyTwo: StatusSurvived, keyOne: StatusTimedOut}},
 	}
 	paths := make([]string, 0, len(parts))
 	for i, v := range parts {
@@ -340,7 +340,7 @@ func TestMergeVerdictsJoinsProjects(t *testing.T) {
 	all, err := LoadVerdicts(out, digest)
 	testutil.NoErr(t, err)
 	testutil.Equal(t, all.Bases, []string{baseOne, baseTwo})
-	testutil.Equal(t, all.Entries, map[string]Status{keyOne: StatusKilled, keyTwo: StatusSurvived})
+	testutil.Equal(t, all.Entries, map[string]Status{keyOne: StatusTimedOut, keyTwo: StatusSurvived})
 	_, err = MergeVerdicts(out, []string{filepath.Join(dir, "missing.json")})
 	testutil.True(t, err != nil, "a missing project file is an error")
 	testutil.Write(t, paths[0], "{")

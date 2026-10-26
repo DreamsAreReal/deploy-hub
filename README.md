@@ -265,10 +265,12 @@ both, not the host.
 
 Disk: the baseline runs and the test index build into one Go build cache in the
 report directory. Each mutation worker then gets its own copy made of hard
-links to it (no extra space), and after every mutant everything that mutant
-added to the worker's cache is deleted, so the build cache stays at its
-baseline size however many mutants run. Every 15 seconds, and once before it
-starts, the run measures its report directory (hard links counted once) and
+links to it (no extra space); once the builds a worker added pass 1 GiB they are
+deleted after its current mutant, so the build cache stays within its baseline
+size plus 1 GiB per worker however many mutants run, while consecutive mutants
+of a worker still reuse each other's builds. Before it starts, after the baseline runs,
+after the test index and then every 15 seconds, the run measures its report
+directory (the build caches included) (hard links counted once) and
 the free space of that disk; above `mutation_disk_gib` (20) or below
 `mutation_free_gib` (10 GiB free) it stops with `mutation testing stopped to
 protect the disk` and the numbers, keeps the verdicts it finished, and the
@@ -1065,6 +1067,7 @@ and `deploy_hub_ci_quota_on{runner}` every minute; the alerts
 | `/opt/deploy-hub/logs/<command>.log` | structured JSON logs (rotated at 10 MiB) |
 | `/opt/deploy-hub/smoke.conf` | optional host TCP ports a deploy must not break; absent → `smoke=skip` |
 | `/opt/deploy-hub/last-error.log` | recent pull errors (when CI logs are unreachable) |
+| `/opt/deploy-hub/mutation-cache/<app>/verdicts.json`, `verdicts.sha256` | the app's mutation verdict cache and the sha256 the runner recorded when it stored it (`mutation-cache.lock` serializes uploads) |
 | `/home/deploy/.cache/deploy-hub/jwks.json` | last GitHub OIDC signing keys, used when GitHub is unreachable |
 | `/opt/<app>/docker-compose.yml` | app stack: 127.0.0.1 ports, mem limit, log rotation |
 | `/opt/<app>/app.conf` | `profile=`, `port=`, `health_path=`, `image=`, `repo=`, optional `bluegreen=on\|off` (BYOC: `mode=byoc`, `main=`, `hmode=`) |
@@ -1084,9 +1087,11 @@ rollback <app> [tag]    # no tag: previous sha (journaled as rollback);
                         # explicit tag: journaled as redeploy (may roll forward)
 status                  # app | sha | health | last deploy
 history <app>           # last 20 journal lines of the app
+mutation-cache-get <app> <tag>   # the app's mutation verdict cache
+mutation-cache-put <app> <tag>   # merge new mutation verdicts into it
 ```
 
-`deploy` and `report` read `key=value` lines on stdin. Both require `oidc` — a
+`deploy`, `report` and the two `mutation-cache` requests read `key=value` lines on stdin. All of them require `oidc` — a
 GitHub Actions OIDC token (audience `deploy-hub`) whose signature verifies
 against GitHub's published keys, whose `job_workflow_ref` is
 `<HUB_REPO>/.github/workflows/deploy.yml@refs/heads/main`, whose `repository`
@@ -1100,6 +1105,20 @@ for the push→healthy lead time) and, for bring-your-own-compose, `compose`
 locally, so the running container is exactly the gated artifact. `report`
 requires `verdict` (base64 of `verdict.json`); it is journaled as `gate ok|fail`
 and every check becomes log lines and metrics.
+
+`mutation-cache-put` requires `verdicts` (base64 of the `mutation-verdicts.json`
+the gate wrote). Only final verdicts with sha256 keys are accepted; they are
+merged into the stored cache under its own lock, written atomically and their
+sha256 recorded next to them. Over 100,000 verdicts, only the latest upload is
+kept, and a file over 16 MiB is never written, so an app's directory under
+`/opt/deploy-hub/mutation-cache` stays within a few tens of MiB. One upload is limited by the 8 MiB stdin line to about 75,000 verdicts.
+`mutation-cache-get` prints `sha256=<hex>` and `verdicts=<base64>`, or nothing
+when there is no cache yet. The runner serves the file only if its sha256 still
+matches the recorded one, so a cache changed on disk outside the runner is not
+served (`deploy_hub_mutation_cache_intact` 0, alert
+`DeployHubMutationCacheCorrupt`); the next upload replaces it. App repositories
+have no other way to reach the cache: it is not in the repo, not in the GitHub
+Actions cache, and only the hub workflow passes the identity check.
 
 `rollback`/`redeploy` accept only versions this hub deployed successfully
 before (current, previous or a successful deploy in the journal), so an image
@@ -1288,7 +1307,7 @@ time quantiles are recording rules in the observability repo
 | `deploy_hub_health_gate_duration_seconds` | app, target, result | health gate time for the standby and the main service |
 | `deploy_hub_lock_wait_seconds` | app | time spent waiting for another deploy |
 | `deploy_hub_image_pull_duration_seconds` | app, result | pull by digest and local tag |
-| `deploy_hub_identity_verified` | app, verb | 1 when the OIDC identity of a deploy/report verified, 0 when refused |
+| `deploy_hub_identity_verified` | app, verb | 1 when the OIDC identity of a deploy/report/mutation-cache request verified, 0 when refused |
 | `deploy_hub_gate_passed` | app, own | 1 when the last gate verdict passed |
 | `deploy_hub_gate_duration_seconds` | app | wall time of the last gate run |
 | `deploy_hub_gate_failed_checks` | app | number of failed checks in the last verdict |
@@ -1307,7 +1326,8 @@ time quantiles are recording rules in the observability repo
 | `deploy_hub_command_panicked` | command | 1 when the run recovered a panic |
 | `deploy_hub_command_log_records` | command, level | warning and error log records of the run |
 | `deploy_hub_request` | verb, app | one sample per runner request for a registered app (`app="-"` for `status`) |
-| `deploy_hub_request_refused` | verb, reason | one sample per refusal; reason `bad-request`, `unknown-app`, `bad-tag`, `bad-compose`, `no-identity`, `identity-unverified`, `no-repo-binding`, `not-gated`, `bad-digest`, `bad-verdict` |
+| `deploy_hub_request_refused` | verb, reason | one sample per refusal; reason `bad-request`, `unknown-app`, `bad-tag`, `bad-compose`, `no-identity`, `identity-unverified`, `no-repo-binding`, `not-gated`, `bad-digest`, `bad-verdict`, `bad-cache` |
+| `deploy_hub_mutation_cache_intact` | app | 1 when the stored mutation cache matched its recorded sha256 on read, 0 when it did not |
 | `deploy_hub_delivery_success` | — | 1/0 for the tracker post of the run (absent when delivery is off or there was nothing to post) |
 | `deploy_hub_journal_readable` | — | 0 when `deploys.log` could not be read; the journal counters are then not pushed |
 

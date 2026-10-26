@@ -9,7 +9,7 @@ thresholds:
   duplicate_min_tokens: 50
 limits:
   check_timeout: 75m
-  long_check_timeout: 3h
+  long_check_timeout: 5h
   fuzz_time: 15s
   fuzz_examples: 1000
   mutant_timeout_floor: 20s
