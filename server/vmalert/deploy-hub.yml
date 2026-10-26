@@ -87,6 +87,12 @@ groups:
           summary: "deploy-hub could not post delivery steps to the tracker"
           description: "Deploys go on, but the tracker misses their path to prod. Check delivery_url in /opt/deploy-hub/hub.conf and the tracker; log message \"delivery steps not sent\"."
 
+      - alert: DeployHubMutationCacheCorrupt
+        expr: min by (app) (min_over_time(deploy_hub_mutation_cache_intact[15m])) == 0
+        annotations:
+          summary: "The stored mutation cache of {{ $labels.app }} does not match its sha256"
+          description: "Someone or something changed /opt/deploy-hub/mutation-cache/{{ $labels.app }}/verdicts.json on the VPS outside the runner. The hub no longer serves it, so the gate of {{ $labels.app }} mutates without a cache until the next upload replaces it. Find out who wrote the file before anything else; runner log msg \"stored mutation cache does not match its sha256\"."
+
       - alert: DeployHubJournalUnreadable
         expr: min(min_over_time(deploy_hub_journal_readable[5m])) == 0
         annotations:

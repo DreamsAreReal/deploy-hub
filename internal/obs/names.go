@@ -46,6 +46,7 @@ const (
 	MetricPreemptCancelled     = "deploy_hub_preempt_cancelled"
 	MetricPreemptRerun         = "deploy_hub_preempt_rerun"
 	MetricPreemptRerunsMax     = "deploy_hub_preempt_reruns_max"
+	MetricMutationCacheIntact  = "deploy_hub_mutation_cache_intact"
 
 	LabelApp     = "app"
 	LabelAction  = "action"
