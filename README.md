@@ -374,7 +374,7 @@ as the app's CI user with the runner's isolation (`ci-mutation@<repo>` in
 4. As `ci-<repo>` (network namespace, read-only system, hidden paths, the
    repo's slice, `CPUWeight=1` so the runner keeps priority),
    `mutation-run` unpacks the stash into `~/mutation/work` and runs the gate
-   with only the Go `mutation` check, `--mutation-full --mutation-budget 45m
+   with only the Go `mutation` check, `--mutation-full --mutation-budget 3h
    --mutation-yield /run/ci/<repo>/job-running` and the session verdicts as the
    cache. When a CI job starts, the chunk stops within 15 seconds and keeps
    what it finished. Packs without a verdict cache are `n/a` there: they mutate

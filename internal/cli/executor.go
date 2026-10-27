@@ -45,7 +45,7 @@ const (
 	msgImported    = "mutation-import: %s chunk of %s taken\n"
 	msgNoChunk     = "mutation-import: %s has no chunk to take\n"
 	msgChunkSkip   = "mutation-run: nothing to do (%s)\n"
-	defaultBudget  = 45 * time.Minute
+	defaultBudget  = 3 * time.Hour
 )
 
 var chunkBinaries = append([]string{tools.TarBinary}, gateBinaries...)

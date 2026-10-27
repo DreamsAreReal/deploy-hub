@@ -11,7 +11,7 @@ User=ci-%i
 Group=ci-%i
 WorkingDirectory=/var/lib/ci/%i
 ExecStartPre=+/opt/deploy-hub/bin/deploy-hub mutation-dispatch %i
-ExecStart=/var/lib/ci/%i/mutation/stash/deploy-hub mutation-run --spool /var/lib/ci-mutation/%i --stash /var/lib/ci/%i/mutation/stash --work /var/lib/ci/%i/mutation/work --yield /run/ci/%i/job-running --budget 45m
+ExecStart=/var/lib/ci/%i/mutation/stash/deploy-hub mutation-run --spool /var/lib/ci-mutation/%i --stash /var/lib/ci/%i/mutation/stash --work /var/lib/ci/%i/mutation/work --yield /run/ci/%i/job-running --budget 3h
 ExecStopPost=+/opt/deploy-hub/bin/deploy-hub mutation-import %i
 Environment=HOME=/var/lib/ci/%i
 Environment=TMPDIR=/var/lib/ci/%i/tmp
@@ -21,7 +21,7 @@ NetworkNamespacePath=/run/netns/ci-%i
 BindReadOnlyPaths=/etc/netns/ci-%i/resolv.conf:/etc/resolv.conf
 CPUWeight=1
 IOWeight=1
-TimeoutStartSec=70min
+TimeoutStartSec=200min
 KillMode=control-group
 
 UMask=0077
