@@ -55,6 +55,13 @@ func (i Installer) buildBusybox(ctx context.Context, s Source, config string) er
 }
 
 func harness(tools, dest string) error {
+	if err := linkHost(dest); err != nil {
+		return err
+	}
+	return linkTools(tools, dest)
+}
+
+func linkHost(dest string) error {
 	for _, name := range hostHarness {
 		host, err := lookPath(name)
 		if err != nil {
@@ -64,6 +71,10 @@ func harness(tools, dest string) error {
 			return err
 		}
 	}
+	return nil
+}
+
+func linkTools(tools, dest string) error {
 	for _, name := range toolHarness {
 		if _, err := os.Stat(filepath.Join(tools, name)); err != nil {
 			continue
@@ -101,6 +112,10 @@ func placeBusybox(tree, dest string) error {
 	if err := writeIn(dest, sourceBusybox, binary, binPerm); err != nil {
 		return err
 	}
+	return linkApplets(dest, links)
+}
+
+func linkApplets(dest string, links []byte) error {
 	for _, line := range strings.Split(string(links), "\n") {
 		name := filepath.Base(strings.TrimSpace(line))
 		if !appletName.MatchString(name) || name == sourceBusybox {

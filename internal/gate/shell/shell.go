@@ -349,16 +349,8 @@ func testsFor(ws gate.Workspace, tr trace, rel string) map[int][]string {
 	sets := map[int]map[string]bool{}
 	match := matches(ws, rel)
 	for name, lines := range tr.tests {
-		if !match(name) {
-			continue
-		}
-		for l, tests := range lines {
-			if sets[int(l)] == nil {
-				sets[int(l)] = map[string]bool{}
-			}
-			for t := range tests {
-				sets[int(l)][testPath(ws, t)] = true
-			}
+		if match(name) {
+			addTests(ws, sets, lines)
 		}
 	}
 	out := make(map[int][]string, len(sets))
@@ -366,6 +358,17 @@ func testsFor(ws gate.Workspace, tr trace, rel string) map[int][]string {
 		out[l] = slices.Sorted(maps.Keys(set))
 	}
 	return out
+}
+
+func addTests(ws gate.Workspace, sets map[int]map[string]bool, lines map[uint]map[string]bool) {
+	for l, tests := range lines {
+		if sets[int(l)] == nil {
+			sets[int(l)] = map[string]bool{}
+		}
+		for t := range tests {
+			sets[int(l)][testPath(ws, t)] = true
+		}
+	}
 }
 
 func testPath(ws gate.Workspace, test string) string {

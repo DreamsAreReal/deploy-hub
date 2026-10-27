@@ -154,18 +154,35 @@ func (i Installer) Install(ctx context.Context, m Manifest) error {
 	if err := os.MkdirAll(i.Dir, dirPerm); err != nil {
 		return err
 	}
+	for _, step := range []func(context.Context, Manifest) error{i.installBinaries, i.installGo, i.buildSources} {
+		if err := step(ctx, m); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (i Installer) installBinaries(ctx context.Context, m Manifest) error {
 	for _, b := range m.Binaries {
 		if err := i.fetch(ctx, b); err != nil {
 			return fmt.Errorf("%s: %w", b.Name, err)
 		}
 		i.Log.Info("tool installed", "tool", b.Name, "sha256", b.SHA256)
 	}
+	return nil
+}
+
+func (i Installer) installGo(ctx context.Context, m Manifest) error {
 	for _, g := range m.Go {
 		if _, err := i.Exec.Run(ctx, procexec.Command{Name: GoBinary, Args: []string{"install", g}, Env: []string{gobinEnv + i.Dir}, Dir: i.Dir}); err != nil {
 			return fmt.Errorf("go install %s: %w: %s", g, err, procexec.Output(err))
 		}
 		i.Log.Info("tool installed", "tool", g)
 	}
+	return nil
+}
+
+func (i Installer) buildSources(ctx context.Context, m Manifest) error {
 	if sources := m.jsonfilterSources(); len(sources) > 0 {
 		if err := i.buildJSONFilter(ctx, sources); err != nil {
 			return fmt.Errorf("%s: %w", JSONFilter, err)

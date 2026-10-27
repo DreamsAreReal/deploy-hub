@@ -211,16 +211,20 @@ func copyHeaders(src, dst string) error {
 	}
 	defer func() { _ = to.Close() }()
 	for _, e := range entries {
-		if !e.Type().IsRegular() || filepath.Ext(e.Name()) != headerExt {
-			continue
-		}
-		data, rerr := from.ReadFile(e.Name())
-		if rerr != nil {
-			return rerr
-		}
-		if werr := to.WriteFile(e.Name(), data, binPerm); werr != nil {
-			return werr
+		if cerr := copyHeader(from, to, e); cerr != nil {
+			return cerr
 		}
 	}
 	return nil
+}
+
+func copyHeader(from, to *os.Root, e os.DirEntry) error {
+	if !e.Type().IsRegular() || filepath.Ext(e.Name()) != headerExt {
+		return nil
+	}
+	data, err := from.ReadFile(e.Name())
+	if err != nil {
+		return err
+	}
+	return to.WriteFile(e.Name(), data, binPerm)
 }
