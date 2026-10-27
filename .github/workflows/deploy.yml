@@ -17,6 +17,11 @@ on:
         required: false
         type: string
         default: ""
+      image:
+        description: Build and gate a container image; false for a kind binary app, which the hub only gates (nothing is deployed)
+        required: false
+        type: boolean
+        default: true
     secrets:
       VPS_SSH_KEY:
         required: false
@@ -32,7 +37,7 @@ permissions: {}
 
 jobs:
   deploy:
-    name: ${{ (github.event_name == 'pull_request' || (github.repository == 'DreamsAreReal/deploy-hub' && inputs.app == 'deploy-hub')) && 'gate' || 'gate and deploy' }}
+    name: ${{ (github.event_name == 'pull_request' || !inputs.image || (github.repository == 'DreamsAreReal/deploy-hub' && inputs.app == 'deploy-hub')) && 'gate' || 'gate and deploy' }}
     runs-on: ${{ fromJSON('["self-hosted", "linux", "eu"]') }}
     timeout-minutes: 360
     permissions:
@@ -42,7 +47,7 @@ jobs:
     env:
       APP: ${{ inputs.app }}
       HUB: ${{ github.repository == 'DreamsAreReal/deploy-hub' && inputs.app == 'deploy-hub' }}
-      GATE_ONLY: ${{ github.event_name == 'pull_request' || (github.repository == 'DreamsAreReal/deploy-hub' && inputs.app == 'deploy-hub') }}
+      GATE_ONLY: ${{ github.event_name == 'pull_request' || !inputs.image || (github.repository == 'DreamsAreReal/deploy-hub' && inputs.app == 'deploy-hub') }}
       VPS_USER: deploy
       OIDC_AUDIENCE: deploy-hub
     steps:
@@ -133,7 +138,7 @@ jobs:
 
       - name: Build image
         id: image
-        if: env.HUB != 'true'
+        if: env.HUB != 'true' && inputs.image
         env:
           DOCKERFILE: ${{ steps.ctx.outputs.dockerfile }}
           CONTEXT: ${{ steps.ctx.outputs.context }}
@@ -154,12 +159,13 @@ jobs:
         env:
           POLICY: ${{ steps.hub.outputs.policy || steps.own.outputs.policy }}
           IMAGE: ${{ steps.image.outputs.image }}:${{ steps.image.outputs.tag }}
+          BUILT: ${{ steps.image.outcome == 'success' }}
           TOOLCHAIN: ${{ steps.hub.outputs.bin || steps.own.outputs.bin }}
         run: |
           set -o pipefail
           export PATH="$TOOLCHAIN:$PATH"
           extra=()
-          if [ "$HUB" != true ]; then extra+=(--image "$IMAGE"); fi
+          if [ "$BUILT" = true ]; then extra+=(--image "$IMAGE"); fi
           while sleep 30; do
             echo "resources: $(free -m | awk '/^Mem:/ {print "mem_available_mb=" $7}') $(df -m / "$RUNNER_TEMP" | awk 'NR > 1 {print $6 "_free_mb=" $4}' | tr '\n' ' ')top_dirs_mb=$(du -xsm "$RUNNER_TEMP"/gate/* /tmp 2>/dev/null | sort -rn | head -3 | awk '{printf "%s:%s,", $2, $1}')"
           done &
