@@ -160,7 +160,7 @@ func TestShebangNamesTheLanguageOfFilesWithoutExtension(t *testing.T) {
 	for _, c := range cases {
 		testutil.Equal(t, Ext(c.name, []byte(c.src)), c.want)
 	}
-	testutil.True(t, IsCodeExt("#!ucode") && IsCodeExt(ExtSh) && IsCode("a.go"), "scripts and known extensions are code")
+	testutil.True(t, IsCodeExt("#!ucode") && IsCodeExt(ExtSh) && IsCodeExt(".go"), "scripts and known extensions are code")
 	testutil.True(t, !IsCodeExt("") && !IsCodeExt(".md"), "prose and plain files are not code")
 }
 

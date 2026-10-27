@@ -3,7 +3,6 @@ package shell
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -320,15 +319,21 @@ func limited() []string {
 	return []string{"-c", limitScript, BashBinary, "4103", BatsBinary}
 }
 
+func limitedBash(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+	res, err := procexec.NewOS(BashBinary).Run(context.Background(), procexec.Command{Name: BashBinary, Args: args})
+	return strings.TrimSpace(res.Stdout), err
+}
+
 func TestTestsRunUnderAProcessLimit(t *testing.T) {
 	budget := strconv.Itoa(countUserProcesses() + 128)
-	out, err := exec.CommandContext(context.Background(), BashBinary, "-c", limitScript, BashBinary, budget, BashBinary, "-c", "ulimit -u").Output()
+	out, err := limitedBash(t, "-c", limitScript, BashBinary, budget, BashBinary, "-c", "ulimit -u")
 	testutil.NoErr(t, err)
-	testutil.Equal(t, strings.TrimSpace(string(out)), budget)
+	testutil.Equal(t, out, budget)
 	hard := strconv.Itoa(countUserProcesses() + 256)
-	lower, err := exec.CommandContext(context.Background(), BashBinary, "-c", `ulimit -u "$1" && shift && exec "$@"`, BashBinary, hard, BashBinary, "-c", limitScript, BashBinary, "1000000", BashBinary, "-c", "ulimit -u").Output()
+	lower, err := limitedBash(t, "-c", `ulimit -u "$1" && shift && exec "$@"`, BashBinary, hard, BashBinary, "-c", limitScript, BashBinary, "1000000", BashBinary, "-c", "ulimit -u")
 	testutil.NoErr(t, err)
-	testutil.Equal(t, strings.TrimSpace(string(lower)), hard)
+	testutil.Equal(t, lower, hard)
 	testutil.True(t, countUserProcesses() > 0, "the test process itself belongs to the user")
 	saved := procDir
 	t.Cleanup(func() { procDir = saved })

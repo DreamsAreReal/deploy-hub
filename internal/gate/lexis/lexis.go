@@ -36,10 +36,6 @@ var codeExts = map[string]bool{
 
 var shellExts = map[string]string{"sh": ExtSh, "ash": ExtSh, "dash": ExtSh, "bash": ExtBash}
 
-func IsCode(name string) bool {
-	return IsCodeExt(path.Ext(name))
-}
-
 func IsCodeExt(ext string) bool {
 	return codeExts[ext] || strings.HasPrefix(ext, ScriptPrefix)
 }

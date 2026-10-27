@@ -76,16 +76,23 @@ func countUserProcesses() int {
 	uid := int64(os.Getuid())
 	n := 0
 	for _, e := range entries {
-		if _, aerr := strconv.Atoi(e.Name()); aerr != nil {
-			continue
-		}
-		if info, ierr := e.Info(); ierr == nil {
-			if st, ok := info.Sys().(*syscall.Stat_t); ok && int64(st.Uid) == uid {
-				n += threads(e.Name())
-			}
+		if ownedBy(e, uid) {
+			n += threads(e.Name())
 		}
 	}
 	return n
+}
+
+func ownedBy(e os.DirEntry, uid int64) bool {
+	if _, err := strconv.Atoi(e.Name()); err != nil {
+		return false
+	}
+	info, err := e.Info()
+	if err != nil {
+		return false
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	return ok && int64(st.Uid) == uid
 }
 
 func threads(pid string) int {
