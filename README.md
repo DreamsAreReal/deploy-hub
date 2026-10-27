@@ -156,7 +156,7 @@ duplication check does not count them.
 | Python | `pyproject.toml`, `requirements*.txt`; loose `.py` files form a root project | uv, ruff, mypy `--strict`, complexipy, vulture, pytest with coverage (branches, per-test contexts), hypothesis, trivy, the token mutation engine |
 | Node / TypeScript | `package.json` | npm, eslint (typescript-eslint strict, sonarjs), `tsc --strict`, knip, vitest / jest / mocha / `node --test`, fast-check, trivy, the token mutation engine |
 | .NET | `*.sln`, `*.slnx`, `*.csproj`, `*.fsproj`, `*.vbproj` (the outermost one) | dotnet (`restore --locked-mode`, build with the recommended analyzers and SonarAnalyzer as errors, `format whitespace`, `test` with coverlet), CsCheck / FsCheck, trivy, the token mutation engine |
-| Shell | none; `.sh` and `.bash` files form a root project | shellcheck (every optional check), shfmt, bats with bash xtrace coverage, the token mutation engine |
+| Shell | none; `.sh` and `.bash` files and files without an extension that start with a `sh`, `ash`, `dash` or `bash` shebang form a root project | shellcheck (every optional check), shfmt, bats with bash xtrace coverage, the token mutation engine |
 | Static site | none; `.html`, `.htm` and `.css` files form a root project | html-validate (recommended rules, SRI on cross-origin resources; Go `html/template` files are rendered first), stylelint standard |
 | SQL | none; `.sql` files form a root project | sqlfluff (parse only) |
 
@@ -186,7 +186,16 @@ What each stack expects from an app repo:
 - **Shell.** Scripts are bash; tests are `.bats` files. A scenario names a
   test as `file.bats > test name`. Shell has no package dependencies and no
   property-based fuzzer, so `dependencies`, `modules`, `vulnerabilities` and
-  `fuzz` are `n/a` with that reason.
+  `fuzz` are `n/a` with that reason. A file without an extension is a script
+  of the language its shebang names (`#!/bin/sh`, `#!/usr/bin/env bash`,
+  `#!/bin/sh /etc/rc.common`); a shebang of a language without a pack
+  (`#!/usr/bin/ucode`, `#!/usr/bin/python3`) makes the file an orphan and the
+  `stacks` check fails, so no executable file escapes the gate by having no
+  extension. Coverage comes from bash xtrace, so tests run `#!/bin/sh` scripts
+  with `bash script`. bats runs under `ulimit -u` set to the threads the user
+  already runs plus 4096 (the limit counts threads, and it is only ever
+  lowered): a test that forks without end fails instead of exhausting the
+  runner.
 - **Static site.** Markup and styles carry no executable code: complexity,
   dead code, tests, coverage, fuzzing and mutation are `n/a`. Every
   cross-origin script or stylesheet needs an `integrity` hash. JavaScript
@@ -867,6 +876,15 @@ A runner is registered on one repository (personal accounts have no runner
 groups), so only that repo's jobs reach it. Keep "Run workflows from fork pull
 requests" off in the repo's Actions settings (the default for private repos).
 
+The scripts of `server/ci-runner` are shell scripts without an extension and
+pass the shell pack of the hub's own gate. Their bats tests live in
+[`test/ci-runner`](test/ci-runner) (outside the embedded directory): each test
+copies a script to `server/ci-runner/<name>` under its temporary directory with
+the host paths (`/proc`, `/sys/fs/cgroup`, `/etc/systemd/system`, ...) replaced
+on the same lines and runs it with bash against stub commands, so coverage maps
+to the original lines and nothing touches the machine. A stub that needs the
+real tool calls it by absolute path (`/usr/bin/stat`), never through `PATH`.
+
 Isolation, all in [`server/ci-runner`](server/ci-runner):
 
 | What | How |
@@ -985,7 +1003,9 @@ managers, unmounts `/var/lib/ci`, runs `tune2fs -O quota,project -Q prjquota`,
 mounts it with `prjquota`, sets every registered repo's project id and limit and
 starts the runners again, printing both times. A new image gets the features at
 `mkfs`. After that `host` re-applies the limits of `ci-disk-quota` on every run;
-without the features it only warns. `df /var/lib/ci/<repo>` shows the quota.
+without the features it only warns. Until the image has the `project` feature,
+`host` installs `var-lib-ci.mount` without `prjquota`, because that mount option
+fails on such an image. `df /var/lib/ci/<repo>` shows the quota.
 
 Main deploys overtake pull request gates: each repo has one runner, so a push
 to `main` would otherwise wait for a running gate. `deploy-hub-preempt.timer`

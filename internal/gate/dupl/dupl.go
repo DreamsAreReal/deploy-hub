@@ -70,7 +70,7 @@ func Check(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	}
 	sources := map[string][]byte{}
 	for _, f := range files {
-		if !lexis.IsCode(f) || source.Fixture(f) {
+		if !lexis.IsCodeExt(source.Ext(ws.Src, f)) || source.Fixture(f) {
 			continue
 		}
 		data, err := os.ReadFile(filepath.Join(ws.Src, filepath.FromSlash(f)))

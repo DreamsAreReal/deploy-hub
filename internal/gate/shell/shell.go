@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/junit"
@@ -52,6 +53,8 @@ const (
 	idSeparator       = " > "
 	unusedVariable    = 2034
 	unusedFunction    = 2329
+	testProcesses     = 4096
+	limitScript       = `cur=$(ulimit -u); if [ "$cur" = unlimited ] || [ "$cur" -gt "$1" ]; then ulimit -u "$1" || exit; fi; shift; exec "$@"`
 )
 
 var (
@@ -61,13 +64,57 @@ var (
 )
 
 var (
+	userProcesses = countUserProcesses
+	procDir       = "/proc"
+)
+
+func countUserProcesses() int {
+	entries, err := os.ReadDir(procDir)
+	if err != nil {
+		return 0
+	}
+	uid := int64(os.Getuid())
+	n := 0
+	for _, e := range entries {
+		if ownedBy(e, uid) {
+			n += threads(e.Name())
+		}
+	}
+	return n
+}
+
+func ownedBy(e os.DirEntry, uid int64) bool {
+	if _, err := strconv.Atoi(e.Name()); err != nil {
+		return false
+	}
+	info, err := e.Info()
+	if err != nil {
+		return false
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	return ok && int64(st.Uid) == uid
+}
+
+func threads(pid string) int {
+	tasks, err := os.ReadDir(filepath.Join(procDir, pid, "task"))
+	if err != nil || len(tasks) == 0 {
+		return 1
+	}
+	return len(tasks)
+}
+
+func batsArgs(args ...string) []string {
+	return append([]string{"-c", limitScript, BashBinary, strconv.Itoa(userProcesses() + testProcesses), BatsBinary}, args...)
+}
+
+var (
 	Integrity    = gate.NotApplicable(reasonNoDeps)
 	Dependencies = gate.NotApplicable(reasonNoDeps)
 	Fuzz         = gate.NotApplicable(reasonNoFuzz)
 )
 
 func scripts(ctx context.Context, ws gate.Workspace) ([]string, error) {
-	return source.Select(ctx, ws, func(f string) bool { return slices.Contains(Sources, path.Ext(f)) })
+	return source.Select(ctx, ws, func(f string) bool { return slices.Contains(Sources, source.Ext(ws.Src, f)) })
 }
 
 func Lint(ctx context.Context, ws gate.Workspace) gate.Outcome {
@@ -186,7 +233,7 @@ func Tests(ctx context.Context, ws gate.Workspace) gate.Outcome {
 		return gate.Fail(err.Error())
 	}
 	_ = os.Remove(ws.Report(traceLog))
-	_, runErr := ws.RunEnv(ctx, env, BatsBinary, append([]string{"--report-formatter", "junit", "--output", ws.Out}, tests...)...)
+	_, runErr := ws.RunEnv(ctx, env, BashBinary, batsArgs(append([]string{"--report-formatter", "junit", "--output", ws.Out}, tests...)...)...)
 	cases, lerr := junit.Load(ws.Report(JUnitReport))
 	if lerr != nil {
 		return gate.Fail(reasonNoReport + ": " + gate.Tail(errors.Join(runErr, lerr).Error()))

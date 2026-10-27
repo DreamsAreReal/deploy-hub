@@ -1,38 +1,44 @@
 #!/bin/sh
 set +e
-/usr/local/lib/ci-runner/ci-runner-reap || {
-  echo "ci-job-started: a process of an earlier job survived, refusing the job"
-  exit 1
-}
 refuse() {
-  echo "ci-job-started: $1"
-  exit 1
+	echo "ci-job-started: $1"
+	exit 1
 }
+
+pull_request_ref() {
+	[ "${GITHUB_BASE_REF:-}" = main ] || refuse "pull request into ${GITHUB_BASE_REF:-?}, not main"
+	head="$(jq -r '.pull_request.head.repo.full_name // empty' "${GITHUB_EVENT_PATH:-/nonexistent}" 2>/dev/null)"
+	[ -n "${head}" ] && [ "${head}" = "${GITHUB_REPOSITORY:-}" ] || refuse "pull request from ${head:-an unknown repo}, not ${GITHUB_REPOSITORY:-?}"
+	case "${GITHUB_REF:-}" in
+	refs/pull/*/merge) ref=${GITHUB_REF} ;;
+	*) refuse "pull request ref ${GITHUB_REF:-?} is not refs/pull/<n>/merge" ;;
+	esac
+}
+
+check_workflow() {
+	case "${GITHUB_WORKFLOW_REF:-}" in
+	"${GITHUB_REPOSITORY:-?}/.github/workflows/"*"@${ref}") ;;
+	*) refuse "workflow ${GITHUB_WORKFLOW_REF:-?} is not from ${ref} of ${GITHUB_REPOSITORY:-?}" ;;
+	esac
+}
+
+check_quota() {
+	user=$(id -un)
+	usage=$(df -B1G --output=used,size,pcent "${HOME:-/nonexistent}" 2>/dev/null) || usage=
+	quota=$(printf '%s\n' "${usage}" | awk 'NR == 2 {print $1 " of " $2 " GiB (" $3 ")"}')
+	echo "ci-job-started: disk quota of ${user}: ${quota:-unknown}"
+	case "${quota}" in
+	*"(9"[5-9]"%)" | *"(100%)") refuse "the disk quota of ${user} is full even after the last cleanup, refusing the job; free ${HOME} or raise its line in server/ci-runner/ci-disk-quota of deploy-hub" ;;
+	*) exit 0 ;;
+	esac
+}
+
+/usr/local/lib/ci-runner/ci-runner-reap || refuse "a process of an earlier job survived, refusing the job"
 case "${GITHUB_EVENT_NAME:-}" in
-  push | workflow_dispatch | schedule) ref=refs/heads/main ;;
-  pull_request)
-    [ "${GITHUB_BASE_REF:-}" = main ] || refuse "pull request into ${GITHUB_BASE_REF:-?}, not main"
-    head="$(jq -r '.pull_request.head.repo.full_name // empty' "${GITHUB_EVENT_PATH:-/nonexistent}" 2>/dev/null)"
-    [ -n "$head" ] && [ "$head" = "${GITHUB_REPOSITORY:-}" ] || refuse "pull request from ${head:-an unknown repo}, not ${GITHUB_REPOSITORY:-?}"
-    ref="${GITHUB_REF:-}"
-    case "$ref" in
-      refs/pull/*/merge) ;;
-      *) refuse "pull request ref ${ref:-?} is not refs/pull/<n>/merge" ;;
-    esac
-    ;;
-  *) refuse "this runner takes no ${GITHUB_EVENT_NAME:-unknown} events" ;;
+push | workflow_dispatch | schedule) ref=refs/heads/main ;;
+pull_request) pull_request_ref ;;
+*) refuse "this runner takes no ${GITHUB_EVENT_NAME:-unknown} events" ;;
 esac
-[ "${GITHUB_REF:-}" = "$ref" ] || refuse "this runner takes only $ref, got ${GITHUB_REF:-?}"
-case "${GITHUB_WORKFLOW_REF:-}" in
-  "${GITHUB_REPOSITORY:-?}/.github/workflows/"*"@$ref") ;;
-  *) refuse "workflow ${GITHUB_WORKFLOW_REF:-?} is not from $ref of ${GITHUB_REPOSITORY:-?}" ;;
-esac
-quota=$(df -B1G --output=used,size,pcent "${HOME:-/nonexistent}" 2>/dev/null | awk 'NR == 2 {print $1 " of " $2 " GiB (" $3 ")"}')
-echo "ci-job-started: disk quota of $(id -un): ${quota:-unknown}"
-case "$quota" in
-  *"(9"[5-9]"%)" | *"(100%)")
-    echo "ci-job-started: the disk quota of $(id -un) is full even after the last cleanup, refusing the job; free $HOME or raise its line in server/ci-runner/ci-disk-quota of deploy-hub"
-    exit 1
-    ;;
-esac
-exit 0
+[ "${GITHUB_REF:-}" = "${ref}" ] || refuse "this runner takes only ${ref}, got ${GITHUB_REF:-?}"
+check_workflow
+check_quota

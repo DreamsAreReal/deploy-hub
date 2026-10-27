@@ -16,19 +16,74 @@ const (
 	directiveLanguage = "Go"
 	tripleDouble      = `"""`
 	tripleSingle      = "'''"
+	shebang           = "#!"
+	envProgram        = "env"
+	envOption         = "-"
+	ScriptPrefix      = "#!"
+	scriptName        = "script"
+	ExtSh             = ".sh"
+	ExtBash           = ".bash"
 )
 
 var codeExts = map[string]bool{
 	".go": true, ".js": true, ".mjs": true, ".cjs": true, ".jsx": true, ".ts": true, ".mts": true, ".cts": true, ".tsx": true,
 	".vue": true, ".svelte": true, ".py": true, ".pyi": true, ".rb": true, ".php": true, ".java": true, ".kt": true, ".kts": true,
 	".scala": true, ".groovy": true, ".cs": true, ".fs": true, ".vb": true, ".c": true, ".h": true, ".cc": true, ".cpp": true,
-	".cxx": true, ".hpp": true, ".rs": true, ".swift": true, ".dart": true, ".lua": true, ".pl": true, ".pm": true, ".sh": true,
-	".bash": true, ".zsh": true, ".ps1": true, ".sql": true, ".r": true, ".ex": true, ".exs": true, ".erl": true, ".hs": true,
+	".cxx": true, ".hpp": true, ".rs": true, ".swift": true, ".dart": true, ".lua": true, ".pl": true, ".pm": true, ExtSh: true,
+	ExtBash: true, ".zsh": true, ".ps1": true, ".sql": true, ".r": true, ".ex": true, ".exs": true, ".erl": true, ".hs": true,
 	".clj": true, ".m": true, ".mm": true,
 }
 
-func IsCode(name string) bool {
-	return codeExts[path.Ext(name)]
+var shellExts = map[string]string{"sh": ExtSh, "ash": ExtSh, "dash": ExtSh, "bash": ExtBash}
+
+func IsCodeExt(ext string) bool {
+	return codeExts[ext] || strings.HasPrefix(ext, ScriptPrefix)
+}
+
+func Ext(name string, data []byte) string {
+	if ext := path.Ext(name); ext != "" {
+		return ext
+	}
+	interp := Interpreter(data)
+	if ext, ok := shellExts[interp]; ok {
+		return ext
+	}
+	if interp != "" {
+		return ScriptPrefix + interp
+	}
+	return ""
+}
+
+func Interpreter(data []byte) string {
+	line, _, _ := strings.Cut(string(data), "\n")
+	rest, ok := strings.CutPrefix(line, shebang)
+	if !ok {
+		return ""
+	}
+	fields := strings.Fields(rest)
+	if len(fields) == 0 {
+		return ""
+	}
+	prog := path.Base(fields[0])
+	if prog != envProgram {
+		return prog
+	}
+	for _, f := range fields[1:] {
+		if !strings.HasPrefix(f, envOption) {
+			return path.Base(f)
+		}
+	}
+	return ""
+}
+
+func lexerFor(name string, data []byte) chroma.Lexer {
+	if l := lexers.Match(path.Base(name)); l != nil {
+		return l
+	}
+	if path.Ext(name) != "" {
+		return nil
+	}
+	return lexers.Match(scriptName + Ext(name, data))
 }
 
 var (
@@ -45,7 +100,7 @@ type Token struct {
 }
 
 func Lex(name string, data []byte) ([]Token, bool, error) {
-	l := lexers.Match(path.Base(name))
+	l := lexerFor(name, data)
 	if l == nil {
 		return nil, false, nil
 	}

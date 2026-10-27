@@ -40,7 +40,7 @@ func mutationSuite(ctx context.Context, ws gate.Workspace) (tokmut.Suite, error)
 			return cerr
 		},
 		Test: func(ctx context.Context, _ int, dir string, _ []string) error {
-			_, terr := inside(dir).Run(ctx, BatsBinary, append([]string{"--abort"}, tests...)...)
+			_, terr := inside(dir).Run(ctx, BashBinary, batsArgs(append([]string{"--abort"}, tests...)...)...)
 			return terr
 		},
 	}, err

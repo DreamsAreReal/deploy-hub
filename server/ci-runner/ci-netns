@@ -1,114 +1,119 @@
 #!/bin/sh
 set -eu
 PREFIX=10.79
-POOL=$PREFIX.0.0/16
+POOL=${PREFIX}.0.0/16
 HOST_IFS=cih
 NS_IFS=cin
 TABLE=ci_netns
 
 usage() {
-  echo "usage: $0 up|down|check <repo> | guard" >&2
-  exit 2
+	echo "usage: $0 up|down|check <repo> | guard" >&2
+	exit 2
 }
 
 ext_if() {
-  ip -4 route get 1.1.1.1 | grep -o 'dev [^ ]*' | awk '{print $2}'
+	ip -4 route get 1.1.1.1 | grep -o 'dev [^ ]*' | awk '{print $2}'
 }
 
 ext_ip() {
-  ip -4 route get 1.1.1.1 | grep -o 'src [^ ]*' | awk '{print $2}'
+	ip -4 route get 1.1.1.1 | grep -o 'src [^ ]*' | awk '{print $2}'
 }
 
 rule() {
-  table=$1
-  chain=$2
-  shift 2
-  iptables -t "$table" -C "$chain" "$@" 2>/dev/null || iptables -t "$table" -A "$chain" "$@"
+	table=$1
+	chain=$2
+	shift 2
+	iptables -t "${table}" -C "${chain}" "$@" 2>/dev/null || iptables -t "${table}" -A "${chain}" "$@"
 }
 
 repo_uid() {
-  uid=$(id -u "ci-$1") || exit 1
-  [ "$uid" -gt 0 ] && [ "$uid" -lt 16384 ] || {
-    echo "uid $uid of ci-$1 does not fit a /30 of $POOL" >&2
-    exit 1
-  }
-  echo "$uid"
+	uid=$(id -u "ci-$1") || exit 1
+	[ "${uid}" -gt 0 ] && [ "${uid}" -lt 16384 ] || {
+		echo "uid ${uid} of ci-$1 does not fit a /30 of ${POOL}" >&2
+		exit 1
+	}
+	echo "${uid}"
 }
 
 addr() {
-  n=$(($1 * 4 + $2))
-  echo "$PREFIX.$((n / 256)).$((n % 256))"
+	n=$(($1 * 4 + $2))
+	echo "${PREFIX}.$((n / 256)).$((n % 256))"
 }
 
 guard() {
-  out=$(ext_if)
-  pub=$(ext_ip)
-  nft -f - <<NFT
-table inet $TABLE
-delete table inet $TABLE
-table inet $TABLE {
+	out=$(ext_if)
+	pub=$(ext_ip)
+	nft -f - <<NFT
+table inet ${TABLE}
+delete table inet ${TABLE}
+table inet ${TABLE} {
   chain forward {
     type filter hook forward priority -10; policy accept;
-    oifname "$HOST_IFS*" ct state established,related accept
-    oifname "$HOST_IFS*" drop
-    iifname "$HOST_IFS*" meta nfproto ipv6 drop
-    iifname "$HOST_IFS*" ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16, 127.0.0.0/8 } drop
-    iifname "$HOST_IFS*" oifname != "$out" drop
+    oifname "${HOST_IFS}*" ct state established,related accept
+    oifname "${HOST_IFS}*" drop
+    iifname "${HOST_IFS}*" meta nfproto ipv6 drop
+    iifname "${HOST_IFS}*" ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16, 127.0.0.0/8 } drop
+    iifname "${HOST_IFS}*" oifname != "${out}" drop
   }
   chain input {
     type filter hook input priority -10; policy accept;
-    iifname != "$HOST_IFS*" accept
+    iifname != "${HOST_IFS}*" accept
     ct state established,related accept
-    ip daddr $pub tcp dport { 22, 80, 443 } accept
+    ip daddr ${pub} tcp dport { 22, 80, 443 } accept
     ip protocol icmp accept
     drop
   }
 }
 NFT
-  sysctl -qw net.ipv4.ip_forward=1
-  rule filter FORWARD -i "$HOST_IFS+" -o "$out" -j ACCEPT
-  rule filter FORWARD -o "$HOST_IFS+" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-  rule nat POSTROUTING -s "$POOL" -o "$out" -j MASQUERADE
+	sysctl -qw net.ipv4.ip_forward=1
+	rule filter FORWARD -i "${HOST_IFS}+" -o "${out}" -j ACCEPT
+	rule filter FORWARD -o "${HOST_IFS}+" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+	rule nat POSTROUTING -s "${POOL}" -o "${out}" -j MASQUERADE
 }
 
 down() {
-  uid=$(repo_uid "$1")
-  ip link del "$HOST_IFS$uid" 2>/dev/null || true
-  ip netns del "ci-$1" 2>/dev/null || true
+	uid=$(repo_uid "$1")
+	if ip link show "${HOST_IFS}${uid}" >/dev/null 2>&1; then
+		ip link del "${HOST_IFS}${uid}"
+	fi
+	if [ -e "/run/netns/ci-$1" ]; then
+		ip netns del "ci-$1"
+	fi
 }
 
 up() {
-  ns=ci-$1
-  uid=$(repo_uid "$1")
-  host_if=$HOST_IFS$uid
-  ns_if=$NS_IFS$uid
-  host_ip=$(addr "$uid" 1)
-  down "$1"
-  guard
-  ip netns add "$ns"
-  ip -n "$ns" link set lo up
-  ip link add "$host_if" type veth peer name "$ns_if"
-  ip link set "$ns_if" netns "$ns"
-  ip addr add "$host_ip/30" dev "$host_if"
-  ip link set "$host_if" up
-  ip -n "$ns" addr add "$(addr "$uid" 2)/30" dev "$ns_if"
-  ip -n "$ns" link set "$ns_if" up
-  ip -n "$ns" route add default via "$host_ip"
-  ip netns exec "$ns" sysctl -qw net.ipv6.conf.all.disable_ipv6=1
+	ns=ci-$1
+	uid=$(repo_uid "$1")
+	host_if=${HOST_IFS}${uid}
+	ns_if=${NS_IFS}${uid}
+	host_ip=$(addr "${uid}" 1)
+	ns_ip=$(addr "${uid}" 2)
+	down "$1"
+	guard
+	ip netns add "${ns}"
+	ip -n "${ns}" link set lo up
+	ip link add "${host_if}" type veth peer name "${ns_if}"
+	ip link set "${ns_if}" netns "${ns}"
+	ip addr add "${host_ip}/30" dev "${host_if}"
+	ip link set "${host_if}" up
+	ip -n "${ns}" addr add "${ns_ip}/30" dev "${ns_if}"
+	ip -n "${ns}" link set "${ns_if}" up
+	ip -n "${ns}" route add default via "${host_ip}"
+	ip netns exec "${ns}" sysctl -qw net.ipv6.conf.all.disable_ipv6=1
 }
 
 check() {
-  uid=$(repo_uid "$1")
-  [ -e "/run/netns/ci-$1" ] &&
-    ip -br link show "$HOST_IFS$uid" 2>/dev/null | grep -q ' UP ' &&
-    ip -n "ci-$1" -br link show "$NS_IFS$uid" 2>/dev/null | grep -q ' UP ' &&
-    nft list table inet "$TABLE" >/dev/null 2>&1
+	uid=$(repo_uid "$1")
+	[ -e "/run/netns/ci-$1" ] &&
+		ip -br link show "${HOST_IFS}${uid}" 2>/dev/null | grep -q ' UP ' &&
+		ip -n "ci-$1" -br link show "${NS_IFS}${uid}" 2>/dev/null | grep -q ' UP ' &&
+		nft list table inet "${TABLE}" >/dev/null 2>&1
 }
 
 case "${1:-}" in
-  up) up "${2:?repo}" ;;
-  down) down "${2:?repo}" ;;
-  check) check "${2:?repo}" ;;
-  guard) guard ;;
-  *) usage ;;
+up) up "${2:?repo}" ;;
+down) down "${2:?repo}" ;;
+check) check "${2:?repo}" ;;
+guard) guard ;;
+*) usage ;;
 esac
