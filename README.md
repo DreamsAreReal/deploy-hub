@@ -116,8 +116,9 @@ PATH="$hub/bin:$PATH" deploy-hub precheck --app <app> --repo DreamsAreReal/<app>
 Leave out `--image` (and the `docker build`) for an app that ships no image,
 or on a machine without Docker; with Docker and without `--image`, the `image`
 check of an image app fails, as in the gate. For the hub itself,
-`make precheck` does the same on this checkout. Exit 0 or 3 means the push may
-go; exit 1 means it may not.
+`make precheck` does the same on this checkout; `go run` reports any non-zero
+exit as 1, so read the verdict line there. Exit 0 or 3 means the push may go;
+exit 1 means it may not.
 
 **The image does not depend on the runner umask.** The CI runner works under
 `UMask=0077`, so its checkout is private (files `0600`, directories `0700`),
