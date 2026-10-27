@@ -20,6 +20,10 @@ func mutationSuite(ctx context.Context, ws gate.Workspace) (tokmut.Suite, error)
 	if err != nil {
 		return tokmut.Suite{}, err
 	}
+	index, err := loadTestIndex(ws)
+	if err != nil {
+		return tokmut.Suite{}, err
+	}
 	tests, err := batsFiles(ctx, ws)
 	if err != nil {
 		return tokmut.Suite{}, err
@@ -38,13 +42,20 @@ func mutationSuite(ctx context.Context, ws gate.Workspace) (tokmut.Suite, error)
 		Family:  tokmut.Shell,
 		Files:   files,
 		Seconds: junit.Seconds(cases),
-		Covered: cov.Covered,
+		Covered: func(rel string, line int) (bool, []string) {
+			hit, _ := cov.Covered(rel, line)
+			return hit, index[rel][line]
+		},
 		Compile: func(ctx context.Context, _ int, dir, rel string) error {
 			_, cerr := inside(dir).Run(ctx, BashBinary, "-n", rel)
 			return cerr
 		},
-		Test: func(ctx context.Context, _ int, dir string, _ []string) error {
-			_, terr := inside(dir).RunEnv(ctx, utils, BashBinary, batsArgs(append([]string{"--abort"}, tests...)...)...)
+		Test: func(ctx context.Context, _ int, dir string, covering []string) error {
+			run := tests
+			if len(covering) > 0 {
+				run = covering
+			}
+			_, terr := inside(dir).RunEnv(ctx, utils, BashBinary, batsArgs(append([]string{"--abort"}, run...)...)...)
 			return terr
 		},
 	}, err

@@ -33,6 +33,7 @@ const (
 	JUnitReport       = "report.xml"
 	traceScript       = "trace.bash"
 	traceLog          = "trace.log"
+	testIndexFile     = "tests.json"
 	testSuffix        = ".bats"
 	ValueFunctions    = "functions"
 	ValueMaxCognitive = "max_cognitive_complexity"
@@ -48,7 +49,7 @@ const (
 	shellcheckForm    = "%s:%d SC%d %s"
 	complexityForm    = "%s: %s has cognitive complexity %d"
 	formatForm        = "%s: not formatted"
-	traceSetup        = "exec {DEPLOY_HUB_TRACE_FD}>>\"$DEPLOY_HUB_TRACE\"\nBASH_XTRACEFD=$DEPLOY_HUB_TRACE_FD\nPS4='+${BASH_SOURCE[0]}:${LINENO}: '\nset -x\n"
+	traceSetup        = "exec {DEPLOY_HUB_TRACE_FD}>>\"$DEPLOY_HUB_TRACE\"\nBASH_XTRACEFD=$DEPLOY_HUB_TRACE_FD\nPS4='+${BATS_TEST_FILENAME:-}|${BASH_SOURCE[0]}:${LINENO}: '\nset -x\n"
 	envTrace          = "DEPLOY_HUB_TRACE="
 	envBashEnv        = "BASH_ENV="
 	idSeparator       = " > "
@@ -63,7 +64,7 @@ const (
 
 var (
 	Sources   = []string{".sh", ".bash"}
-	traceLine = regexp.MustCompile(`^\++(.+?):(\d+): `)
+	traceLine = regexp.MustCompile(`^\++(?:([^|]*)\|)?(.+?):(\d+): `)
 	deadCodes = []int{unusedVariable, unusedFunction}
 )
 
@@ -282,39 +283,60 @@ func testID(c junit.Case) string {
 	return c.Classname + idSeparator + c.Name
 }
 
-func readTrace(file string) (map[string]map[uint]int, error) {
-	counts := map[string]map[uint]int{}
+type trace struct {
+	counts map[string]map[uint]int
+	tests  map[string]map[uint]map[string]bool
+}
+
+func readTrace(file string) (trace, error) {
+	tr := trace{counts: map[string]map[uint]int{}, tests: map[string]map[uint]map[string]bool{}}
 	f, err := os.Open(filepath.Clean(file))
 	if errors.Is(err, os.ErrNotExist) {
-		return counts, nil
+		return tr, nil
 	}
 	if err != nil {
-		return nil, err
+		return trace{}, err
 	}
 	defer func() { _ = f.Close() }()
 	sc := bufio.NewScanner(f)
 	sc.Buffer(nil, bufio.MaxScanTokenSize*traceBufferScale)
 	for sc.Scan() {
-		m := traceLine.FindStringSubmatch(sc.Text())
-		if m == nil {
-			continue
+		if m := traceLine.FindStringSubmatch(sc.Text()); m != nil {
+			tr.add(m[1], filepath.Clean(m[2]), m[3])
 		}
-		n, _ := strconv.ParseUint(m[2], 10, 32)
-		name := filepath.Clean(m[1])
-		if counts[name] == nil {
-			counts[name] = map[uint]int{}
-		}
-		counts[name][uint(n)]++
 	}
-	return counts, sc.Err()
+	return tr, sc.Err()
+}
+
+func (tr trace) add(test, name, line string) {
+	n, _ := strconv.ParseUint(line, 10, 32)
+	if tr.counts[name] == nil {
+		tr.counts[name] = map[uint]int{}
+		tr.tests[name] = map[uint]map[string]bool{}
+	}
+	tr.counts[name][uint(n)]++
+	if test == "" {
+		return
+	}
+	if tr.tests[name][uint(n)] == nil {
+		tr.tests[name][uint(n)] = map[string]bool{}
+	}
+	tr.tests[name][uint(n)][test] = true
+}
+
+func matches(ws gate.Workspace, rel string) func(string) bool {
+	abs := filepath.Join(ws.Src, filepath.FromSlash(rel))
+	resolved, _ := filepath.EvalSymlinks(abs)
+	return func(name string) bool {
+		return name == filepath.FromSlash(rel) || name == abs || name == resolved || strings.HasSuffix(name, string(filepath.Separator)+filepath.FromSlash(rel))
+	}
 }
 
 func countsFor(ws gate.Workspace, counts map[string]map[uint]int, rel string) map[uint]int {
 	out := map[uint]int{}
-	abs := filepath.Join(ws.Src, filepath.FromSlash(rel))
-	resolved, _ := filepath.EvalSymlinks(abs)
+	match := matches(ws, rel)
 	for name, lines := range counts {
-		if name == filepath.FromSlash(rel) || name == abs || name == resolved || strings.HasSuffix(name, string(filepath.Separator)+filepath.FromSlash(rel)) {
+		if match(name) {
 			for l, c := range lines {
 				out[l] += c
 			}
@@ -323,8 +345,38 @@ func countsFor(ws gate.Workspace, counts map[string]map[uint]int, rel string) ma
 	return out
 }
 
+func testsFor(ws gate.Workspace, tr trace, rel string) map[int][]string {
+	sets := map[int]map[string]bool{}
+	match := matches(ws, rel)
+	for name, lines := range tr.tests {
+		if !match(name) {
+			continue
+		}
+		for l, tests := range lines {
+			if sets[int(l)] == nil {
+				sets[int(l)] = map[string]bool{}
+			}
+			for t := range tests {
+				sets[int(l)][testPath(ws, t)] = true
+			}
+		}
+	}
+	out := make(map[int][]string, len(sets))
+	for l, set := range sets {
+		out[l] = slices.Sorted(maps.Keys(set))
+	}
+	return out
+}
+
+func testPath(ws gate.Workspace, test string) string {
+	if rel, err := filepath.Rel(ws.Src, test); err == nil && !strings.HasPrefix(rel, "..") {
+		return filepath.ToSlash(rel)
+	}
+	return test
+}
+
 func writeCoverage(ctx context.Context, ws gate.Workspace) error {
-	counts, err := readTrace(ws.Report(traceLog))
+	tr, err := readTrace(ws.Report(traceLog))
 	if err != nil {
 		return err
 	}
@@ -333,14 +385,38 @@ func writeCoverage(ctx context.Context, ws gate.Workspace) error {
 		return err
 	}
 	cov := linecov.Report{}
+	index := testIndex{}
 	for _, f := range files {
 		s, aerr := analyzeFile(ws, f)
 		if aerr != nil {
 			return aerr
 		}
-		cov[f] = coverageOf(s, countsFor(ws, counts, f))
+		cov[f] = coverageOf(s, countsFor(ws, tr.counts, f))
+		index[f] = testsFor(ws, tr, f)
+	}
+	if err := index.save(ws); err != nil {
+		return err
 	}
 	return cov.Save(ws)
+}
+
+type testIndex map[string]map[int][]string
+
+func (t testIndex) save(ws gate.Workspace) error {
+	data, err := json.Marshal(t)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(ws.Report(testIndexFile), data, reportPerm)
+}
+
+func loadTestIndex(ws gate.Workspace) (testIndex, error) {
+	data, err := os.ReadFile(ws.Report(testIndexFile))
+	if err != nil {
+		return nil, err
+	}
+	index := testIndex{}
+	return index, json.Unmarshal(data, &index)
 }
 
 func coverageOf(s script, counts map[uint]int) *linecov.File {

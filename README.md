@@ -200,7 +200,10 @@ What each stack expects from an app repo:
   tests (and every mutant's) then run with `PATH` set to `busybox.d` only, so a
   command the router lacks fails the test, and awk, sed, grep and the rest
   behave as on the router (busybox awk, for one, keeps `-v` values as strings
-  and reads backslashes in `gsub` replacements differently).
+  and reads backslashes in `gsub` replacements differently). The xtrace lines also
+  carry the bats file that ran them (`BATS_TEST_FILENAME` in `PS4`), so a shell
+  mutant runs only the bats files that executed its line, and all of them when
+  none did, as the Node pack does.
 - **Static site.** Markup and styles carry no executable code: complexity,
   dead code, tests, coverage, fuzzing and mutation are `n/a`. Every
   cross-origin script or stylesheet needs an `integrity` hash. JavaScript
