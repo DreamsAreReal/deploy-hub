@@ -180,7 +180,7 @@ func TestPrintVerdict(t *testing.T) {
 		{Check: "tests", Status: gate.StatusPass, Values: map[string]float64{"b": 2, "a": 1.5}, Findings: []string{"kept in the verdict only"}},
 		{Check: "dast", Status: gate.StatusNA, Reason: "no HTTP", Findings: []string{"n/a detail"}},
 		{Check: "sast", Status: gate.StatusFail, Reason: "found", Findings: []string{"x"}},
-		{Check: "lint", Status: gate.StatusFail, Reason: "style"},
+		{Check: "duplication", Status: gate.StatusFail, Reason: "style"},
 		{Check: checkMutation, Status: gate.StatusSkip, Reason: "not run"},
 	}})
 	testutil.Equal(t, strings.Split(strings.TrimSpace(b.String()), "\n"), []string{
@@ -188,10 +188,10 @@ func TestPrintVerdict(t *testing.T) {
 		"dast                   n/a  no HTTP",
 		"sast                   fail found",
 		"    x",
-		"lint                   fail style",
+		"duplication            fail style",
 		"mutation               skipped not run",
 		"gate BLOCKED: web@c (5 checks, 12s)",
-		"  failed: sast, lint",
+		"  failed: sast, duplication",
 		"  not run: mutation",
 	})
 	n, err := nopWriter{}.Write([]byte("abc"))
