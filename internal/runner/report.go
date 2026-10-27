@@ -67,8 +67,8 @@ func (s *Service) recordGate(app, tag string, v gate.Verdict) {
 }
 
 func (s *Service) recordCheck(app, tag string, r gate.Result) {
-	if r.Status == gate.StatusNA {
-		s.Log.Info("gate check not applicable", "app", app, "tag", tag, "check", r.Check, "reason", r.Reason)
+	if r.Status == gate.StatusNA || r.Status == gate.StatusSkip {
+		s.Log.Info("gate check not run", "app", app, "tag", tag, "check", r.Check, "status", r.Status, "reason", r.Reason)
 		return
 	}
 	labels := obs.Labels{obs.LabelApp: app, obs.LabelCheck: r.Check}

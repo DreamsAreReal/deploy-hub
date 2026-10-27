@@ -22,13 +22,16 @@ const (
 	StatusPass Status = "pass"
 	StatusFail Status = "fail"
 	StatusNA   Status = "n/a"
+	StatusSkip Status = "skipped"
 
-	ValueFindings = "findings"
-	ValueCrashed  = "crashed"
-	crashedFormat = "check crashed: %v"
-	verdictPerm   = 0o600
-	moreFormat    = "and %d more"
-	outputTail    = 600
+	ValueFindings  = "findings"
+	ValueCrashed   = "crashed"
+	crashedFormat  = "check crashed: %v"
+	verdictPerm    = 0o600
+	moreFormat     = "and %d more"
+	outputTail     = 600
+	reasonSkipped  = "not run: checks before it failed"
+	reasonPrecheck = "not run: the precheck runs only the fast checks"
 )
 
 type Kind int
@@ -82,11 +85,12 @@ func Findings(reason string, findings []string) Outcome {
 }
 
 type Check struct {
-	Name  string
-	Kind  Kind
-	Needs Need
-	Long  bool
-	Run   func(ctx context.Context, ws Workspace) Outcome
+	Name   string
+	Kind   Kind
+	Needs  Need
+	Long   bool
+	Costly bool
+	Run    func(ctx context.Context, ws Workspace) Outcome
 }
 
 type Workspace struct {
@@ -144,23 +148,58 @@ type Verdict struct {
 }
 
 type Runner struct {
-	Checks []Check
-	Now    func() time.Time
-	Log    *slog.Logger
+	Checks   []Check
+	Now      func() time.Time
+	Log      *slog.Logger
+	FastOnly bool
 }
 
 func (r Runner) Run(ctx context.Context, ws Workspace, subj Subject) Verdict {
 	started := r.Now()
 	v := Verdict{Subject: subj, Passed: true}
-	r.Log.Info("gate started", "app", subj.App, "repo", subj.Repo, "commit", subj.Commit, "own", subj.Own, "checks", len(r.Checks))
-	for _, c := range r.Checks {
-		res := r.runOne(ctx, ws, subj, c)
-		v.Passed = v.Passed && res.Status != StatusFail
-		v.Results = append(v.Results, res)
+	r.Log.Info("gate started", "app", subj.App, "repo", subj.Repo, "commit", subj.Commit, "own", subj.Own, "checks", len(r.Checks), "fast_only", r.FastOnly)
+	fast, costly := split(r.Checks)
+	for _, c := range fast {
+		record(&v, r.runOne(ctx, ws, subj, c))
+	}
+	for _, c := range costly {
+		if reason := r.skipCostly(v); reason != "" && notApplicable(c, ws.App, subj) == "" {
+			r.Log.Info("gate check skipped", "check", c.Name, "reason", reason)
+			record(&v, Result{Check: c.Name, Status: StatusSkip, Reason: reason})
+			continue
+		}
+		record(&v, r.runOne(ctx, ws, subj, c))
 	}
 	v.Seconds = r.Now().Sub(started).Seconds()
 	r.Log.Info("gate finished", "app", subj.App, "commit", subj.Commit, "passed", v.Passed, "failed_checks", v.Failed(), "seconds", v.Seconds)
 	return v
+}
+
+func split(checks []Check) (fast, costly []Check) {
+	for _, c := range checks {
+		if c.Costly {
+			costly = append(costly, c)
+		} else {
+			fast = append(fast, c)
+		}
+	}
+	return fast, costly
+}
+
+func (r Runner) skipCostly(v Verdict) string {
+	switch {
+	case r.FastOnly:
+		return reasonPrecheck
+	case !v.Passed:
+		return reasonSkipped + ": " + strings.Join(v.Failed(), ", ")
+	default:
+		return ""
+	}
+}
+
+func record(v *Verdict, res Result) {
+	v.Passed = v.Passed && res.Status != StatusFail
+	v.Results = append(v.Results, res)
 }
 
 func (r Runner) runOne(ctx context.Context, ws Workspace, subj Subject, c Check) Result {
@@ -238,6 +277,16 @@ func (v Verdict) Failed() []string {
 	return out
 }
 
+func (v Verdict) Skipped() []string {
+	var out []string
+	for _, r := range v.Results {
+		if r.Status == StatusSkip {
+			out = append(out, r.Check)
+		}
+	}
+	return out
+}
+
 func (v Verdict) Save(path string) error {
 	data, err := json.Marshal(v)
 	if err == nil {
@@ -256,6 +305,9 @@ func Decode(data []byte) (Verdict, error) {
 	}
 	if v.Passed != (len(v.Failed()) == 0) {
 		return Verdict{}, fmt.Errorf("%w: passed flag contradicts the results", ErrVerdict)
+	}
+	if v.Passed && len(v.Skipped()) > 0 {
+		return Verdict{}, fmt.Errorf("%w: a passed verdict needs every check run, skipped: %s", ErrVerdict, strings.Join(v.Skipped(), ", "))
 	}
 	return v, nil
 }

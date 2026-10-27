@@ -65,7 +65,7 @@ programs that subcommand may execute.
 | Term | Meaning |
 |---|---|
 | **gate** | `deploy-hub gate`: about 30 checks that decide if a commit may ship. Code in `internal/gate`, list in `internal/gate/catalog/catalog.go`, thresholds in `policy/gate.yaml`. |
-| **verdict** | `verdict.json`, the gate's result: one entry per check with status `pass`/`fail`/`n/a`, values and findings. |
+| **verdict** | `verdict.json`, the gate's result: one entry per check with status `pass`/`fail`/`n/a`/`skipped` (a costly check not run because an earlier check failed), values and findings. |
 | **runner** | `deploy-hub runner`, the only thing the `deploy` SSH user can execute (`internal/runner`). |
 | **forced command** | `command="..."` in `/home/deploy/.ssh/authorized_keys`: whatever the client asks for, sshd runs the runner and passes the request in `SSH_ORIGINAL_COMMAND`. |
 | **hub** | this repo plus the server side: `/opt/deploy-hub/` on the VPS. |
@@ -295,7 +295,8 @@ server/vmalert/     alert rules for the hub's metrics
 
 ### The gate (`internal/gate`)
 
-- `gate.go`: the `Check` type, the runner that executes checks in order, the
+- `gate.go`: the `Check` type, the runner that executes the fast checks first
+  and the `Costly` ones last, only while nothing has failed (fail-fast), the
   verdict format, timeouts, panic recovery (a crashed check fails with
   `crashed=1`, the others still run).
 - `internal/gate/catalog/catalog.go`: **the list of checks**, in order. This is where a new

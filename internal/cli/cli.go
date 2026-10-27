@@ -46,6 +46,7 @@ const (
 	CmdFacts      = "facts"
 	CmdOnboard    = "onboard"
 	CmdGate       = "gate"
+	CmdPrecheck   = "precheck"
 	CmdTools      = "tools"
 	CmdMCP        = "mcp"
 	CmdHostSync   = "host-sync"
@@ -82,6 +83,7 @@ commands:
   facts <app>                      print server facts for onboarding
   onboard <repo> [options]         connect a GitHub repo (run on the operator machine)
   gate --app NAME --repo O/N ...   run the deploy quality gate on a checkout (CI)
+  precheck <gate flags>            run only the fast gate checks, no mutation, dast or load (agents, before a push)
   tools --manifest FILE --dir DIR  install the pinned gate toolchain (CI)
   engine-version                   print the sha256 of the mutation engine sources (make passes it to the build)
   mcp                              MCP server for AI agents on stdio (run on the operator machine)`
@@ -125,6 +127,7 @@ var handlers = map[string]handler{
 	CmdFacts:      {run: runFacts, onServer: true},
 	CmdOnboard:    {run: runOnboard, binaries: []string{binGH, binGit, binSSH, onboard.SSHKeygen}},
 	CmdGate:       {run: runGate, binaries: gateBinaries, verbose: true},
+	CmdPrecheck:   {run: runPrecheck, binaries: gateBinaries, verbose: true},
 	CmdTools:      {run: runTools, binaries: []string{tools.GoBinary, tools.TarBinary, tools.CmakeBinary, tools.CCBinary, tools.LemonBinary, tools.MakeBinary}, verbose: true},
 	CmdMCP:        {run: runMCP, binaries: []string{binSSH}},
 	CmdSelfUpdate: {run: runSelfUpdate, binaries: []string{selfupdate.InstalledCommand, selfupdate.CandidateCommand, selfupdate.VisudoCommand, selfupdate.SetupCommand, procexec.CIRunnerSystemctl}, onServer: true},

@@ -77,6 +77,33 @@ push to main
 A main deploy therefore never waits behind a pull request gate; a gate that a
 deploy interrupted starts again from scratch after it.
 
+### Precheck before a push
+
+`deploy-hub precheck` takes the same flags as `deploy-hub gate` and runs the
+same fast checks with the same toolchain and policy, but never the costly ones
+(`dast`, `load`, `mutation`, reported as `skipped`). It takes minutes instead
+of hours, writes `precheck.json` (not `verdict.json`) to `--out` and exits
+non-zero when a fast check fails. A precheck is advice to the author, not a
+verdict: only the gate in CI decides.
+
+**An agent runs the precheck and gets it green before every push to a branch
+of a pull request that goes through the gate.** On the Linux machine of the
+agent, with Docker running and the app checked out at the commit to push:
+
+```
+hub=$(mktemp -d) && git clone -q https://github.com/DreamsAreReal/deploy-hub "$hub"
+git -C "$hub" checkout -q <sha of the uses: line in the app's deploy workflow, or main>
+make -C "$hub" toolchain TOOLS_DIR="$hub/bin"
+docker build -t <app>:precheck .
+PATH="$hub/bin:$PATH" deploy-hub precheck --app <app> --repo DreamsAreReal/<app> \
+  --commit "$(git rev-parse HEAD)" --policy "$hub/policy/gate.yaml" \
+  --src "$PWD" --out "$(mktemp -d)" --image <app>:precheck
+```
+
+Leave out `--image` (and the `docker build`) only for an app that ships no
+image; without it the `image` check of an image app fails, as in the gate. For
+the hub itself, `make precheck` does the same on this checkout.
+
 **The image does not depend on the runner umask.** The CI runner works under
 `UMask=0077`, so its checkout is private (files `0600`, directories `0700`),
 and `docker build` copies those modes into the image. Before building,
@@ -244,12 +271,21 @@ are ignored: the Go toolchain never builds those directories.
 check. Forks and other code get only the security checks (secrets, SAST,
 dependencies, licenses, workflows, image, DAST); the quality checks are
 reported as `n/a`. Checks that need an image or an HTTP surface are `n/a` for
-app kinds without one (`binary`, `worker`). Nothing else is ever skipped, and a
-check that cannot finish (tool crash, timeout) fails. Each check gets
-`check_timeout`; mutation testing gets `long_check_timeout`. The checks run one
-after another, and the isolated stage (`dast`, `load`) runs before mutation
-testing, so a stage that does not come up is reported within minutes of the
-start rather than hours; the order changes no verdict, every check still runs.
+app kinds without one (`binary`, `worker`). A check that cannot finish (tool
+crash, timeout) fails. Each check gets `check_timeout`; mutation testing gets
+`long_check_timeout`.
+
+**Order and fail-fast.** The checks run one after another: first every fast
+check (registration, hygiene, comments, lint, tests, coverage, fuzz, secrets,
+SAST, dependency and license scans, workflows, IaC, the image scan), then the
+costly ones, `dast`, `load` and `mutation`, in that order. Every fast check
+always runs, so a red verdict lists all of them that failed. When any check
+before a costly one has failed, the costly check does not run: the verdict is
+red at once and the costly check carries status `skipped` with the reason
+`not run: checks before it failed: <checks>`. A green verdict still needs every
+check to run and pass; the hub rejects a reported verdict that is passed and
+has a `skipped` check. Fix the listed checks and push again; the costly checks
+run on the next gate.
 
 **Mutation testing** is a built-in engine with every mandatory operator:
 condition inversion, comparison and boundary changes, arithmetic and logical
@@ -1573,6 +1609,7 @@ make test       # go test -race
 make build      # linux/amd64 binary in $TMPDIR/deploy-hub-build
 make toolchain  # deploy-hub + pinned scanners into $TMPDIR/deploy-hub-build/toolchain (linux/amd64)
 make gate       # the full quality gate on this repo (reports in $TMPDIR/deploy-hub-build/gate)
+make precheck   # the fast gate checks only, before a push (reports in $TMPDIR/deploy-hub-build/precheck)
 ```
 
 Requires Go (version in `go.mod`) and, for `make gate`, the tools listed in

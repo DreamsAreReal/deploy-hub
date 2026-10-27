@@ -23,12 +23,15 @@ import (
 
 const (
 	VerdictFile    = "verdict.json"
+	PrecheckFile   = "precheck.json"
 	goModFile      = "go.mod"
-	gatePrefix     = "gate: "
 	summaryFormat  = "%-22s %-4s %s\n"
-	verdictFormat  = "gate %s: %s@%s (%d checks, %.0fs)\n"
+	verdictFormat  = "%s %s: %s@%s (%d checks, %.0fs)\n"
 	verdictPassed  = "PASSED"
 	verdictBlocked = "BLOCKED"
+	listFormat     = "  %s: %s\n"
+	listFailed     = "failed"
+	listSkipped    = "not run"
 	valueFormat    = "%s=%g"
 	ownerSeparator = "/"
 	outDirPerm     = 0o700
@@ -50,6 +53,17 @@ type gateArgs struct {
 	budget                                     time.Duration
 	fork, full                                 bool
 }
+
+type gateMode struct {
+	command  string
+	verdict  string
+	fastOnly bool
+}
+
+var (
+	fullGate = gateMode{command: CmdGate, verdict: VerdictFile}
+	precheck = gateMode{command: CmdPrecheck, verdict: PrecheckFile, fastOnly: true}
+)
 
 func parseGateArgs(args []string) (gateArgs, error) {
 	var g gateArgs
@@ -117,29 +131,38 @@ type nopWriter struct{}
 func (nopWriter) Write(p []byte) (int, error) { return len(p), nil }
 
 func runGate(ctx context.Context, a *App, ex procexec.Runner, args []string) int {
+	return runGateMode(ctx, a, ex, args, fullGate)
+}
+
+func runPrecheck(ctx context.Context, a *App, ex procexec.Runner, args []string) int {
+	return runGateMode(ctx, a, ex, args, precheck)
+}
+
+func runGateMode(ctx context.Context, a *App, ex procexec.Runner, args []string, mode gateMode) int {
+	prefix := mode.command + ": "
 	g, err := parseGateArgs(args)
 	if err != nil {
-		a.Err.Println(gatePrefix + err.Error())
+		a.Err.Println(prefix + err.Error())
 		return ExitUsage
 	}
 	pol, err := policy.LoadFile(g.policy)
 	if err != nil {
-		return a.failWith(gatePrefix, err)
+		return a.failWith(prefix, err)
 	}
 	ws, err := newWorkspace(ctx, &g, a, ex, pol)
 	if err != nil {
-		return a.failWith(gatePrefix, err)
+		return a.failWith(prefix, err)
 	}
 	owner, _, _ := strings.Cut(g.repo, ownerSeparator)
 	subj := gate.Subject{App: g.app, Repo: g.repo, Commit: g.commit, Own: pol.Owns(owner) && !g.fork}
-	v := gate.Runner{Checks: gateChecks(a.Checks(), g.full), Now: a.Now, Log: a.Log}.Run(ctx, ws, subj)
-	if err := v.Save(ws.Report(VerdictFile)); err != nil {
-		return a.failWith(gatePrefix, err)
+	v := gate.Runner{Checks: gateChecks(a.Checks(), g.full), Now: a.Now, Log: a.Log, FastOnly: mode.fastOnly}.Run(ctx, ws, subj)
+	if err := v.Save(ws.Report(mode.verdict)); err != nil {
+		return a.failWith(prefix, err)
 	}
 	if err := errors.Join(a.keepVerdicts(ws), a.keepRunSummary(ws)); err != nil {
-		return a.failWith(gatePrefix, err)
+		return a.failWith(prefix, err)
 	}
-	a.printVerdict(v)
+	a.printVerdict(mode.command, v)
 	return exitCode(v.Passed)
 }
 
@@ -169,7 +192,7 @@ func newWorkspace(ctx context.Context, g *gateArgs, a *App, ex procexec.Runner, 
 	return ws, err
 }
 
-func (a *App) printVerdict(v gate.Verdict) {
+func (a *App) printVerdict(command string, v gate.Verdict) {
 	for _, r := range v.Results {
 		a.Out.Printf(summaryFormat, r.Check, r.Status, describe(r))
 		if r.Status != gate.StatusFail {
@@ -183,7 +206,15 @@ func (a *App) printVerdict(v gate.Verdict) {
 	if !v.Passed {
 		word = verdictBlocked
 	}
-	a.Out.Printf(verdictFormat, word, v.App, v.Commit, len(v.Results), v.Seconds)
+	a.Out.Printf(verdictFormat, command, word, v.App, v.Commit, len(v.Results), v.Seconds)
+	a.printList(listFailed, v.Failed())
+	a.printList(listSkipped, v.Skipped())
+}
+
+func (a *App) printList(label string, checks []string) {
+	if len(checks) > 0 {
+		a.Out.Printf(listFormat, label, strings.Join(checks, ", "))
+	}
 }
 
 func describe(r gate.Result) string {

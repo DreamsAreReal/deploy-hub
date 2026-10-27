@@ -110,6 +110,42 @@ func TestGateCommandPasses(t *testing.T) {
 	testutil.Equal(t, code, ExitOK)
 	testutil.Contains(t, h.out.String(), "only                   pass", "gate PASSED: deploy-hub@"+commitSha+" (1 checks")
 	testutil.Contains(t, testutil.Read(t, filepath.Join(out, VerdictFile)), `"passed":true`)
+	testutil.True(t, !strings.Contains(h.out.String(), "failed:") && !strings.Contains(h.out.String(), "not run:"), "a green verdict lists nothing")
+}
+
+const (
+	checkMutation = "mutation"
+	checkComments = "comments"
+)
+
+func TestPrecheckCommandRunsOnlyFastChecks(t *testing.T) {
+	h := newHarness(t)
+	var ran []string
+	run := func(name string, out gate.Outcome) func(context.Context, gate.Workspace) gate.Outcome {
+		return func(context.Context, gate.Workspace) gate.Outcome {
+			ran = append(ran, name)
+			return out
+		}
+	}
+	h.gateChecks = []gate.Check{
+		{Name: checkMutation, Costly: true, Run: run(checkMutation, gate.Pass(nil))},
+		{Name: checkComments, Run: run(checkComments, gate.Pass(nil))},
+	}
+	out := filepath.Join(t.TempDir(), "precheck")
+	code := h.run(append([]string{CmdPrecheck}, gateFlags(hubApp, hubRepo, commitSha, gatePolicy(t), t.TempDir(), out)...)...)
+	testutil.Equal(t, code, ExitOK)
+	testutil.Equal(t, ran, []string{checkComments})
+	testutil.Contains(t, h.out.String(), "precheck PASSED: deploy-hub@"+commitSha, "not run: mutation")
+	testutil.Contains(t, testutil.Read(t, filepath.Join(out, PrecheckFile)), `"status":"skipped"`)
+	testutil.Missing(t, filepath.Join(out, VerdictFile))
+	h.gateChecks[1].Run = run(checkComments, gate.Fail("comment found"))
+	ran = nil
+	code = h.run(append([]string{CmdPrecheck}, gateFlags(hubApp, hubRepo, commitSha, gatePolicy(t), t.TempDir(), out)...)...)
+	testutil.Equal(t, code, ExitFail)
+	testutil.Equal(t, ran, []string{checkComments})
+	testutil.Contains(t, h.out.String(), "precheck BLOCKED", "failed: comments")
+	testutil.Equal(t, h.run(CmdPrecheck), ExitUsage)
+	testutil.Contains(t, h.err.String(), "precheck: usage")
 }
 
 func TestGateCommandErrors(t *testing.T) {
@@ -140,17 +176,23 @@ func TestGateCommandErrors(t *testing.T) {
 func TestPrintVerdict(t *testing.T) {
 	var b bytes.Buffer
 	a := &App{Out: console.New(&b)}
-	a.printVerdict(gate.Verdict{Subject: gate.Subject{App: testApp, Commit: "c"}, Seconds: 12, Results: []gate.Result{
+	a.printVerdict(CmdGate, gate.Verdict{Subject: gate.Subject{App: testApp, Commit: "c"}, Seconds: 12, Results: []gate.Result{
 		{Check: "tests", Status: gate.StatusPass, Values: map[string]float64{"b": 2, "a": 1.5}, Findings: []string{"kept in the verdict only"}},
 		{Check: "dast", Status: gate.StatusNA, Reason: "no HTTP", Findings: []string{"n/a detail"}},
 		{Check: "sast", Status: gate.StatusFail, Reason: "found", Findings: []string{"x"}},
+		{Check: "lint", Status: gate.StatusFail, Reason: "style"},
+		{Check: checkMutation, Status: gate.StatusSkip, Reason: "not run"},
 	}})
 	testutil.Equal(t, strings.Split(strings.TrimSpace(b.String()), "\n"), []string{
 		"tests                  pass a=1.5; b=2",
 		"dast                   n/a  no HTTP",
 		"sast                   fail found",
 		"    x",
-		"gate BLOCKED: web@c (3 checks, 12s)",
+		"lint                   fail style",
+		"mutation               skipped not run",
+		"gate BLOCKED: web@c (5 checks, 12s)",
+		"  failed: sast, lint",
+		"  not run: mutation",
 	})
 	n, err := nopWriter{}.Write([]byte("abc"))
 	testutil.NoErr(t, err)

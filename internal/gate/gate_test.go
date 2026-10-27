@@ -3,6 +3,7 @@ package gate
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"math"
@@ -85,6 +86,126 @@ func TestForeignCodeSkipsQualityChecks(t *testing.T) {
 	for _, r := range v.Results[1:] {
 		testutil.Equal(t, r.Status, StatusPass)
 	}
+}
+
+const (
+	nameTests    = "tests"
+	nameSast     = "sast"
+	nameImage    = "image"
+	nameDast     = "dast"
+	nameMutation = "mutation"
+	nameComments = "comments"
+	nameLint     = "lint"
+)
+
+func recorder(name string, ran *[]string, out Outcome, costly bool) Check {
+	return Check{Name: name, Costly: costly, Run: func(context.Context, Workspace) Outcome {
+		*ran = append(*ran, name)
+		return out
+	}}
+}
+
+func statuses(v Verdict) map[string]Status {
+	out := map[string]Status{}
+	for _, r := range v.Results {
+		out[r.Check] = r.Status
+	}
+	return out
+}
+
+func order(v Verdict) []string {
+	out := make([]string, 0, len(v.Results))
+	for _, r := range v.Results {
+		out = append(out, r.Check)
+	}
+	return out
+}
+
+func TestCostlyChecksRunLast(t *testing.T) {
+	ws := workspace(t, &bytes.Buffer{})
+	var ran []string
+	checks := []Check{
+		recorder(nameTests, &ran, Pass(nil), false),
+		recorder(nameMutation, &ran, Pass(nil), true),
+		recorder(nameSast, &ran, Pass(nil), false),
+		recorder(nameDast, &ran, Pass(nil), true),
+		recorder(nameImage, &ran, Pass(nil), false),
+	}
+	v := Runner{Now: clock(), Log: ws.Log, Checks: checks}.Run(context.Background(), ws, Subject{App: "x", Own: true})
+	want := []string{nameTests, nameSast, nameImage, nameMutation, nameDast}
+	testutil.True(t, v.Passed, "all checks green")
+	testutil.Equal(t, ran, want)
+	testutil.Equal(t, order(v), want)
+	for _, st := range statuses(v) {
+		testutil.Equal(t, st, StatusPass)
+	}
+	testutil.Equal(t, len(v.Skipped()), 0)
+}
+
+func TestFailedFastCheckSkipsCostlyChecks(t *testing.T) {
+	var logs bytes.Buffer
+	ws := workspace(t, &logs)
+	var ran []string
+	checks := []Check{
+		recorder(nameComments, &ran, Fail("comment found", "a.go:1"), false),
+		recorder(nameMutation, &ran, Pass(nil), true),
+		recorder(nameLint, &ran, Pass(nil), false),
+		recorder(nameSast, &ran, Fail("finding"), false),
+	}
+	v := Runner{Now: clock(), Log: ws.Log, Checks: checks}.Run(context.Background(), ws, Subject{App: "x", Own: true})
+	testutil.True(t, !v.Passed, "a red fast check blocks")
+	testutil.Equal(t, ran, []string{nameComments, nameLint, nameSast})
+	testutil.Equal(t, v.Failed(), []string{nameComments, nameSast})
+	testutil.Equal(t, v.Skipped(), []string{nameMutation})
+	testutil.Equal(t, v.Results[3], Result{Check: nameMutation, Status: StatusSkip, Reason: "not run: checks before it failed: comments, sast"})
+	testutil.Contains(t, logs.String(), `"msg":"gate check skipped","check":"mutation"`)
+}
+
+func TestFailedCostlyCheckSkipsTheRest(t *testing.T) {
+	ws := workspace(t, &bytes.Buffer{})
+	var ran []string
+	checks := []Check{
+		recorder(nameTests, &ran, Pass(nil), false),
+		recorder(nameDast, &ran, Fail("alert"), true),
+		recorder(nameMutation, &ran, Pass(nil), true),
+	}
+	v := Runner{Now: clock(), Log: ws.Log, Checks: checks}.Run(context.Background(), ws, Subject{App: "x", Own: true})
+	testutil.Equal(t, ran, []string{nameTests, nameDast})
+	testutil.Equal(t, statuses(v), map[string]Status{nameTests: StatusPass, nameDast: StatusFail, nameMutation: StatusSkip})
+}
+
+func TestSkippedCostlyCheckKeepsNotApplicable(t *testing.T) {
+	ws := workspace(t, &bytes.Buffer{})
+	var ran []string
+	web := recorder(nameDast, &ran, Pass(nil), true)
+	web.Needs = NeedHTTP
+	checks := []Check{recorder(nameLint, &ran, Fail("x"), false), web, recorder(nameMutation, &ran, Pass(nil), true)}
+	v := Runner{Now: clock(), Log: ws.Log, Checks: checks}.Run(context.Background(), ws, Subject{App: "x", Own: true})
+	testutil.Equal(t, statuses(v), map[string]Status{nameLint: StatusFail, nameDast: StatusNA, nameMutation: StatusSkip})
+}
+
+func TestFastOnlyRunsNoCostlyCheck(t *testing.T) {
+	ws := workspace(t, &bytes.Buffer{})
+	var ran []string
+	checks := []Check{recorder(nameTests, &ran, Pass(nil), false), recorder(nameMutation, &ran, Pass(nil), true)}
+	v := Runner{Now: clock(), Log: ws.Log, Checks: checks, FastOnly: true}.Run(context.Background(), ws, Subject{App: "x", Own: true})
+	testutil.True(t, v.Passed, "green fast checks pass the precheck")
+	testutil.Equal(t, ran, []string{nameTests})
+	testutil.Equal(t, v.Results[1], Result{Check: nameMutation, Status: StatusSkip, Reason: reasonPrecheck})
+	_, err := Decode(mustJSON(t, v))
+	testutil.Is(t, err, ErrVerdict)
+	ran = nil
+	checks[0] = recorder(nameTests, &ran, Fail("broken"), false)
+	v = Runner{Now: clock(), Log: ws.Log, Checks: checks, FastOnly: true}.Run(context.Background(), ws, Subject{App: "x", Own: true})
+	testutil.True(t, !v.Passed, "a red fast check fails the precheck")
+	testutil.Equal(t, v.Results[1].Reason, reasonPrecheck)
+}
+
+func mustJSON(t *testing.T, v Verdict) []byte {
+	t.Helper()
+	data, err := json.Marshal(v)
+	testutil.NoErr(t, err)
+	return data
 }
 
 func TestUnfinishedCheckFails(t *testing.T) {
@@ -222,6 +343,7 @@ func TestDecodeRejects(t *testing.T) {
 		`{"app":"a","results":[],"passed":true}`,
 		`{"app":"a","results":[{"check":"x","status":"fail"}],"passed":true}`,
 		`{"app":"a","results":[{"check":"x","status":"pass"}],"passed":false}`,
+		`{"app":"a","results":[{"check":"x","status":"pass"},{"check":"mutation","status":"skipped"}],"passed":true}`,
 	} {
 		_, derr := Decode([]byte(raw))
 		testutil.Is(t, derr, ErrVerdict)
@@ -229,6 +351,9 @@ func TestDecodeRejects(t *testing.T) {
 	v, err := Decode([]byte(`{"app":"a","results":[{"check":"x","status":"n/a"}],"passed":true}`))
 	testutil.NoErr(t, err)
 	testutil.True(t, v.Passed, "n/a does not block")
+	v, err = Decode([]byte(`{"app":"a","results":[{"check":"x","status":"fail"},{"check":"mutation","status":"skipped"}],"passed":false}`))
+	testutil.NoErr(t, err)
+	testutil.Equal(t, v.Skipped(), []string{"mutation"})
 }
 
 func FuzzDecode(f *testing.F) {
@@ -236,7 +361,7 @@ func FuzzDecode(f *testing.F) {
 	f.Add([]byte(`{}`))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		v, err := Decode(data)
-		if err == nil && (v.App == "" || len(v.Results) == 0 || v.Passed != (len(v.Failed()) == 0)) {
+		if err == nil && (v.App == "" || len(v.Results) == 0 || v.Passed != (len(v.Failed()) == 0) || (v.Passed && len(v.Skipped()) > 0)) {
 			t.Fatalf("inconsistent verdict accepted: %+v", v)
 		}
 	})
