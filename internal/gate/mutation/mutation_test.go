@@ -330,14 +330,15 @@ func (f *fakeGo) handle(c procexec.Command) (procexec.Result, error) {
 	f.caches = append(f.caches, c.Env[1:]...)
 	f.limit = c.MemoryLimit
 	f.mu.Unlock()
-	res := f.decide(mutated, pkgArgs(c.Args[1:]))
+	pkgs := pkgArgs(c.Args[1:])
+	res := f.decide(mutated, pkgs)
 	switch {
 	case res.notViable:
 		return procexec.Result{Stdout: "FAIL lib [build failed]"}, errors.New("exit 1")
 	case res.timeout:
 		return procexec.Result{Stdout: "panic: test timed out after 1s"}, errors.New("exit 1")
 	case res.killed:
-		return procexec.Result{Stdout: failedTest}, errors.New("exit 1")
+		return procexec.Result{Stdout: failedTest + "\nFAIL\n" + testFailed + "\t" + pkgs[0] + "\t0.1s\n"}, errors.New("exit 1")
 	case res.broken:
 		return procexec.Result{Stderr: "go: creating work dir: no space left on device"}, errors.New("exit 1")
 	case res.exhausted:

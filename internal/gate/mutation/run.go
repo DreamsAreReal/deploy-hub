@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -73,6 +74,7 @@ type target struct {
 	key        string
 	verdict    string
 	cached     Status
+	killer     string
 }
 
 type engine struct {
@@ -84,6 +86,7 @@ type engine struct {
 	workers   []*workerCache
 	index     *testIndex
 	guard     diskGuard
+	killers   [][]string
 }
 
 type Report struct {
@@ -178,7 +181,8 @@ func Run(ctx context.Context, ws gate.Workspace) (Report, error) {
 }
 
 func (e *engine) measureBaselines(ctx context.Context, pkgs golang.Packages) error {
-	if err := os.MkdirAll(e.ws.Report(testLogDir), dirPerm); err != nil {
+	logs := e.ws.Report(testLogDir)
+	if err := errors.Join(os.RemoveAll(logs), os.MkdirAll(logs, dirPerm)); err != nil {
 		return err
 	}
 	for _, p := range pkgs {
@@ -231,6 +235,7 @@ func (e *engine) execute(ctx context.Context, targets []target) (Report, error) 
 	if err := os.MkdirAll(e.dir, dirPerm); err != nil {
 		return Report{}, err
 	}
+	e.killers = make([][]string, len(targets))
 	jobs := make([]Job, 0, len(targets))
 	for i, t := range targets {
 		jobs = append(jobs, Job{Mutant: t.mutant, Cached: t.cached, Run: func(ctx context.Context, w int) Status { return e.run(ctx, i, t, e.workers[w]) }})
@@ -374,7 +379,7 @@ func (e *engine) mutate(ctx context.Context, id int, t target, cache string) Sta
 		e.ws.Log.Error("mutant staging failed", "file", t.mutant.File, "error", err.Error())
 		return StatusErrored
 	}
-	m := mutantRun{overlay: ov, cache: cache}
+	m := mutantRun{id: id, overlay: ov, cache: cache}
 	if sel.full {
 		return e.runWhole(ctx, m, t)
 	}
@@ -432,6 +437,7 @@ func (e *engine) timeout(pkgs []string) time.Duration {
 }
 
 type mutantRun struct {
+	id      int
 	overlay string
 	cache   string
 }
@@ -453,9 +459,21 @@ func (e *engine) test(ctx context.Context, m mutantRun, pkgs []string, extra ...
 	case tctx.Err() != nil || strings.Contains(out, testTimedOut):
 		return StatusTimedOut
 	case strings.Contains(out, testFailed):
+		e.killers[m.id] = failedPackages(out, pkgs)
 		return StatusKilled
 	default:
 		e.ws.Log.Error("mutant could not be run", "packages", pkgs, "output", gate.Tail(out))
 		return StatusErrored
 	}
+}
+
+func failedPackages(out string, pkgs []string) []string {
+	var failed []string
+	for _, l := range strings.Split(out, "\n") {
+		if f := strings.Fields(l); len(f) > 1 && f[0] == testFailed && slices.Contains(pkgs, f[1]) {
+			failed = append(failed, f[1])
+		}
+	}
+	slices.Sort(failed)
+	return slices.Compact(failed)
 }

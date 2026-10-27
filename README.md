@@ -307,6 +307,14 @@ policy part). `deploy-hub engine-version` computes it in the checkout and
 to those sources is a new engine. A binary built without it (`go run`, `make
 gate`) neither reuses nor stores any verdict. When anything in a mutant's key
 changes, the mutant runs again. A package whose tests left no test log is never cached.
+A gate reuses only `killed` verdicts, and keys them narrower: by the mutant, the
+key base and the closure of the one test binary that killed it (the package
+`go test` reported as `FAIL`, which must link the mutated package). While that
+binary and what its tests read are unchanged its tests still fail on the
+mutant, so an edit elsewhere, even in another test binary that links the same
+package, keeps the verdict. Every other mutant (`survived`, `not-covered`,
+`timed-out`, `out-of-memory`, `not-viable`) and every new one runs in every
+gate. The full key above serves only a full run resuming its own session.
 What stays outside the key is a read made by a package-level variable
 initializer or by a child process of a test; the scheduled full run without the
 cache is the backstop for those. A run that stops early (an errored mutant, the
