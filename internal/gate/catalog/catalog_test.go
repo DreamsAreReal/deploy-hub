@@ -9,7 +9,12 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/testutil"
 )
 
-const checkMutation = "mutation"
+const (
+	checkMutation = "mutation"
+	checkDast     = "dast"
+	checkLoad     = "load"
+	checkSAST     = "sast"
+)
 
 func TestChecksAreUniqueAndOrdered(t *testing.T) {
 	seen := map[string]bool{}
@@ -25,18 +30,23 @@ func TestChecksAreUniqueAndOrdered(t *testing.T) {
 		index[n] = i
 	}
 	testutil.True(t, index["tests"] < index["line-coverage"] && index["line-coverage"] < index[checkMutation] && index["tests"] < index["scenarios"], "report producers run first")
-	costlyLast := []string{"dast", "load", checkMutation}
+	costlyLast := []string{checkDast, checkLoad, checkMutation}
 	testutil.Equal(t, names[len(names)-len(costlyLast):], costlyLast)
 	costly := map[string]bool{}
 	for _, n := range costlyLast {
 		costly[n] = true
 	}
+	inContainer := map[string]bool{checkSAST: true}
+	for _, n := range []string{"image", checkDast, checkLoad} {
+		inContainer[n] = true
+	}
 	for _, c := range Checks() {
 		testutil.Equal(t, c.Long, c.Name == checkMutation)
 		testutil.Equal(t, c.Costly, costly[c.Name])
+		testutil.Equal(t, c.Docker, inContainer[c.Name])
 	}
 	for _, required := range []string{"comments", "markers", "language", "hygiene", "lint", "cognitive-complexity", "duplication", "dead-code", "branch-coverage", "fuzz",
-		"secrets-gitleaks", "secrets-trufflehog", "sast", "vulnerabilities", "sca", "sbom-licenses", "workflows", "dockerfile", "iac", "image"} {
+		"secrets-gitleaks", "secrets-trufflehog", checkSAST, "vulnerabilities", "sca", "sbom-licenses", "workflows", "dockerfile", "iac"} {
 		testutil.True(t, seen[required], "missing check "+required)
 	}
 }

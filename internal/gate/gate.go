@@ -32,6 +32,7 @@ const (
 	outputTail     = 600
 	reasonSkipped  = "not run: checks before it failed"
 	reasonPrecheck = "not run: the precheck runs only the fast checks"
+	ReasonNoDocker = "not run: no docker on this machine"
 )
 
 type Kind int
@@ -90,6 +91,7 @@ type Check struct {
 	Needs  Need
 	Long   bool
 	Costly bool
+	Docker bool
 	Run    func(ctx context.Context, ws Workspace) Outcome
 }
 
@@ -152,6 +154,7 @@ type Runner struct {
 	Now      func() time.Time
 	Log      *slog.Logger
 	FastOnly bool
+	NoDocker bool
 }
 
 func (r Runner) Run(ctx context.Context, ws Workspace, subj Subject) Verdict {
@@ -160,7 +163,7 @@ func (r Runner) Run(ctx context.Context, ws Workspace, subj Subject) Verdict {
 	r.Log.Info("gate started", "app", subj.App, "repo", subj.Repo, "commit", subj.Commit, "own", subj.Own, "checks", len(r.Checks), "fast_only", r.FastOnly)
 	fast, costly := split(r.Checks)
 	for _, c := range fast {
-		record(&v, r.runOne(ctx, ws, subj, c))
+		record(&v, r.runFast(ctx, ws, subj, c))
 	}
 	for _, c := range costly {
 		if reason := r.skipCostly(v); reason != "" && notApplicable(c, ws.App, subj) == "" {
@@ -173,6 +176,14 @@ func (r Runner) Run(ctx context.Context, ws Workspace, subj Subject) Verdict {
 	v.Seconds = r.Now().Sub(started).Seconds()
 	r.Log.Info("gate finished", "app", subj.App, "commit", subj.Commit, "passed", v.Passed, "failed_checks", v.Failed(), "seconds", v.Seconds)
 	return v
+}
+
+func (r Runner) runFast(ctx context.Context, ws Workspace, subj Subject, c Check) Result {
+	if r.NoDocker && c.Docker && notApplicable(c, ws.App, subj) == "" {
+		r.Log.Warn("gate check skipped", "check", c.Name, "reason", ReasonNoDocker)
+		return Result{Check: c.Name, Status: StatusSkip, Reason: ReasonNoDocker}
+	}
+	return r.runOne(ctx, ws, subj, c)
 }
 
 func split(checks []Check) (fast, costly []Check) {
@@ -278,9 +289,21 @@ func (v Verdict) Failed() []string {
 }
 
 func (v Verdict) Skipped() []string {
+	return v.skipped(func(string) bool { return true })
+}
+
+func (v Verdict) WithoutDocker() []string {
+	return v.skipped(func(reason string) bool { return reason == ReasonNoDocker })
+}
+
+func (v Verdict) NotRun() []string {
+	return v.skipped(func(reason string) bool { return reason != ReasonNoDocker })
+}
+
+func (v Verdict) skipped(match func(reason string) bool) []string {
 	var out []string
 	for _, r := range v.Results {
-		if r.Status == StatusSkip {
+		if r.Status == StatusSkip && match(r.Reason) {
 			out = append(out, r.Check)
 		}
 	}

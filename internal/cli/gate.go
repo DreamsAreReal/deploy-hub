@@ -16,6 +16,7 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/golang"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/mutation"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/policy"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/scan"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
 	"github.com/DreamsAreReal/deploy-hub/internal/tools"
 	"github.com/DreamsAreReal/deploy-hub/internal/validate"
@@ -32,6 +33,8 @@ const (
 	listFormat     = "  %s: %s\n"
 	listFailed     = "failed"
 	listSkipped    = "not run"
+	listNoDocker   = "no docker"
+	verdictPartial = "PASSED WITHOUT DOCKER CHECKS"
 	valueFormat    = "%s=%g"
 	ownerSeparator = "/"
 	outDirPerm     = 0o700
@@ -55,14 +58,15 @@ type gateArgs struct {
 }
 
 type gateMode struct {
-	command  string
-	verdict  string
-	fastOnly bool
+	command    string
+	verdict    string
+	fastOnly   bool
+	dockerless bool
 }
 
 var (
 	fullGate = gateMode{command: CmdGate, verdict: VerdictFile}
-	precheck = gateMode{command: CmdPrecheck, verdict: PrecheckFile, fastOnly: true}
+	precheck = gateMode{command: CmdPrecheck, verdict: PrecheckFile, fastOnly: true, dockerless: true}
 )
 
 func parseGateArgs(args []string) (gateArgs, error) {
@@ -155,7 +159,8 @@ func runGateMode(ctx context.Context, a *App, ex procexec.Runner, args []string,
 	}
 	owner, _, _ := strings.Cut(g.repo, ownerSeparator)
 	subj := gate.Subject{App: g.app, Repo: g.repo, Commit: g.commit, Own: pol.Owns(owner) && !g.fork}
-	v := gate.Runner{Checks: gateChecks(a.Checks(), g.full), Now: a.Now, Log: a.Log, FastOnly: mode.fastOnly}.Run(ctx, ws, subj)
+	noDocker := mode.dockerless && !dockerUp(ctx, ex)
+	v := gate.Runner{Checks: gateChecks(a.Checks(), g.full), Now: a.Now, Log: a.Log, FastOnly: mode.fastOnly, NoDocker: noDocker}.Run(ctx, ws, subj)
 	if err := v.Save(ws.Report(mode.verdict)); err != nil {
 		return a.failWith(prefix, err)
 	}
@@ -163,14 +168,23 @@ func runGateMode(ctx context.Context, a *App, ex procexec.Runner, args []string,
 		return a.failWith(prefix, err)
 	}
 	a.printVerdict(mode.command, v)
-	return exitCode(v.Passed)
+	return exitCode(v)
 }
 
-func exitCode(passed bool) int {
-	if passed {
+func dockerUp(ctx context.Context, ex procexec.Runner) bool {
+	_, err := ex.Run(ctx, procexec.Command{Name: scan.DockerBinary, Args: []string{"version", "--format", "{{.Server.Version}}"}})
+	return err == nil
+}
+
+func exitCode(v gate.Verdict) int {
+	switch {
+	case !v.Passed:
+		return ExitFail
+	case len(v.WithoutDocker()) > 0:
+		return ExitNoDocker
+	default:
 		return ExitOK
 	}
-	return ExitFail
 }
 
 func newWorkspace(ctx context.Context, g *gateArgs, a *App, ex procexec.Runner, pol policy.Policy) (gate.Workspace, error) {
@@ -202,13 +216,11 @@ func (a *App) printVerdict(command string, v gate.Verdict) {
 			a.Out.Println("    " + f)
 		}
 	}
-	word := verdictPassed
-	if !v.Passed {
-		word = verdictBlocked
-	}
-	a.Out.Printf(verdictFormat, command, word, v.App, v.Commit, len(v.Results), v.Seconds)
+	words := map[int]string{ExitOK: verdictPassed, ExitFail: verdictBlocked, ExitNoDocker: verdictPartial}
+	a.Out.Printf(verdictFormat, command, words[exitCode(v)], v.App, v.Commit, len(v.Results), v.Seconds)
 	a.printList(listFailed, v.Failed())
-	a.printList(listSkipped, v.Skipped())
+	a.printList(listSkipped, v.NotRun())
+	a.printList(listNoDocker, v.WithoutDocker())
 }
 
 func (a *App) printList(label string, checks []string) {

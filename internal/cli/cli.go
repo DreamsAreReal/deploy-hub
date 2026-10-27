@@ -34,9 +34,10 @@ import (
 )
 
 const (
-	ExitOK    = 0
-	ExitFail  = 1
-	ExitUsage = 2
+	ExitOK       = 0
+	ExitFail     = 1
+	ExitUsage    = 2
+	ExitNoDocker = 3
 
 	CmdRunner     = "runner"
 	CmdRender     = "render"

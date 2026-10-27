@@ -82,9 +82,22 @@ deploy interrupted starts again from scratch after it.
 `deploy-hub precheck` takes the same flags as `deploy-hub gate` and runs the
 same fast checks with the same toolchain and policy, but never the costly ones
 (`dast`, `load`, `mutation`, reported as `skipped`). It takes minutes instead
-of hours, writes `precheck.json` (not `verdict.json`) to `--out` and exits
-non-zero when a fast check fails. A precheck is advice to the author, not a
-verdict: only the gate in CI decides.
+of hours and writes `precheck.json` (not `verdict.json`) to `--out`. A
+precheck is advice to the author, not a verdict: only the gate in CI decides.
+
+The precheck works without Docker too. It asks the Docker daemon first
+(`docker version`); when there is none, the fast checks that run in a
+container (`sast`, which runs the pinned Semgrep image, and `image`) are
+reported as `skipped` with `not run: no docker on this machine`, and only the
+checks that did run decide the result. The gate never does this: there every
+check runs, `sast` included.
+
+| Exit | Last lines | Meaning |
+|---|---|---|
+| 0 | `precheck PASSED: …` | every fast check ran and passed |
+| 3 | `precheck PASSED WITHOUT DOCKER CHECKS: …` and `no docker: <checks>` | every fast check that ran passed; the listed ones need Docker and only the gate runs them |
+| 1 | `precheck BLOCKED: …` and `failed: <checks>` | a fast check failed: fix it before the push |
+| 2 | usage | wrong flags |
 
 **An agent runs the precheck and gets it green before every push to a branch
 of a pull request that goes through the gate.** On the Linux machine of the
@@ -100,9 +113,11 @@ PATH="$hub/bin:$PATH" deploy-hub precheck --app <app> --repo DreamsAreReal/<app>
   --src "$PWD" --out "$(mktemp -d)" --image <app>:precheck
 ```
 
-Leave out `--image` (and the `docker build`) only for an app that ships no
-image; without it the `image` check of an image app fails, as in the gate. For
-the hub itself, `make precheck` does the same on this checkout.
+Leave out `--image` (and the `docker build`) for an app that ships no image,
+or on a machine without Docker; with Docker and without `--image`, the `image`
+check of an image app fails, as in the gate. For the hub itself,
+`make precheck` does the same on this checkout. Exit 0 or 3 means the push may
+go; exit 1 means it may not.
 
 **The image does not depend on the runner umask.** The CI runner works under
 `UMask=0077`, so its checkout is private (files `0600`, directories `0700`),

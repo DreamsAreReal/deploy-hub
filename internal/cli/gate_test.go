@@ -116,6 +116,7 @@ func TestGateCommandPasses(t *testing.T) {
 const (
 	checkMutation = "mutation"
 	checkComments = "comments"
+	checkSAST     = "sast"
 )
 
 func TestPrecheckCommandRunsOnlyFastChecks(t *testing.T) {
@@ -146,6 +147,34 @@ func TestPrecheckCommandRunsOnlyFastChecks(t *testing.T) {
 	testutil.Contains(t, h.out.String(), "precheck BLOCKED", "failed: comments")
 	testutil.Equal(t, h.run(CmdPrecheck), ExitUsage)
 	testutil.Contains(t, h.err.String(), "precheck: usage")
+}
+
+func TestPrecheckWithoutDockerSkipsContainerChecks(t *testing.T) {
+	h := newHarness(t)
+	h.exec.Handler = func(c procexec.Command) (procexec.Result, error) {
+		if c.Name == "docker" {
+			return procexec.Result{}, errSim
+		}
+		return procexec.Result{}, nil
+	}
+	sast := gate.Check{Name: checkSAST, Docker: true, Run: func(context.Context, gate.Workspace) gate.Outcome { return gate.Fail("finding") }}
+	lint := gate.Check{Name: checkComments, Run: func(context.Context, gate.Workspace) gate.Outcome { return gate.Pass(nil) }}
+	h.gateChecks = []gate.Check{lint, sast}
+	precheckRun := func(h *harness) int {
+		return h.run(append([]string{CmdPrecheck}, gateFlags(hubApp, hubRepo, commitSha, gatePolicy(t), t.TempDir(), filepath.Join(t.TempDir(), "p"))...)...)
+	}
+	testutil.Equal(t, precheckRun(h), ExitNoDocker)
+	testutil.Contains(t, h.out.String(), "sast                   skipped "+gate.ReasonNoDocker, "precheck PASSED WITHOUT DOCKER CHECKS: deploy-hub@", "  no docker: sast")
+	testutil.True(t, !strings.Contains(h.out.String(), "not run: sast"), "docker skips are listed apart")
+	testutil.Equal(t, h.exec.Lines()[0], "docker version --format {{.Server.Version}}")
+	h.gateChecks[0].Run = func(context.Context, gate.Workspace) gate.Outcome { return gate.Fail("comment") }
+	testutil.Equal(t, precheckRun(h), ExitFail)
+	h2 := newHarness(t)
+	h2.exec.Handler = h.exec.Handler
+	h2.gateChecks = []gate.Check{sast}
+	testutil.Equal(t, h2.run(append([]string{CmdGate}, gateFlags(hubApp, hubRepo, commitSha, gatePolicy(t), t.TempDir(), filepath.Join(t.TempDir(), "g"))...)...), ExitFail)
+	testutil.Equal(t, h2.exec.Count("docker version"), 0)
+	testutil.Contains(t, h2.out.String(), "sast                   fail finding")
 }
 
 func TestGateCommandErrors(t *testing.T) {

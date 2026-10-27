@@ -201,6 +201,31 @@ func TestFastOnlyRunsNoCostlyCheck(t *testing.T) {
 	testutil.Equal(t, v.Results[1].Reason, reasonPrecheck)
 }
 
+func TestNoDockerSkipsContainerChecks(t *testing.T) {
+	var logs bytes.Buffer
+	ws := workspace(t, &logs)
+	var ran []string
+	sast := recorder(nameSast, &ran, Fail("finding"), false)
+	sast.Docker = true
+	image := recorder(nameImage, &ran, Pass(nil), false)
+	image.Docker, image.Needs = true, NeedImage
+	checks := []Check{recorder(nameLint, &ran, Pass(nil), false), sast, image, recorder(nameMutation, &ran, Pass(nil), true)}
+	v := Runner{Now: clock(), Log: ws.Log, Checks: checks, FastOnly: true, NoDocker: true}.Run(context.Background(), ws, Subject{App: "x", Own: true})
+	testutil.True(t, v.Passed, "only the checks that ran decide the precheck")
+	testutil.Equal(t, ran, []string{nameLint})
+	testutil.Equal(t, statuses(v), map[string]Status{nameLint: StatusPass, nameSast: StatusSkip, nameImage: StatusNA, nameMutation: StatusSkip})
+	testutil.Equal(t, v.Results[1].Reason, ReasonNoDocker)
+	testutil.Equal(t, v.WithoutDocker(), []string{nameSast})
+	testutil.Equal(t, v.NotRun(), []string{nameMutation})
+	testutil.Equal(t, v.Skipped(), []string{nameSast, nameMutation})
+	testutil.Contains(t, logs.String(), `"level":"WARN","msg":"gate check skipped","check":"sast"`)
+	ran = nil
+	v = Runner{Now: clock(), Log: ws.Log, Checks: checks, FastOnly: true}.Run(context.Background(), ws, Subject{App: "x", Own: true})
+	testutil.Equal(t, ran, []string{nameLint, nameSast})
+	testutil.Equal(t, v.Failed(), []string{nameSast})
+	testutil.Equal(t, len(v.WithoutDocker()), 0)
+}
+
 func mustJSON(t *testing.T, v Verdict) []byte {
 	t.Helper()
 	data, err := json.Marshal(v)
