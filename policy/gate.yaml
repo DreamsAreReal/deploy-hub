@@ -634,6 +634,40 @@ apps:
           - internal/web.TestLoginWithPasskey
           - internal/web.TestKeysPage
           - internal/passkey.TestACredentialStoredByGoWebAuthnSignsIn
+  router-ax23:
+    repo: DreamsAreReal/router-ax23
+    kind: binary
+    scenarios:
+      - id: youtube-hello-passes-the-dpi-split-and-out-of-order
+        category: business
+        tests:
+          - internal/relay.TestYouTubeHelloReachesTheServerInSeveralRecordsAfterPauses
+          - internal/relay.TestDisorderSendsTheFirstPartWithATTLOfOne
+          - internal/relay.TestClientHandshakesThroughSplitHelloAndCountsWrites
+      - id: other-traffic-is-relayed-unchanged
+        category: business
+        tests:
+          - internal/relay.TestPlainTrafficIsRelayedBothWaysUnchanged
+          - internal/relay.TestOtherSitesKeepTheirHelloIntact
+          - internal/relay.TestDisorderLeavesOtherHelloAndPipesAlone
+      - id: proxy-drops-connections-it-cannot-place
+        category: security
+        tests:
+          - internal/relay.TestConnectionsWithoutAUsableTargetAreClosed
+          - internal/relay.TestClientThatSendsNothingOn443IsClosed
+          - cmd/tcp-split.TestTCPSplitDropsConnectionsThatWereNotRedirected
+      - id: client-hello-parser-rejects-malformed-input
+        category: security
+        tests:
+          - internal/tlshello.TestEveryTruncationIsRejected
+          - internal/tlshello.TestParseRejectsBrokenServerNames
+          - internal/tlshello.TestParseRejectsAnExtensionLongerThanTheHello
+      - id: health-tells-internet-from-youtube
+        category: business
+        tests:
+          - internal/health.TestInternetIsCheckedOnANonYouTubeSiteAndYouTubeSeparately
+          - internal/health.TestBrokenVPSFailsTheRightChecks
+          - cmd/vps-health.TestVPSHealthServesTheHealthDocument
   observability:
     repo: DreamsAreReal/observability
     kind: worker
