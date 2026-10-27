@@ -236,9 +236,9 @@ func TestParseGateArgsMutationCache(t *testing.T) {
 
 func TestGateCommandHandsTheCacheOverAndKeepsTheVerdicts(t *testing.T) {
 	h := newHarness(t)
-	var seen gate.CachedVerdicts
+	var seen gate.MutationPlan
 	h.gateChecks = []gate.Check{{Name: checkOnly, Run: func(_ context.Context, ws gate.Workspace) gate.Outcome {
-		seen = ws.MutationCache
+		seen = ws.Mutation
 		v := mutation.Verdicts{Version: 1, Bases: []string{verdictKey}, Entries: map[string]mutation.Status{verdictKey: mutation.StatusKilled}}
 		testutil.Mkdir(t, filepath.Join(ws.Out, "go-app"))
 		_, err := v.Save(filepath.Join(ws.Out, "go-app", mutation.VerdictsFile))
@@ -249,7 +249,7 @@ func TestGateCommandHandsTheCacheOverAndKeepsTheVerdicts(t *testing.T) {
 	cache := filepath.Join(t.TempDir(), "verdicts.json")
 	args := append(gateFlags(hubApp, hubRepo, commitSha, gatePolicy(t), t.TempDir(), out), flagCache, cache, flagCacheSum, cacheSum)
 	testutil.Equal(t, h.run(append([]string{CmdGate}, args...)...), ExitOK)
-	testutil.Equal(t, seen, gate.CachedVerdicts{Path: cache, SHA256: strings.TrimPrefix(cacheSum, digestPrefix)})
+	testutil.Equal(t, seen, gate.MutationPlan{Cache: cache, CacheSHA256: strings.TrimPrefix(cacheSum, digestPrefix)})
 	merged := testutil.Read(t, filepath.Join(out, mutation.VerdictsFile))
 	testutil.Contains(t, h.out.String(), "mutation verdicts: "+filepath.Join(out, mutation.VerdictsFile)+" sha256:"+mutation.Digest([]byte(merged)))
 	h2 := newHarness(t)

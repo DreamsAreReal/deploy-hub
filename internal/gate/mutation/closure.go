@@ -31,6 +31,7 @@ const (
 	fieldSep      = "\x00"
 	parentDirElem = ".."
 	digestData    = "data"
+	digestKilled  = "killed"
 	goExt         = ".go"
 )
 
@@ -97,6 +98,17 @@ func (d *digests) key(t target) (string, error) {
 		parts = append(parts, p, td)
 	}
 	return hashOf(parts...), nil
+}
+
+func (d *digests) killerBinaryKey(t target, killer string) string {
+	if d.volatile[killer] || !slices.Contains(d.linkers(t.pkg.ImportPath), killer) {
+		return ""
+	}
+	td, err := d.testBinary(killer)
+	if err != nil {
+		return ""
+	}
+	return hashOf(d.base, digestKilled, mutantIdentity(d.root, t.mutant), killer, td)
 }
 
 func mutantIdentity(root string, m Mutant) string {

@@ -85,11 +85,11 @@ func (e *engine) closure(ctx context.Context, pkgs golang.Packages) (*digests, e
 }
 
 func (e *engine) prior() Verdicts {
-	c := e.ws.MutationCache
-	if c.Path == "" {
+	c := e.ws.Mutation
+	if c.Cache == "" {
 		return Verdicts{}
 	}
-	v, err := LoadVerdicts(c.Path, c.SHA256)
+	v, err := LoadVerdicts(c.Cache, c.CacheSHA256)
 	if err != nil {
 		e.ws.Log.Error("mutation verdict cache ignored", "error", err.Error())
 		return Verdicts{}
@@ -113,22 +113,49 @@ func (e *engine) assignKeys(d *digests, targets []target) error {
 			return err
 		}
 		targets[i].verdict = key
-		if s, ok := prior.lookup(key); ok {
-			targets[i].cached = s
-		}
+		e.reuseUnchangedKillOrFullRunVerdict(d, prior, &targets[i])
 	}
 	return nil
 }
 
-func (e *engine) saveVerdicts(base string, targets []target, rep Report) error {
-	v := Verdicts{Version: verdictsVersion, Bases: []string{base}, Entries: map[string]Status{}}
+func (e *engine) reuseUnchangedKillOrFullRunVerdict(d *digests, prior Verdicts, t *target) {
+	for _, p := range d.linkers(t.pkg.ImportPath) {
+		if s, _ := prior.lookup(d.killerBinaryKey(*t, p)); s == StatusKilled {
+			t.cached, t.killer = s, p
+			return
+		}
+	}
+	if s, ok := prior.lookup(t.verdict); ok && e.ws.Mutation.Full {
+		t.cached = s
+	}
+}
+
+func (e *engine) saveVerdicts(d *digests, targets []target, rep Report) error {
+	v := Verdicts{Version: verdictsVersion, Bases: []string{d.base}, Entries: map[string]Status{}}
 	for i, t := range targets {
-		if s := rep.Entries[i].Status; t.verdict != "" && cacheable(s) {
-			v.Entries[t.verdict] = s
+		if EngineVersion != "" {
+			e.keep(v, d, t, rep.Entries[i].Status, e.killers[i])
 		}
 	}
 	_, err := v.Save(e.ws.Report(VerdictsFile))
 	return err
+}
+
+func (e *engine) keep(v Verdicts, d *digests, t target, s Status, killers []string) {
+	if e.ws.Mutation.Full && t.verdict != "" && cacheable(s) {
+		v.Entries[t.verdict] = s
+	}
+	if s != StatusKilled {
+		return
+	}
+	if t.killer != "" {
+		killers = []string{t.killer}
+	}
+	for _, p := range killers {
+		if key := d.killerBinaryKey(t, p); key != "" {
+			v.Entries[key] = StatusKilled
+		}
+	}
 }
 
 func (j Job) status(ctx context.Context, worker int) Status {
@@ -165,8 +192,9 @@ func (e *engine) incremental(ctx context.Context, pkgs golang.Packages) (Report,
 		return Report{}, fmt.Errorf("cannot seed the worker build caches: %w", err)
 	}
 	rep, err := e.execute(ctx, targets)
+	rep.Base = d.base
 	if len(rep.Entries) == len(targets) {
-		err = errors.Join(err, e.saveVerdicts(d.base, targets, rep))
+		err = errors.Join(err, e.saveVerdicts(d, targets, rep))
 	}
 	return rep, err
 }

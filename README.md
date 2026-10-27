@@ -307,6 +307,14 @@ policy part). `deploy-hub engine-version` computes it in the checkout and
 to those sources is a new engine. A binary built without it (`go run`, `make
 gate`) neither reuses nor stores any verdict. When anything in a mutant's key
 changes, the mutant runs again. A package whose tests left no test log is never cached.
+A gate reuses only `killed` verdicts, and keys them narrower: by the mutant, the
+key base and the closure of the one test binary that killed it (the package
+`go test` reported as `FAIL`, which must link the mutated package). While that
+binary and what its tests read are unchanged its tests still fail on the
+mutant, so an edit elsewhere, even in another test binary that links the same
+package, keeps the verdict. Every other mutant (`survived`, `not-covered`,
+`timed-out`, `out-of-memory`, `not-viable`) and every new one runs in every
+gate. The full key above serves only a full run resuming its own session.
 What stays outside the key is a read made by a package-level variable
 initializer or by a child process of a test; the scheduled full run without the
 cache is the backstop for those. A run that stops early (an errored mutant, the
@@ -321,6 +329,29 @@ reports `mutants_cached` and `mutants_run`. After every run the gate merges
 the verdicts of all Go projects into `<out>/mutation-verdicts.json` and prints
 its sha256. `deploy.yml` does not pass a cache yet, so in CI every run is
 still a full one.
+
+**Full mutation runs.** Reused verdicts are only as good as the last run that
+computed everything afresh, so a gate whose mutation check took any verdict
+from the cache fails when the hub has no full run of the app, when the last
+one finished below the threshold, or when the key base of a project (go.mod,
+go.sum, the Go toolchain, the policy, the host or the engine) is not among the
+bases of the last full run. A full run is one that took no verdict from earlier
+runs and finished. A deploy gate that ran every mutant afresh counts as one
+(small apps finish within the check limit). The gate writes
+`<out>/mutation-run.json` (`complete`, `passed`, `fresh`, `stale`, `bases`) and
+the upload carries it: the hub records a complete fresh run as the app's full
+run, and a run that saw a base missing from the last full run (`stale`) asks
+the hub for one. The hub keeps that state per app in `state.json` (last full
+run, requested, open session) and plans full runs: a session opens when there
+is no full run, when one was requested, or at night (00:00 to 06:00 UTC) when
+the last full run is more than 20 hours old; a session older than 24 hours is
+dropped. Large apps get their full run in chunks of
+`--mutation-full --mutation-budget 45m` (only the `tests` and `mutation`
+checks; when the budget runs out the finished verdicts are kept) outside
+GitHub Actions, on the hub host as the app's CI user with the runner's
+isolation, giving the CI runner way. That executor is not part of this
+release yet: until it is, a large app whose base changed stays red until a
+full run is recorded.
 
 **Load test, done for a 1-CPU VPS.** The image runs in an isolated docker
 network on the CI runner with the production limits from the policy (`cpus`,
@@ -1109,7 +1140,7 @@ and `deploy_hub_ci_quota_on{runner}` every minute; the alerts
 | `/opt/deploy-hub/logs/<command>.log` | structured JSON logs (rotated at 10 MiB) |
 | `/opt/deploy-hub/smoke.conf` | optional host TCP ports a deploy must not break; absent → `smoke=skip` |
 | `/opt/deploy-hub/last-error.log` | recent pull errors (when CI logs are unreachable) |
-| `/opt/deploy-hub/mutation-cache/<app>/verdicts.json`, `verdicts.sha256` | the app's mutation verdict cache and the sha256 the runner recorded when it stored it (`mutation-cache.lock` serializes uploads) |
+| `/opt/deploy-hub/mutation-cache/<app>/` | `verdicts.json` (the mutation verdict cache), `session.json` (verdicts of the open full run session), `state.json` (last full run, requested, session start), each with the `.sha256` the runner recorded when it stored it; `mutation-cache.lock` serializes uploads |
 | `/home/deploy/.cache/deploy-hub/jwks.json` | last GitHub OIDC signing keys, used when GitHub is unreachable |
 | `/opt/<app>/docker-compose.yml` | app stack: 127.0.0.1 ports, mem limit, log rotation |
 | `/opt/<app>/app.conf` | `profile=`, `port=`, `health_path=`, `image=`, `repo=`, optional `bluegreen=on\|off` (BYOC: `mode=byoc`, `main=`, `hmode=`) |
@@ -1155,7 +1186,12 @@ sha256 recorded next to them. Over 100,000 verdicts, only the latest upload is
 kept, and a file over 16 MiB is never written, so an app's directory under
 `/opt/deploy-hub/mutation-cache` stays within a few tens of MiB. One upload is limited by the 8 MiB stdin line to about 75,000 verdicts.
 `mutation-cache-get` prints `sha256=<hex>` and `verdicts=<base64>`, or nothing
-when there is no cache yet. The runner serves the file only if its sha256 still
+when there is no cache yet, and `last=<base64>` with the last full mutation run
+(commit, key bases, passed, time) when there is one. With `mode=full` it first
+prints `plan=new|continue|skip` and serves the verdicts of the open full run
+session instead. `mutation-cache-put` also takes `mode=full` (the verdicts go to
+the session too) and `run` (base64 of `mutation-run.json`), which records a full
+run or asks for one (see "Full mutation runs"). The runner serves the file only if its sha256 still
 matches the recorded one, so a cache changed on disk outside the runner is not
 served (`deploy_hub_mutation_cache_intact` 0, alert
 `DeployHubMutationCacheCorrupt`); the next upload replaces it. App repositories

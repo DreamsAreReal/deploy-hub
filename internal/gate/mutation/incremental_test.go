@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -83,23 +82,25 @@ func baseFixture() KeyBase {
 	return KeyBase{Engine: "e1", Policy: "p1", Toolchain: "go1.27.3", Module: "sum1", Flags: "-count=1"}
 }
 
-func TestKeyChangesWithEveryPartOfTheBuildClosure(t *testing.T) {
-	edit := func(rel string) func(*keyInputs) {
-		return func(in *keyInputs) { testutil.Write(t, filepath.Join(in.root, rel), "changed") }
-	}
-	cases := []struct {
-		name    string
-		prepare func(*keyInputs)
-		change  func(*keyInputs)
-		changed bool
-	}{
-		{"package source", nil, edit(fileA), true},
-		{"package test", nil, edit(fileATest), true},
-		{"package testdata", nil, edit("a/testdata/in.txt"), true},
-		{"embedded file", nil, edit("a/embed/e.txt"), true},
-		{"new file next to the package", nil, edit("a/notes.txt"), true},
-		{"dependency source", nil, edit("b/b.go"), true},
-		{"package outside the closure", nil, edit("c/c.go"), false},
+type closureChange struct {
+	name    string
+	prepare func(*keyInputs)
+	change  func(*keyInputs)
+	changed bool
+}
+
+func editFile(t *testing.T, rel string) func(*keyInputs) {
+	return func(in *keyInputs) { testutil.Write(t, filepath.Join(in.root, rel), "changed") }
+}
+
+func fixtureInputs(t *testing.T) keyInputs {
+	root, built := closureFixture(t)
+	return keyInputs{root: root, built: built, base: baseFixture(), reads: "r1"}
+}
+
+func changesInvalidatingBothKeys(t *testing.T) []closureChange {
+	return []closureChange{
+		{"package outside the closure", nil, editFile(t, "c/c.go"), false},
 		{"file or variable the tests read", nil, func(in *keyInputs) { in.reads = "other" }, true},
 		{"external module version", nil, func(in *keyInputs) {
 			b := in.built.Packages[pkgExt]
@@ -112,25 +113,40 @@ func TestKeyChangesWithEveryPartOfTheBuildClosure(t *testing.T) {
 		{"mutation engine", nil, func(in *keyInputs) { in.base.Engine = "e2" }, true},
 		{"gate policy", nil, func(in *keyInputs) { in.base.Policy = "p2" }, true},
 		{"host the verdicts were measured on", nil, func(in *keyInputs) { in.base.Host = "cpus=12" }, true},
-		{"test package that links it only through test imports", nil, edit("e2e/e2e_test.go"), true},
-		{"module data without setup code", nil, edit(docsFile), false},
-		{"module data with a TestMain", func(in *keyInputs) {
-			testutil.Write(t, filepath.Join(in.root, fileATest), "package a\n\nfunc TestMain(m *testing.M) {}\n")
-		}, edit(docsFile), true},
+		{"package testdata", nil, editFile(t, "a/testdata/in.txt"), true},
+		{"package test", nil, editFile(t, fileATest), true},
 	}
+}
+
+func checkChanges(t *testing.T, cases []closureChange, key func(keyInputs, *testing.T) string) {
+	t.Helper()
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			root, built := closureFixture(t)
-			in := keyInputs{root: root, built: built, base: baseFixture(), reads: "r1"}
+			in := fixtureInputs(t)
 			if c.prepare != nil {
 				c.prepare(&in)
 			}
-			before := in.key(t)
-			testutil.Equal(t, in.key(t), before)
+			before := key(in, t)
+			testutil.True(t, before != "", "the inputs are keyed")
+			testutil.Equal(t, key(in, t), before)
 			c.change(&in)
-			testutil.Equal(t, in.key(t) != before, c.changed)
+			testutil.Equal(t, key(in, t) != before, c.changed)
 		})
 	}
+}
+
+func TestKeyChangesWithEveryPartOfTheBuildClosure(t *testing.T) {
+	checkChanges(t, append(changesInvalidatingBothKeys(t),
+		closureChange{"package source", nil, editFile(t, fileA), true},
+		closureChange{"embedded file", nil, editFile(t, "a/embed/e.txt"), true},
+		closureChange{"new file next to the package", nil, editFile(t, "a/notes.txt"), true},
+		closureChange{"dependency source", nil, editFile(t, "b/b.go"), true},
+		closureChange{"test package that links it only through test imports", nil, editFile(t, "e2e/e2e_test.go"), true},
+		closureChange{"module data without setup code", nil, editFile(t, docsFile), false},
+		closureChange{"module data with a TestMain", func(in *keyInputs) {
+			testutil.Write(t, filepath.Join(in.root, fileATest), "package a\n\nfunc TestMain(m *testing.M) {}\n")
+		}, editFile(t, docsFile), true},
+	), keyInputs.key)
 }
 
 func TestKeyRefusesAPackageMissingFromTheClosure(t *testing.T) {
@@ -263,15 +279,16 @@ func cachedSetup(t *testing.T) (gate.Workspace, *fakeGo) {
 		listing.Write(data)
 	}
 	fg.closure = listing.String()
+	ws.Policy.Thresholds.MutationScore = 10
 	return ws, fg
 }
 
-func keepVerdicts(t *testing.T, ws gate.Workspace) gate.CachedVerdicts {
+func keepVerdicts(t *testing.T, ws gate.Workspace) gate.MutationPlan {
 	t.Helper()
 	data := testutil.Read(t, ws.Report(VerdictsFile))
 	path := filepath.Join(t.TempDir(), VerdictsFile)
 	testutil.Write(t, path, data)
-	return gate.CachedVerdicts{Path: path, SHA256: Digest([]byte(data))}
+	return gate.MutationPlan{Cache: path, CacheSHA256: Digest([]byte(data))}
 }
 
 func runOnce(t *testing.T, ws gate.Workspace, fg *fakeGo) (Report, int) {
@@ -286,39 +303,99 @@ func TestCachedVerdictsAreReusedUntilTheClosureChanges(t *testing.T) {
 	ws, fg := cachedSetup(t)
 	full, ran := runOnce(t, ws, fg)
 	testutil.True(t, ran > 0 && full.Cached == 0, "the first run has no cache")
-	ws.MutationCache = keepVerdicts(t, ws)
-	again, ran := runOnce(t, ws, fg)
-	testutil.Equal(t, ran, 0)
-	testutil.Equal(t, again.Cached, totalMutants(again.Counts))
+	ws.Mutation = keepVerdicts(t, ws)
+	again, rerun := runOnce(t, ws, fg)
+	testutil.Equal(t, again.Cached, full.Counts[StatusKilled])
+	testutil.Equal(t, rerun, ran-again.Cached)
 	testutil.Equal(t, again.Counts, full.Counts)
-	testutil.Equal(t, again.Entries[0].Source, SourceCache)
+	for _, e := range again.Entries {
+		testutil.Equal(t, e.Source == SourceCache, e.Status == StatusKilled)
+	}
 	out := Judge(ws, again, nil)
 	testutil.Equal(t, out.Values[ValueCached], float64(again.Cached))
-	testutil.Equal(t, out.Values[ValueRun], float64(0))
+	testutil.Equal(t, out.Values[ValueRun], float64(totalMutants(again.Counts)-again.Cached))
 	testutil.Equal(t, out.Values[ValueScore], full.Score())
+	ws.Mutation = keepVerdicts(t, ws)
+	kept, _ := runOnce(t, ws, fg)
+	testutil.Equal(t, kept.Cached, again.Cached)
 	testutil.Write(t, filepath.Join(ws.Src, "lib", libTest), "package lib\n\nvar changed = 1\n")
 	edited, ran := runOnce(t, ws, fg)
 	testutil.True(t, ran > 0 && edited.Cached == 0, "a test edit reruns every mutant of the package")
 }
 
+func TestSurvivorsAlwaysRunAgainOutsideAFullRun(t *testing.T) {
+	ws, fg := cachedSetup(t)
+	ws.Mutation.Full = true
+	first, ran := runOnce(t, ws, fg)
+	testutil.True(t, ran > 0 && first.Cached == 0, "the first run has no cache")
+	v, err := LoadVerdicts(ws.Report(VerdictsFile), Digest([]byte(testutil.Read(t, ws.Report(VerdictsFile)))))
+	testutil.NoErr(t, err)
+	testutil.Equal(t, len(v.Entries), totalMutants(first.Counts)+first.Counts[StatusKilled])
+	ws.Mutation = keepVerdicts(t, ws)
+	ws.Mutation.Full = true
+	resumed, ran := runOnce(t, ws, fg)
+	testutil.Equal(t, ran, 0)
+	testutil.Equal(t, resumed.Cached, totalMutants(first.Counts))
+	ws.Mutation.Full = false
+	gated, ran := runOnce(t, ws, fg)
+	testutil.Equal(t, gated.Cached, first.Counts[StatusKilled])
+	testutil.True(t, ran > 0, "survivors run again in a gate")
+	testutil.Equal(t, gated.Counts, first.Counts)
+}
+
+func TestKillKeyFollowsOnlyTheKillingTestBinary(t *testing.T) {
+	checkChanges(t, append(changesInvalidatingBothKeys(t),
+		closureChange{"mutated package source", nil, editFile(t, "b/b.go"), true},
+		closureChange{"killing package source", nil, editFile(t, fileA), true},
+		closureChange{"another test binary that links the mutated package", nil, editFile(t, "e2e/e2e_test.go"), false},
+	), func(in keyInputs, t *testing.T) string { return in.killerBinaryKey(t, pkgA) })
+}
+
+func (in keyInputs) killerBinaryKey(t *testing.T, killer string) string {
+	t.Helper()
+	d := newDigests(in.root, in.base.Digest(), in.built, map[string]string{pkgA: in.reads, pkgE2E: "r2"})
+	m := NewMutant(filepath.Join(in.root, "b/b.go"), 1, OpArithmetic, "a + b", 0, Edit{Offset: 2, Length: 1, Text: "-"})
+	return d.killerBinaryKey(target{mutant: m, pkg: golang.Package{ImportPath: pkgB}}, killer)
+}
+
+func TestKillKeyNeedsAStableKillerThatLinksTheMutant(t *testing.T) {
+	in := fixtureInputs(t)
+	root, built := in.root, in.built
+	testutil.Equal(t, in.killerBinaryKey(t, pkgC), "")
+	testutil.True(t, in.killerBinaryKey(t, pkgE2E) != in.killerBinaryKey(t, pkgA), "each killer has its own key")
+	killed := target{mutant: Mutant{File: filepath.Join(root, fileA)}, pkg: golang.Package{ImportPath: pkgB}}
+	d := newDigests(root, "b", built, map[string]string{})
+	d.volatile[pkgA] = true
+	testutil.Equal(t, d.killerBinaryKey(killed, pkgA), "")
+	built.Tests[pkgA] = append(built.Tests[pkgA], "m/gone")
+	testutil.Equal(t, newDigests(root, "b", built, map[string]string{}).killerBinaryKey(killed, pkgA), "")
+}
+
+func TestFailedPackagesComeFromTheTestSummary(t *testing.T) {
+	out := failedTest + "\nFAIL\tm/b\t0.1s\nok  \tm/a\t0.2s\nFAIL\tm/c\t0.1s\nFAIL\tother/pkg\t0.1s\nFAIL\tm/b\t0.1s\n"
+	testutil.Equal(t, failedPackages(out, []string{pkgA, pkgB, pkgC}), []string{pkgB, pkgC})
+	testutil.Equal(t, len(failedPackages("FAIL\n", []string{pkgA})), 0)
+}
+
 func TestCacheIsIgnoredWhenTamperedOrStale(t *testing.T) {
 	ws, fg := cachedSetup(t)
 	runOnce(t, ws, fg)
-	ws.MutationCache = keepVerdicts(t, ws)
-	ws.MutationCache.SHA256 = Digest([]byte("other"))
+	ws.Mutation = keepVerdicts(t, ws)
+	ws.Mutation.CacheSHA256 = Digest([]byte("other"))
 	tampered, ran := runOnce(t, ws, fg)
 	testutil.True(t, ran > 0 && tampered.Cached == 0, "a cache with a wrong sha256 is not used")
-	ws.MutationCache = keepVerdicts(t, ws)
+	ws.Mutation = keepVerdicts(t, ws)
 	fg.env = goEnvNew
 	stale, ran := runOnce(t, ws, fg)
 	testutil.True(t, ran > 0 && stale.Cached == 0, "a new go version reruns every mutant")
 	ws.Policy.Limits = policy.Limits{MutantFloor: ws.Policy.Limits.MutantFloor * 2, MutantFactor: 2}
-	ws.MutationCache = keepVerdicts(t, ws)
+	ws.Mutation = keepVerdicts(t, ws)
 	fg.testLogs = ""
 	volatile, ran := runOnce(t, ws, fg)
 	testutil.True(t, ran > 0 && volatile.Cached == 0, "a package without a test log is never cached")
-	_, err := os.Stat(ws.Report(VerdictsFile))
+	v, err := LoadVerdicts(ws.Report(VerdictsFile), Digest([]byte(testutil.Read(t, ws.Report(VerdictsFile)))))
 	testutil.NoErr(t, err)
+	testutil.Equal(t, len(v.Entries), 0)
 }
 
 func TestMergeVerdictsJoinsProjects(t *testing.T) {
@@ -372,6 +449,7 @@ func TestCancelledJobsAreNeverFinalVerdicts(t *testing.T) {
 
 func TestIncompleteRunStillKeepsItsFinalVerdicts(t *testing.T) {
 	ws, fg := cachedSetup(t)
+	ws.Mutation.Full = true
 	fg.decide = func(mutated string, _ []string) outcome {
 		return outcome{broken: strings.Contains(mutated, "!(a > 0)")}
 	}
@@ -394,7 +472,7 @@ func versioned(t *testing.T) {
 func TestUnversionedEngineNeverCachesOrReuses(t *testing.T) {
 	ws, fg := cachedSetup(t)
 	runOnce(t, ws, fg)
-	ws.MutationCache = keepVerdicts(t, ws)
+	ws.Mutation = keepVerdicts(t, ws)
 	EngineVersion = ""
 	rep, ran := runOnce(t, ws, fg)
 	testutil.True(t, ran > 0 && rep.Cached == 0, "an engine without a version reuses nothing")
