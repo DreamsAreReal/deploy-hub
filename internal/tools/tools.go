@@ -40,6 +40,7 @@ const (
 	archiveFile     = "archive"
 	rootDir         = "root"
 	wholeArchive    = "."
+	dirFlag         = "-C"
 )
 
 var (
@@ -50,6 +51,8 @@ var (
 	trustedURLs = []*regexp.Regexp{
 		regexp.MustCompile(`^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/releases/download/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`),
 		regexp.MustCompile(`^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/archive/refs/tags/[A-Za-z0-9_.-]+\.tar\.gz$`),
+		regexp.MustCompile(`^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/archive/[0-9a-f]{40}\.tar\.gz$`),
+		regexp.MustCompile(`^https://www\.busybox\.net/downloads/busybox-[0-9]+\.[0-9]+\.[0-9]+\.tar\.bz2$`),
 		regexp.MustCompile(`^https://nodejs\.org/dist/v[0-9]+\.[0-9]+\.[0-9]+/[A-Za-z0-9_.-]+$`),
 		regexp.MustCompile(`^https://builds\.dotnet\.microsoft\.com/dotnet/Sdk/[0-9]+\.[0-9]+\.[0-9]+/[A-Za-z0-9_.-]+$`),
 	}
@@ -70,6 +73,8 @@ type Binary struct {
 type Manifest struct {
 	Binaries []Binary `yaml:"binaries"`
 	Go       []string `yaml:"go"`
+	Sources  []Source `yaml:"sources"`
+	dir      string
 }
 
 func LoadManifest(path string) (Manifest, error) {
@@ -83,6 +88,7 @@ func LoadManifest(path string) (Manifest, error) {
 	if err := dec.Decode(&m); err != nil {
 		return Manifest{}, fmt.Errorf("%w: %w", ErrManifest, err)
 	}
+	m.dir = filepath.Dir(path)
 	return m, m.Validate()
 }
 
@@ -96,14 +102,14 @@ func (m Manifest) Validate() error {
 			errs = append(errs, fmt.Errorf("%w: go tool %q must be module/path@vX.Y.Z", ErrManifest, g))
 		}
 	}
-	return errors.Join(errs...)
+	return errors.Join(append(errs, validateSources(m))...)
 }
 
 func (b Binary) validate() error {
 	switch {
 	case !toolName.MatchString(b.Name):
 		return fmt.Errorf("%w: name %q", ErrManifest, b.Name)
-	case !slices.ContainsFunc(trustedURLs, func(re *regexp.Regexp) bool { return re.MatchString(b.URL) }):
+	case !trusted(b.URL):
 		return fmt.Errorf("%w: %s: url must be a release asset of a trusted host", ErrManifest, b.Name)
 	case !sha256Hex.MatchString(b.SHA256):
 		return fmt.Errorf("%w: %s: sha256 must be 64 hex characters", ErrManifest, b.Name)
@@ -129,6 +135,10 @@ func (b Binary) validateTree() error {
 	}
 }
 
+func trusted(url string) bool {
+	return slices.ContainsFunc(trustedURLs, func(re *regexp.Regexp) bool { return re.MatchString(url) })
+}
+
 func inside(member string) bool {
 	return memberPath.MatchString(member) && path.Clean(member) == member && !strings.HasPrefix(member, parentDir)
 }
@@ -144,12 +154,25 @@ func (i Installer) Install(ctx context.Context, m Manifest) error {
 	if err := os.MkdirAll(i.Dir, dirPerm); err != nil {
 		return err
 	}
+	for _, step := range []func(context.Context, Manifest) error{i.installBinaries, i.installGo, i.buildSources} {
+		if err := step(ctx, m); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (i Installer) installBinaries(ctx context.Context, m Manifest) error {
 	for _, b := range m.Binaries {
 		if err := i.fetch(ctx, b); err != nil {
 			return fmt.Errorf("%s: %w", b.Name, err)
 		}
 		i.Log.Info("tool installed", "tool", b.Name, "sha256", b.SHA256)
 	}
+	return nil
+}
+
+func (i Installer) installGo(ctx context.Context, m Manifest) error {
 	for _, g := range m.Go {
 		if _, err := i.Exec.Run(ctx, procexec.Command{Name: GoBinary, Args: []string{"install", g}, Env: []string{gobinEnv + i.Dir}, Dir: i.Dir}); err != nil {
 			return fmt.Errorf("go install %s: %w: %s", g, err, procexec.Output(err))
@@ -159,14 +182,38 @@ func (i Installer) Install(ctx context.Context, m Manifest) error {
 	return nil
 }
 
-func (i Installer) fetch(ctx context.Context, b Binary) error {
-	data, err := i.download(ctx, b.URL)
+func (i Installer) buildSources(ctx context.Context, m Manifest) error {
+	if sources := m.jsonfilterSources(); len(sources) > 0 {
+		if err := i.buildJSONFilter(ctx, sources); err != nil {
+			return fmt.Errorf("%s: %w", JSONFilter, err)
+		}
+		i.Log.Info("tool built", "tool", JSONFilter, "sources", len(sources))
+	}
+	if s, ok := m.busybox(); ok {
+		if err := i.buildBusybox(ctx, s, filepath.Join(m.dir, filepath.FromSlash(s.Config))); err != nil {
+			return fmt.Errorf("%s: %w", sourceBusybox, err)
+		}
+		i.Log.Info("tool built", "tool", sourceBusybox, "sha256", s.SHA256)
+	}
+	return nil
+}
+
+func (i Installer) verified(ctx context.Context, url, want string) ([]byte, error) {
+	data, err := i.download(ctx, url)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	sum := sha256.Sum256(data)
-	if got := hex.EncodeToString(sum[:]); got != b.SHA256 {
-		return fmt.Errorf("%w: got %s", ErrChecksum, got)
+	if got := hex.EncodeToString(sum[:]); got != want {
+		return nil, fmt.Errorf("%w: got %s", ErrChecksum, got)
+	}
+	return data, nil
+}
+
+func (i Installer) fetch(ctx context.Context, b Binary) error {
+	data, err := i.verified(ctx, b.URL, b.SHA256)
+	if err != nil {
+		return err
 	}
 	if b.Tree != "" {
 		return i.unpack(ctx, b, data)
@@ -239,7 +286,7 @@ func (i Installer) untar(ctx context.Context, stage string, data []byte) (string
 	if err := os.Mkdir(root, dirPerm); err != nil {
 		return "", err
 	}
-	if _, err := i.Exec.Run(ctx, procexec.Command{Name: TarBinary, Args: []string{"-xf", archive, "-C", root}, Dir: stage}); err != nil {
+	if _, err := i.Exec.Run(ctx, procexec.Command{Name: TarBinary, Args: []string{"-xf", archive, dirFlag, root}, Dir: stage}); err != nil {
 		return "", fmt.Errorf("unpack: %w: %s", err, procexec.Output(err))
 	}
 	return root, nil
