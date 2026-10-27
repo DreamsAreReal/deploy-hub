@@ -100,10 +100,7 @@ func (d *digests) key(t target) (string, error) {
 	return hashOf(parts...), nil
 }
 
-// killKey keys a killed verdict by the build closure of the one test binary that killed the mutant:
-// while that binary is unchanged its tests still fail on the mutant, whatever else changed. A killer that
-// cannot be hashed keys nothing, so its mutant runs again.
-func (d *digests) killKey(t target, killer string) string {
+func (d *digests) killerBinaryKey(t target, killer string) string {
 	if d.volatile[killer] || !slices.Contains(d.linkers(t.pkg.ImportPath), killer) {
 		return ""
 	}

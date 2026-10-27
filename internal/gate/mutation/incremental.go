@@ -113,16 +113,14 @@ func (e *engine) assignKeys(d *digests, targets []target) error {
 			return err
 		}
 		targets[i].verdict = key
-		e.reuse(d, prior, &targets[i])
+		e.reuseUnchangedKillOrFullRunVerdict(d, prior, &targets[i])
 	}
 	return nil
 }
 
-// reuse takes a killed verdict whose killing test binary is unchanged. Any other verdict is reused
-// only within a full run, which resumes its own session on the same commit.
-func (e *engine) reuse(d *digests, prior Verdicts, t *target) {
+func (e *engine) reuseUnchangedKillOrFullRunVerdict(d *digests, prior Verdicts, t *target) {
 	for _, p := range d.linkers(t.pkg.ImportPath) {
-		if s, _ := prior.lookup(d.killKey(*t, p)); s == StatusKilled {
+		if s, _ := prior.lookup(d.killerBinaryKey(*t, p)); s == StatusKilled {
 			t.cached, t.killer = s, p
 			return
 		}
@@ -154,7 +152,7 @@ func (e *engine) keep(v Verdicts, d *digests, t target, s Status, killers []stri
 		killers = []string{t.killer}
 	}
 	for _, p := range killers {
-		if key := d.killKey(t, p); key != "" {
+		if key := d.killerBinaryKey(t, p); key != "" {
 			v.Entries[key] = StatusKilled
 		}
 	}

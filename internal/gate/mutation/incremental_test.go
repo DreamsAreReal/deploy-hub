@@ -98,8 +98,7 @@ func fixtureInputs(t *testing.T) keyInputs {
 	return keyInputs{root: root, built: built, base: baseFixture(), reads: "r1"}
 }
 
-// sharedChanges invalidate both the full key and the key of a killed verdict.
-func sharedChanges(t *testing.T) []closureChange {
+func changesInvalidatingBothKeys(t *testing.T) []closureChange {
 	return []closureChange{
 		{"package outside the closure", nil, editFile(t, "c/c.go"), false},
 		{"file or variable the tests read", nil, func(in *keyInputs) { in.reads = "other" }, true},
@@ -137,7 +136,7 @@ func checkChanges(t *testing.T, cases []closureChange, key func(keyInputs, *test
 }
 
 func TestKeyChangesWithEveryPartOfTheBuildClosure(t *testing.T) {
-	checkChanges(t, append(sharedChanges(t),
+	checkChanges(t, append(changesInvalidatingBothKeys(t),
 		closureChange{"package source", nil, editFile(t, fileA), true},
 		closureChange{"embedded file", nil, editFile(t, "a/embed/e.txt"), true},
 		closureChange{"new file next to the package", nil, editFile(t, "a/notes.txt"), true},
@@ -345,31 +344,31 @@ func TestSurvivorsAlwaysRunAgainOutsideAFullRun(t *testing.T) {
 }
 
 func TestKillKeyFollowsOnlyTheKillingTestBinary(t *testing.T) {
-	checkChanges(t, append(sharedChanges(t),
+	checkChanges(t, append(changesInvalidatingBothKeys(t),
 		closureChange{"mutated package source", nil, editFile(t, "b/b.go"), true},
 		closureChange{"killing package source", nil, editFile(t, fileA), true},
 		closureChange{"another test binary that links the mutated package", nil, editFile(t, "e2e/e2e_test.go"), false},
-	), func(in keyInputs, t *testing.T) string { return in.killKey(t, pkgA) })
+	), func(in keyInputs, t *testing.T) string { return in.killerBinaryKey(t, pkgA) })
 }
 
-func (in keyInputs) killKey(t *testing.T, killer string) string {
+func (in keyInputs) killerBinaryKey(t *testing.T, killer string) string {
 	t.Helper()
 	d := newDigests(in.root, in.base.Digest(), in.built, map[string]string{pkgA: in.reads, pkgE2E: "r2"})
 	m := NewMutant(filepath.Join(in.root, "b/b.go"), 1, OpArithmetic, "a + b", 0, Edit{Offset: 2, Length: 1, Text: "-"})
-	return d.killKey(target{mutant: m, pkg: golang.Package{ImportPath: pkgB}}, killer)
+	return d.killerBinaryKey(target{mutant: m, pkg: golang.Package{ImportPath: pkgB}}, killer)
 }
 
 func TestKillKeyNeedsAStableKillerThatLinksTheMutant(t *testing.T) {
 	in := fixtureInputs(t)
 	root, built := in.root, in.built
-	testutil.Equal(t, in.killKey(t, pkgC), "")
-	testutil.True(t, in.killKey(t, pkgE2E) != in.killKey(t, pkgA), "each killer has its own key")
+	testutil.Equal(t, in.killerBinaryKey(t, pkgC), "")
+	testutil.True(t, in.killerBinaryKey(t, pkgE2E) != in.killerBinaryKey(t, pkgA), "each killer has its own key")
 	killed := target{mutant: Mutant{File: filepath.Join(root, fileA)}, pkg: golang.Package{ImportPath: pkgB}}
 	d := newDigests(root, "b", built, map[string]string{})
 	d.volatile[pkgA] = true
-	testutil.Equal(t, d.killKey(killed, pkgA), "")
+	testutil.Equal(t, d.killerBinaryKey(killed, pkgA), "")
 	built.Tests[pkgA] = append(built.Tests[pkgA], "m/gone")
-	testutil.Equal(t, newDigests(root, "b", built, map[string]string{}).killKey(killed, pkgA), "")
+	testutil.Equal(t, newDigests(root, "b", built, map[string]string{}).killerBinaryKey(killed, pkgA), "")
 }
 
 func TestFailedPackagesComeFromTheTestSummary(t *testing.T) {
