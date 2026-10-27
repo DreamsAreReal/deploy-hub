@@ -321,6 +321,13 @@ func TestScriptsWithoutExtensionAreChecked(t *testing.T) {
 	testutil.Equal(t, Complexity(context.Background(), w.WS).Values[ValueFunctions], float64(1))
 }
 
+func TestShellScriptsAreFoundByShebangOutsideFixtures(t *testing.T) {
+	w := newWorld(t, map[string]string{"agent/apply": "#!/bin/sh\necho ok\n", "agent/routerbot.init": "#!/bin/sh /etc/rc.common\nSTART=99\n", "testdata/sample.sh.txt": "#!/bin/sh\n", "testdata/run.sh": "echo\n", readmeFile: "x"})
+	files, err := scripts(context.Background(), w.WS)
+	testutil.NoErr(t, err)
+	testutil.Equal(t, files, []string{"agent/apply", "agent/routerbot.init"})
+}
+
 func limited() []string {
 	return []string{"-c", limitScript, BashBinary, "4103", BatsBinary}
 }

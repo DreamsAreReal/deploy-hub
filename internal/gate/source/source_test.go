@@ -244,8 +244,11 @@ func TestLanguageSkipsLocalizedPaths(t *testing.T) {
 	testutil.Equal(t, out.Findings, []string{fileReadme + ":1: '\u0441'"})
 }
 
-func TestExtReadsTheShebangOfFilesWithoutExtension(t *testing.T) {
-	ws := repo(t, map[string]string{"bin/apply": "#!/bin/sh\necho hi\n", "bin/agent": "#!/usr/bin/ucode\n", "lib/x.go": pkgA})
+func TestExtReadsTheShebangOfFilesWithoutCodeExtension(t *testing.T) {
+	ws := repo(t, map[string]string{"bin/apply": "#!/bin/sh\necho hi\n", "bin/agent": "#!/usr/bin/ucode\n", "lib/x.go": pkgA, "etc/routerbot.init": "#!/bin/sh /etc/rc.common\n", "docs/a.md": "# A\n"})
+	testutil.Equal(t, Ext(ws.Src, "etc/routerbot.init"), ".sh")
+	testutil.Equal(t, Ext(ws.Src, "docs/a.md"), ".md")
+	testutil.Equal(t, Ext(ws.Src, "docs/gone.md"), ".md")
 	testutil.Equal(t, Ext(ws.Src, "bin/apply"), ".sh")
 	testutil.Equal(t, Ext(ws.Src, "bin/agent"), "#!ucode")
 	testutil.Equal(t, Ext(ws.Src, "lib/x.go"), ".go")

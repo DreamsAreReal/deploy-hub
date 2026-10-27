@@ -41,17 +41,18 @@ func IsCodeExt(ext string) bool {
 }
 
 func Ext(name string, data []byte) string {
-	if ext := path.Ext(name); ext != "" {
+	ext := path.Ext(name)
+	if codeExts[ext] {
 		return ext
 	}
 	interp := Interpreter(data)
-	if ext, ok := shellExts[interp]; ok {
-		return ext
+	if sh, ok := shellExts[interp]; ok {
+		return sh
 	}
 	if interp != "" {
 		return ScriptPrefix + interp
 	}
-	return ""
+	return ext
 }
 
 func Interpreter(data []byte) string {
@@ -80,7 +81,7 @@ func lexerFor(name string, data []byte) chroma.Lexer {
 	if l := lexers.Match(path.Base(name)); l != nil {
 		return l
 	}
-	if path.Ext(name) != "" {
+	if codeExts[path.Ext(name)] {
 		return nil
 	}
 	return lexers.Match(scriptName + Ext(name, data))

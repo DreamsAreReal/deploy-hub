@@ -142,7 +142,7 @@ func FuzzLex(f *testing.F) {
 	})
 }
 
-func TestShebangNamesTheLanguageOfFilesWithoutExtension(t *testing.T) {
+func TestShebangNamesTheLanguageOfFilesWithoutCodeExtension(t *testing.T) {
 	cases := []struct{ name, src, want string }{
 		{"run", "#!/bin/sh\necho hi\n", ExtSh},
 		{"init", "#!/bin/sh /etc/rc.common\nstart() { :; }\n", ExtSh},
@@ -152,6 +152,9 @@ func TestShebangNamesTheLanguageOfFilesWithoutExtension(t *testing.T) {
 		{"agent", "#!/usr/bin/ucode\nlet x = 1;\n", "#!ucode"},
 		{"proxy", "#!/usr/bin/python3\n", "#!python3"},
 		{"named.sh", "#!/usr/bin/ucode\n", ExtSh},
+		{"routerbot.init", "#!/bin/sh /etc/rc.common\n", ExtSh},
+		{"page.cgi", "#!/usr/bin/ucode\n", "#!ucode"},
+		{"notes.txt", "plain\n", ".txt"},
 		{"LICENSE", "MIT\n", ""},
 		{"blank", "#!\n", ""},
 		{"bare-env", "#!/usr/bin/env\n", ""},
@@ -169,6 +172,7 @@ func TestShellScriptsWithoutExtensionAreLexedAsShell(t *testing.T) {
 	_, known, err := Lex("agent/run", []byte("#!/usr/bin/ucode\n// yes\n"))
 	testutil.NoErr(t, err)
 	testutil.True(t, !known, "ucode has no lexer")
-	_, known, _ = Lex("x.unknownext", []byte("#!/bin/sh\n"))
-	testutil.True(t, !known, "an unknown extension is not guessed from the shebang")
+	testutil.Equal(t, noteLines(t, "agent/routerbot.init", "#!/bin/sh /etc/rc.common\n# yes\n"), []int{2})
+	_, known, _ = Lex("x.unknownext", []byte("plain\n"))
+	testutil.True(t, !known, "an unknown extension without a shebang has no lexer")
 }

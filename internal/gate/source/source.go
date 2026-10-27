@@ -74,12 +74,12 @@ func Tracked(ctx context.Context, ex procexec.Runner, dir string) ([]string, err
 }
 
 func Ext(dir, rel string) string {
-	if ext := path.Ext(rel); ext != "" {
+	if ext := path.Ext(rel); lexis.IsCodeExt(ext) {
 		return ext
 	}
 	f, err := os.Open(filepath.Clean(filepath.Join(dir, filepath.FromSlash(rel))))
 	if err != nil {
-		return ""
+		return lexis.Ext(rel, nil)
 	}
 	defer func() { _ = f.Close() }()
 	head := make([]byte, binarySniff)
