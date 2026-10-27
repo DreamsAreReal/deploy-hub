@@ -32,7 +32,7 @@ const (
 	percentCeiling = 100
 	purlScheme     = "pkg:"
 	policyChecks   = 8
-	appChecks      = 4
+	appChecks      = 5
 )
 
 var (
@@ -107,7 +107,10 @@ type App struct {
 	Allowed   []string    `yaml:"allowed_files"`
 	Accepted  []Accepted  `yaml:"accepted_workflow_findings"`
 	Host      *Host       `yaml:"host"`
+	Shell     string      `yaml:"shell_utilities"`
 }
+
+const ShellBusybox = "busybox"
 
 type Accepted struct {
 	Rule     string `yaml:"rule"`
@@ -285,7 +288,7 @@ func pinned(field, ref string) error {
 
 func (a App) validate(name string) error {
 	errs := make([]error, 0, len(a.Scenarios)+appChecks)
-	errs = append(errs, validate.AppName(name), validate.RepoSlug(a.Repo), a.validateKind(name), validateHost(name, a.Host))
+	errs = append(errs, validate.AppName(name), validate.RepoSlug(a.Repo), a.validateKind(name), validateHost(name, a.Host), a.validateShell(name))
 	seen := map[string]bool{}
 	for _, s := range a.Scenarios {
 		errs = append(errs, s.validate(name, seen))
@@ -300,6 +303,13 @@ func (a App) validate(name string) error {
 		errs = append(errs, f.validate(name))
 	}
 	return errors.Join(errs...)
+}
+
+func (a App) validateShell(name string) error {
+	if a.Shell != "" && a.Shell != ShellBusybox {
+		return fmt.Errorf("%w: %s: shell_utilities must be empty or %q", ErrPolicy, name, ShellBusybox)
+	}
+	return nil
 }
 
 func (f Accepted) validate(app string) error {

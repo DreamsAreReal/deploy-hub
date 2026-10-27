@@ -32,6 +32,7 @@ const (
 	ownerSeparator = "/"
 	outDirPerm     = 0o700
 	toolsPrefix    = "tools: "
+	pathEnv        = "PATH"
 	usageTools     = "usage: deploy-hub tools --manifest FILE --dir DIR"
 	msgToolsDone   = "tools: %d installed into %s\n"
 	usageEngine    = "usage: deploy-hub engine-version (run in the deploy-hub checkout)"
@@ -207,11 +208,14 @@ func runTools(ctx context.Context, a *App, ex procexec.Runner, args []string) in
 	if err != nil {
 		return a.failWith(toolsPrefix, err)
 	}
+	if err := os.Setenv(pathEnv, *dir+string(os.PathListSeparator)+os.Getenv(pathEnv)); err != nil {
+		return a.failWith(toolsPrefix, err)
+	}
 	inst := tools.Installer{Client: &http.Client{}, Dir: *dir, Exec: ex, Log: a.Log}
 	if err := inst.Install(ctx, m); err != nil {
 		return a.failWith(toolsPrefix, err)
 	}
-	a.Out.Printf(msgToolsDone, len(m.Binaries)+len(m.Go), *dir)
+	a.Out.Printf(msgToolsDone, m.Count(), *dir)
 	return ExitOK
 }
 

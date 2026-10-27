@@ -217,7 +217,7 @@ func TestManifestValidation(t *testing.T) {
 	trees := []Binary{
 		{Name: nodeName, URL: treeURL, SHA256: good.SHA256, Tree: treeTop, Links: []string{nodeLink, npmLink}},
 		{Name: dotnet, URL: "https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.302/dotnet-sdk-10.0.302-linux-x64.tar.gz", SHA256: good.SHA256, Tree: wholeArchive, Links: []string{dotnet}},
-		{Name: "bats", URL: "https://github.com/bats-core/bats-core/archive/refs/tags/v1.14.0.tar.gz", SHA256: good.SHA256, Tree: "bats-core-1.14.0", Links: []string{"bin/bats"}},
+		{Name: batsName, URL: "https://github.com/bats-core/bats-core/archive/refs/tags/v1.14.0.tar.gz", SHA256: good.SHA256, Tree: "bats-core-1.14.0", Links: []string{"bin/bats"}},
 	}
 	testutil.NoErr(t, Manifest{Binaries: trees}.Validate())
 	bad := []Binary{
@@ -225,12 +225,12 @@ func TestManifestValidation(t *testing.T) {
 		{Name: toolFile, URL: "https://evil.example/tool", SHA256: good.SHA256},
 		{Name: toolFile, URL: "http://github.com/o/r/releases/download/v1/t", SHA256: good.SHA256},
 		{Name: toolFile, URL: "https://nodejs.org/dist/latest/node.tar.xz", SHA256: good.SHA256},
-		{Name: toolFile, URL: good.URL, SHA256: "abc"},
+		{Name: toolFile, URL: good.URL, SHA256: badSum},
 		{Name: toolFile, URL: good.URL, SHA256: good.SHA256, Member: "../escape"},
 		{Name: toolFile, URL: good.URL, SHA256: good.SHA256, Member: member, Tree: treeTop, Links: []string{nodeLink}},
 		{Name: toolFile, URL: good.URL, SHA256: good.SHA256, Tree: treeTop},
 		{Name: toolFile, URL: good.URL, SHA256: good.SHA256, Links: []string{nodeLink}},
-		{Name: toolFile, URL: good.URL, SHA256: good.SHA256, Tree: "../up", Links: []string{nodeLink}},
+		{Name: toolFile, URL: good.URL, SHA256: good.SHA256, Tree: upTree, Links: []string{nodeLink}},
 		{Name: toolFile, URL: good.URL, SHA256: good.SHA256, Tree: treeTop, Links: []string{"../node"}},
 		{Name: toolFile, URL: good.URL, SHA256: good.SHA256, Tree: treeTop, Links: []string{"bin/Node.exe"}},
 	}

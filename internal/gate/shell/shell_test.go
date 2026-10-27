@@ -248,7 +248,7 @@ func TestTestFailures(t *testing.T) {
 	testutil.Fails(t, err)
 	counts, err := readTrace(filepath.Join(t.TempDir(), "absent"))
 	testutil.NoErr(t, err)
-	testutil.Equal(t, len(counts), 0)
+	testutil.Equal(t, len(counts.counts), 0)
 	for _, check := range []func(context.Context, gate.Workspace) gate.Outcome{Integrity, Dependencies, Fuzz} {
 		testutil.Equal(t, check(context.Background(), missing.WS).Status, gate.StatusNA)
 	}
@@ -295,9 +295,15 @@ func TestShellMutationNeedsReports(t *testing.T) {
 	_, err = tokmut.Mutate(context.Background(), w.WS, mutationSuite)
 	testutil.Fails(t, err)
 	testutil.Write(t, w.WS.Report(JUnitReport), junitGreen)
+	_, err = tokmut.Mutate(context.Background(), w.WS, mutationSuite)
+	testutil.Fails(t, err)
+	testutil.Write(t, w.WS.Report(testIndexFile), "{")
+	_, err = tokmut.Mutate(context.Background(), w.WS, mutationSuite)
+	testutil.Fails(t, err)
 	unlisted := project(t)
 	testutil.Write(t, unlisted.WS.Report(linecov.ReportFile), "{}")
 	testutil.Write(t, unlisted.WS.Report(JUnitReport), junitGreen)
+	testutil.Write(t, unlisted.WS.Report(testIndexFile), "{}")
 	unlisted.FailGit()
 	_, err = tokmut.Mutate(context.Background(), unlisted.WS, mutationSuite)
 	testutil.Contains(t, err.Error(), "git ls-files")
@@ -347,4 +353,72 @@ func TestTestsRunUnderAProcessLimit(t *testing.T) {
 	testutil.Mkdir(t, filepath.Join(procDir, "42", "task", "43"))
 	testutil.Mkdir(t, filepath.Join(procDir, "7", "task"))
 	testutil.Equal(t, countUserProcesses(), 3)
+}
+
+func TestBusyboxAppsRunTheirTestsAgainstTheAppletsOnly(t *testing.T) {
+	tools := t.TempDir()
+	applets := filepath.Join(tools, BusyboxDir)
+	testutil.Write(t, filepath.Join(applets, busyboxBinary), "elf")
+	t.Setenv(pathVar, filepath.Join(t.TempDir(), "empty")+string(os.PathListSeparator)+tools)
+	w := project(t)
+	w.WS.App.Shell = policy.ShellBusybox
+	w.junit = junitGreen
+	w.trace = gradeTrace()
+	testutil.Equal(t, Tests(context.Background(), w.WS).Status, gate.StatusPass)
+	run, _ := w.Fake.Find(BatsBinary)
+	testutil.Equal(t, run.Env[len(run.Env)-1], pathVar+"="+applets)
+	suite, err := mutationSuite(context.Background(), w.WS)
+	testutil.NoErr(t, err)
+	testutil.NoErr(t, suite.Test(context.Background(), 0, w.WS.Src, nil))
+	abort, _ := w.Fake.Find("--abort")
+	testutil.Equal(t, abort.Env, []string{pathVar + "=" + applets})
+	plain := project(t)
+	plain.junit = junitGreen
+	Tests(context.Background(), plain.WS)
+	plainRun, _ := plain.Fake.Find(BatsBinary)
+	testutil.Equal(t, len(plainRun.Env), 2)
+}
+
+func TestBusyboxAppsNeedTheApplets(t *testing.T) {
+	notFile := t.TempDir()
+	testutil.Mkdir(t, filepath.Join(notFile, BusyboxDir, busyboxBinary))
+	t.Setenv(pathVar, notFile)
+	w := project(t)
+	w.WS.App.Shell = policy.ShellBusybox
+	out := Tests(context.Background(), w.WS)
+	testutil.Equal(t, out.Status, gate.StatusFail)
+	testutil.Contains(t, out.Reason, "busybox.d")
+	testutil.Write(t, w.WS.Report(linecov.ReportFile), "{}")
+	testutil.Write(t, w.WS.Report(JUnitReport), junitGreen)
+	testutil.Write(t, w.WS.Report(testIndexFile), "{}")
+	_, err := mutationSuite(context.Background(), w.WS)
+	testutil.Is(t, err, ErrNoBusybox)
+}
+
+func TestMutantsRunOnlyTheTestFilesThatRanTheirLine(t *testing.T) {
+	const otherTest = "test/other.bats"
+	w := newWorld(t, map[string]string{fileGrade: gradeScript, fileTest: "@test \"top\" { :; }\n", otherTest: "@test \"other\" { :; }\n", readmeFile: "x"})
+	w.junit = junitGreen
+	w.trace = "+SRC/test/grade.bats|SRC/bin/grade.sh:9: echo A\n+SRC/test/other.bats|bin/grade.sh:9: echo A\n+SRC/test/grade.bats|bin/grade.sh:13: echo C\n+|bin/grade.sh:16: echo zero\n+/elsewhere/x.bats|bin/grade.sh:17: echo other\n"
+	testutil.Equal(t, Tests(context.Background(), w.WS).Status, gate.StatusPass)
+	cov, err := linecov.Load(w.WS)
+	testutil.NoErr(t, err)
+	testutil.Equal(t, cov[fileGrade].Lines[16], 1)
+	suite, err := mutationSuite(context.Background(), w.WS)
+	testutil.NoErr(t, err)
+	hit, tests := suite.Covered(fileGrade, 9)
+	testutil.True(t, hit, "line 9 ran")
+	testutil.Equal(t, tests, []string{"test/grade.bats", otherTest})
+	_, tests = suite.Covered(fileGrade, 13)
+	testutil.Equal(t, tests, []string{fileTest})
+	_, tests = suite.Covered(fileGrade, 16)
+	testutil.Equal(t, len(tests), 0)
+	_, tests = suite.Covered(fileGrade, 17)
+	testutil.Equal(t, tests, []string{"/elsewhere/x.bats"})
+	testutil.NoErr(t, suite.Test(context.Background(), 0, w.WS.Src, []string{fileTest}))
+	only, _ := w.Fake.Find("--abort")
+	testutil.Equal(t, only.Args, append(limited(), "--abort", fileTest))
+	testutil.NoErr(t, suite.Test(context.Background(), 0, w.WS.Src, nil))
+	calls := w.Fake.Calls()
+	testutil.Equal(t, calls[len(calls)-1].Args, append(limited(), "--abort", fileTest, otherTest))
 }
