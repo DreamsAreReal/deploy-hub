@@ -205,3 +205,15 @@ func TestAKindBinaryAppIsGatedWithoutAnImageAndNeverDeployed(t *testing.T) {
 		testutil.Contains(t, steps[name].If, "env.GATE_ONLY != 'true'")
 	}
 }
+
+func TestOnlyADeployRunOfMainFeedsTheMutationCacheAndTheFullRun(t *testing.T) {
+	w, _ := readDeployWorkflow(t)
+	steps := map[string]workflowStep{}
+	for _, s := range w.Jobs["deploy"].Steps {
+		steps[s.Name] = s
+	}
+	for _, name := range []string{"Upload the mutation verdicts to the hub", "Keep the source for the hub's full mutation run"} {
+		testutil.Contains(t, steps[name].If, "env.GATE_ONLY != 'true'")
+	}
+	testutil.Contains(t, steps["Keep the source for the hub's full mutation run"].If, "runner.environment == 'self-hosted'")
+}

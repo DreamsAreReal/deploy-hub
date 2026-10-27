@@ -306,7 +306,7 @@ jobs:
           upload || echo "::warning::the hub did not take the mutation verdicts; the next run mutates them again"
 
       - name: Keep the source for the hub's full mutation run
-        if: always() && runner.environment == 'self-hosted' && steps.checkout.outcome == 'success' && steps.hub.outcome == 'success'
+        if: always() && runner.environment == 'self-hosted' && env.GATE_ONLY != 'true' && steps.checkout.outcome == 'success' && steps.hub.outcome == 'success'
         env:
           TOOLCHAIN: ${{ steps.hub.outputs.bin }}
           POLICY: ${{ steps.hub.outputs.policy }}
