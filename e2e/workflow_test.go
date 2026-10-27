@@ -15,6 +15,11 @@ import (
 const (
 	workflows    = "../.github/workflows"
 	releaseToken = "secrets.RELEASE_TOKEN"
+	stepDeploy   = "Deploy on the VPS"
+	systemPath   = "PATH=/usr/bin:/bin"
+	appWeb       = "APP=web"
+	stepPush     = "Push the gated image"
+	shaABC       = "GITHUB_SHA=abc"
 )
 
 type workflowStep struct {
@@ -119,7 +124,7 @@ func TestNothingReachesProductionBeforeTheGatePasses(t *testing.T) {
 		}
 	}
 	testutil.True(t, gate >= 0, "no Quality gate step")
-	for _, name := range []string{"Push the gated image", "Deploy on the VPS", "Publish the hub release"} {
+	for _, name := range []string{stepPush, stepDeploy, "Publish the hub release"} {
 		found := false
 		for i, s := range steps {
 			if s.Name != name {
@@ -153,12 +158,50 @@ func TestTheImageIsBuiltFromAContextReadableWhateverTheRunnerUmask(t *testing.T)
 	dir := t.TempDir()
 	modes := filepath.Join(dir, "modes")
 	cmd := exec.CommandContext(t.Context(), "bash", "-e", "-c", umaskPrivateCheckout+build)
-	cmd.Env = []string{"PATH=/usr/bin:/bin", "MODES=" + modes, "CONTEXT=" + filepath.Join(dir, "src"), "DOCKERFILE=Dockerfile",
-		"APP=web", "GITHUB_REPOSITORY_OWNER=Owner", "GITHUB_SHA=abc", "GITHUB_OUTPUT=" + filepath.Join(dir, "out")}
+	cmd.Env = []string{systemPath, "MODES=" + modes, "CONTEXT=" + filepath.Join(dir, "src"), "DOCKERFILE=Dockerfile",
+		appWeb, "GITHUB_REPOSITORY_OWNER=Owner", shaABC, "GITHUB_OUTPUT=" + filepath.Join(dir, "out")}
 	out, err := cmd.CombinedOutput()
 	testutil.NoErr(t, err)
 	testutil.Equal(t, string(out), "")
 	got, err := os.ReadFile(filepath.Clean(modes))
 	testutil.NoErr(t, err)
 	testutil.Equal(t, string(got), "644 web/templates/page.html\n755 run.sh\n755 web\n755 web/templates\n")
+}
+
+const fakeGateTools = `deploy-hub() { printf '%s\n' "$*" > "$ARGS"; }
+sleep() { return 1; }
+`
+
+func gateArgs(t *testing.T, gate workflowStep, built string) string {
+	t.Helper()
+	dir := t.TempDir()
+	args := filepath.Join(dir, "args")
+	cmd := exec.CommandContext(t.Context(), "bash", "-e", "-c", fakeGateTools+gate.Run)
+	cmd.Env = []string{systemPath, "TOOLCHAIN=" + dir, "ARGS=" + args, "BUILT=" + built, appWeb,
+		"IMAGE=ghcr.io/owner/web:sha-abc", "GITHUB_REPOSITORY=Owner/web", shaABC, "POLICY=/p.yaml",
+		"GITHUB_WORKSPACE=/src", "RUNNER_TEMP=" + dir}
+	out, err := cmd.CombinedOutput()
+	testutil.Equal(t, string(out), "")
+	testutil.NoErr(t, err)
+	got, err := os.ReadFile(filepath.Clean(args))
+	testutil.NoErr(t, err)
+	return string(got)
+}
+
+func TestAKindBinaryAppIsGatedWithoutAnImageAndNeverDeployed(t *testing.T) {
+	w, raw := readDeployWorkflow(t)
+	testutil.Contains(t, raw, "      image:\n", "        type: boolean\n        default: true\n")
+	steps := map[string]workflowStep{}
+	for _, s := range w.Jobs["deploy"].Steps {
+		steps[s.Name] = s
+	}
+	testutil.Equal(t, steps["Build image"].If, "env.HUB != 'true' && inputs.image")
+	gate := steps["Quality gate"]
+	testutil.Equal(t, gate.Env["BUILT"], "${{ steps.image.outcome == 'success' }}")
+	testutil.Contains(t, gateArgs(t, gate, "true"), "--image ghcr.io/owner/web:sha-abc")
+	testutil.Excludes(t, gateArgs(t, gate, "false"), "--image")
+	testutil.Contains(t, raw, "GATE_ONLY: ${{ github.event_name == 'pull_request' || !inputs.image || ")
+	for _, name := range []string{stepPush, stepDeploy, "Connect to the VPS"} {
+		testutil.Contains(t, steps[name].If, "env.GATE_ONLY != 'true'")
+	}
 }

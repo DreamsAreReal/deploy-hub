@@ -383,6 +383,14 @@ apps:
         tests: [internal/auth.TestInvalidToken]
 ```
 
+A `kind: binary` app other than the hub (router-ax23: tools for hosts the hub
+does not deploy to yet) has no image. Its caller stub passes `image: false`
+(`with: {app: router-ax23, image: false}`) and no secrets: `deploy.yml` skips
+the image build, runs the gate without `--image` (the `dockerfile` and `image`
+checks are n/a for `binary`) and treats every run, pull request or `main`, as a
+gate only: nothing is reported, pushed or deployed. An app of another kind that
+passes `image: false` fails its `dockerfile` and `image` checks.
+
 **Releasing a gate or policy change.** App CI runs the gate code, the toolchain
 manifest and the policy of the commit that `.github/workflows/deploy.yml` pins
 in `uses: DreamsAreReal/deploy-hub/.github/actions/hub@<sha>` — an immutable
@@ -930,7 +938,7 @@ Isolation, all in [`server/ci-runner`](server/ci-runner):
 | which jobs | job-started hook `ci-job-started`: workflows of the repo's own `main` (push, `workflow_dispatch` or `schedule`) and pull requests into `main` from the repo itself (`refs/pull/<n>/merge`, head repo checked in the event payload); other branches, fork pull requests and other events fail before their first step. Pull request jobs get no deploy secrets, and a main deploy cancels them ([Pull request gate](#pull-request-gate)) |
 | CPU, memory | every repo has its slice `user-<uid of ci-<repo>>.slice` (its runner, its `dockerd` and its user manager with the containers), each with `ci-limits.conf`: 6 of 8 CPUs, CPU and IO weight 20 (production keeps priority), `MemoryHigh` 8G, `MemoryMax` 9G, no swap. Two jobs at once take at most 18G of the host's 23G; the gate sizes its mutation workers from the cgroup limit |
 | disk | `/var/lib/ci` is the ext4 image `/srv/ci.img` (280G, 276 GiB of ext4; `CI_DISK_SIZE` for a new one): CI can never fill `/`; mounted with `discard`, so blocks freed inside go back to `/` (the sparse image does not grow to its full size) |
-| disk quota | each repo has a hard ext4 project quota on `/var/lib/ci` (project id = uid of `ci-<repo>`, limits in GiB in `server/ci-runner/ci-disk-quota`: tasks 140, router-bot 40, observability 20, deploy-hub 35), so one repo cannot fill the disk of the others; `register` refuses a repo without a line there. Writes over the quota fail with `Disk quota exceeded`; the job hook prints an error with the usage, and `ci-job-started` refuses jobs while the quota is 95% full |
+| disk quota | each repo has a hard ext4 project quota on `/var/lib/ci` (project id = uid of `ci-<repo>`, limits in GiB in `server/ci-runner/ci-disk-quota`: tasks 140, router-bot 40, observability 20, deploy-hub 35, router-ax23 20), so one repo cannot fill the disk of the others; `register` refuses a repo without a line there. Writes over the quota fail with `Disk quota exceeded`; the job hook prints an error with the usage, and `ci-job-started` refuses jobs while the quota is 95% full |
 | leftover processes | `ci-runner-reap`, run by both job hooks: SIGKILL to every process in the runner's cgroup that is not a descendant of the runner itself (`runsvc.sh` → `RunnerService.js` → `Runner.Listener` → `Runner.Worker` → steps). A step that forks into the background or daemonizes is reparented away from the runner and dies when the job ends, and again before the first step of the next job, so it cannot read the environment (`SSH_KEY`, `GH_TOKEN`) of a later job. A stop or restart of `ci-runner@<repo>` kills the whole cgroup (`KillMode=control-group`) |
 | cleanup | job-completed hook `ci-runner-clean`: removes the job's containers, networks, volumes and pushed images, trims the build cache to 15 GB, empties the workspace, `RUNNER_TEMP`, `TMPDIR`, the tool cache and the downloaded actions; above 70% disk it drops all images and the language caches |
 | fail-safe | `ci-runner-status` stops every runner when the CI disk is not mounted or the nftables table is missing, and stops the runner of a repo whose namespace is gone, whose veth is down or whose runner, `dockerd` or user manager runs outside `/run/netns/ci-<repo>` (`deploy_hub_ci_isolation_ok` 0) |
