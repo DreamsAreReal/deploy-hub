@@ -44,6 +44,7 @@ type Step struct {
 	Step   string `json:"step"`
 	State  string `json:"state"`
 	Detail string `json:"detail,omitempty"`
+	URL    string `json:"url,omitempty"`
 }
 
 type Notifier interface {

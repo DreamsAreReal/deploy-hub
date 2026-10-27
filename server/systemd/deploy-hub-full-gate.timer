@@ -1,0 +1,10 @@
+[Unit]
+Description=deploy-hub: check every 5 minutes whether a weekly full gate is due, running or finished
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

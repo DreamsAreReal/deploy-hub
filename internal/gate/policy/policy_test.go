@@ -19,6 +19,8 @@ const localizedLine = "localized: [internal/texts/]"
 
 const dataLine = "data: [/data, /cache]"
 
+const fullGateLine = "full_gate: ci.yml"
+
 const digest = "@sha256:" + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 const reviewedExpr = `"MIT OR (MIT AND MIT)"`
@@ -67,6 +69,7 @@ images:
 apps:
   hub:
     repo: Owner/hub
+    full_gate: ci.yml
     kind: binary
     localized: [internal/texts/]
     allowed_files: [docs/STATE.md]
@@ -109,6 +112,7 @@ func TestParseValidPolicy(t *testing.T) {
 	testutil.Equal(t, web.Data, []string{"/data", "/cache"})
 	hub, _ := p.App("hub")
 	testutil.True(t, !hub.HasImage() && !hub.HasHTTP(), "binary has neither")
+	testutil.Equal(t, hub.FullGate, "ci.yml")
 	testutil.Equal(t, hub.Accepted, []Accepted{{Rule: selfHosted, Severity: medium, File: deployWorkflow, Key: runsOn, Reason: "isolated runner, see #600"}})
 	bot, _ := p.App("bot")
 	testutil.True(t, bot.HasImage() && !bot.HasHTTP(), "worker has an image only")
@@ -186,6 +190,8 @@ func TestParseRejects(t *testing.T) {
 		"unpinned zap":       {"zap: ghcr.io/zaproxy/zaproxy" + digest, "zap: ghcr.io/zaproxy/zaproxy:stable"},
 		"app name":           {"  hub:\n", "  Hub!:\n"},
 		"repo":               {"repo: Owner/hub", "repo: hub"},
+		"full gate path":     {fullGateLine, "full_gate: ../ci.yml"},
+		"full gate kind":     {fullGateLine, "full_gate: ci.json"},
 		"kind":               {"kind: binary", "kind: daemon"},
 		"port":               {"port: 8080", "port: 0"},
 		"health":             {"health: /health", "health: health"},

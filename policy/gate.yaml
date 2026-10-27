@@ -155,6 +155,7 @@ images:
 apps:
   deploy-hub:
     repo: DreamsAreReal/deploy-hub
+    full_gate: ci.yml
     kind: binary
     accepted_workflow_findings:
       - rule: self-hosted-runner
@@ -344,6 +345,7 @@ apps:
           - internal/gate/policy.TestHubSudoCommandsComeFromAFixedList
   tasks:
     repo: DreamsAreReal/tasks
+    full_gate: deploy.yml
     kind: service
     port: 8787
     health: /api/health
@@ -479,6 +481,7 @@ apps:
           - internal/store.TestBackupThenRestoreKeepsData
   stt:
     repo: DreamsAreReal/tasks
+    full_gate: deploy-stt.yml
     kind: service
     port: 8790
     health: /health
@@ -521,6 +524,7 @@ apps:
           - internal/stt.TestRecordingIsTranscribedWithAudioAndProcessingTime
   router-bot:
     repo: DreamsAreReal/router-bot
+    full_gate: deploy.yml
     kind: service
     shell_utilities: busybox
     port: 8080
@@ -670,6 +674,7 @@ apps:
           - cmd/vps-health.TestVPSHealthServesTheHealthDocument
   observability:
     repo: DreamsAreReal/observability
+    full_gate: deploy.yml
     kind: worker
     scenarios:
       - id: config-volume-follows-the-gated-image

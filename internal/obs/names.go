@@ -47,6 +47,10 @@ const (
 	MetricPreemptRerun         = "deploy_hub_preempt_rerun"
 	MetricPreemptRerunsMax     = "deploy_hub_preempt_reruns_max"
 	MetricMutationCacheIntact  = "deploy_hub_mutation_cache_intact"
+	MetricFullGateSuccess      = "deploy_hub_full_gate_success"
+	MetricFullGateVerdict      = "deploy_hub_full_gate_passed"
+	MetricFullGateAge          = "deploy_hub_full_gate_age_seconds"
+	MetricFullGateRunning      = "deploy_hub_full_gate_running"
 
 	LabelApp     = "app"
 	LabelAction  = "action"

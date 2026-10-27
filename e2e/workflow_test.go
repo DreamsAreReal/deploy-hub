@@ -26,6 +26,7 @@ type workflowStep struct {
 }
 
 type workflowJob struct {
+	Env         map[string]string `yaml:"env"`
 	RunsOn      any               `yaml:"runs-on"`
 	Permissions map[string]string `yaml:"permissions"`
 	Steps       []workflowStep    `yaml:"steps"`
@@ -161,4 +162,29 @@ func TestTheImageIsBuiltFromAContextReadableWhateverTheRunnerUmask(t *testing.T)
 	got, err := os.ReadFile(filepath.Clean(modes))
 	testutil.NoErr(t, err)
 	testutil.Equal(t, string(got), "644 web/templates/page.html\n755 run.sh\n755 web\n755 web/templates\n")
+}
+
+func TestAFullGateRunOnlyGatesAndNeverReachesTheVPS(t *testing.T) {
+	w, raw := readDeployWorkflow(t)
+	var doc struct {
+		On struct {
+			Call struct {
+				Inputs map[string]struct {
+					Type    string `yaml:"type"`
+					Default any    `yaml:"default"`
+				} `yaml:"inputs"`
+			} `yaml:"workflow_call"`
+		} `yaml:"on"`
+	}
+	testutil.NoErr(t, yaml.Unmarshal([]byte(raw), &doc))
+	full := doc.On.Call.Inputs["full"]
+	testutil.Equal(t, full.Type, "boolean")
+	testutil.Equal(t, full.Default, any(false))
+	job := w.Jobs["deploy"]
+	testutil.True(t, strings.HasPrefix(job.Env["GATE_ONLY"], "${{ inputs.full || "), "a full run is gate only")
+	for _, s := range job.Steps {
+		if strings.Contains(s.Run, "ssh ") || strings.Contains(s.Run, "docker push") || strings.Contains(s.Run, `"$SSH_KEY"`) {
+			testutil.Contains(t, s.If, "env.GATE_ONLY != 'true'")
+		}
+	}
 }

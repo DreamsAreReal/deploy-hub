@@ -15,6 +15,7 @@ import (
 
 	"github.com/DreamsAreReal/deploy-hub/internal/console"
 	"github.com/DreamsAreReal/deploy-hub/internal/delivery"
+	"github.com/DreamsAreReal/deploy-hub/internal/fullgate"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/catalog"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/dotnet"
@@ -56,6 +57,7 @@ const (
 	CmdRunnerSync = "ci-runner-sync"
 	CmdBootstrap  = "bootstrap"
 	CmdPreempt    = "preempt"
+	CmdFullGate   = "full-gate"
 
 	binDocker    = "docker"
 	binSudo      = "sudo"
@@ -76,6 +78,7 @@ commands:
   ci-runner-sync                   install the CI runner host files of this build (root)
   bootstrap [sha-<commit>]         install the first gated build on a fresh hub (run on the operator machine)
   preempt                          let main deploys overtake pull request gates on the runner (root, timer)
+  full-gate                        start and follow the weekly full gate of one app a night, no deploy (root, timer)
   version                          print the commit this binary was built from
   prune                            delete old app images (keep running + 2 previous)
   provision --app NAME ...         prepare /opt/<app> on the VPS (root)
@@ -94,19 +97,20 @@ type IO struct {
 }
 
 type App struct {
-	Config       Config
-	IO           IO
-	Out          *console.Printer
-	Err          *console.Printer
-	Exec         func(names ...string) procexec.Runner
-	Now          func() time.Time
-	Log          *slog.Logger
-	Owner        func(username string) func(path string) error
-	Checks       func() []gate.Check
-	Sudoers      string
-	Token        string
-	CIRoot       string
-	PreemptState string
+	Config        Config
+	IO            IO
+	Out           *console.Printer
+	Err           *console.Printer
+	Exec          func(names ...string) procexec.Runner
+	Now           func() time.Time
+	Log           *slog.Logger
+	Owner         func(username string) func(path string) error
+	Checks        func() []gate.Check
+	Sudoers       string
+	Token         string
+	CIRoot        string
+	PreemptState  string
+	FullGateState string
 }
 
 type handler struct {
@@ -133,6 +137,7 @@ var handlers = map[string]handler{
 	CmdVersion:    {run: runVersion},
 	CmdBootstrap:  {run: runBootstrap, binaries: []string{selfupdate.SSHBinary}},
 	CmdPreempt:    {run: runPreempt, onServer: true},
+	CmdFullGate:   {run: runFullGate, onServer: true},
 	CmdHostSync:   {run: runHostSync, binaries: []string{hostsync.DockerBinary, hostsync.SystemctlBinary, hostsync.AnalyzeBinary, hostsync.CaddyBinary}, onServer: true},
 	CmdEngine:     {run: runEngineVersion, binaries: []string{tools.GoBinary}},
 }
@@ -145,20 +150,21 @@ var gateBinaries = []string{
 }
 
 type Deps struct {
-	Exec         func(names ...string) procexec.Runner
-	Owner        func(username string) func(path string) error
-	Now          func() time.Time
-	Checks       func() []gate.Check
-	Sudoers      string
-	Token        string
-	CIRoot       string
-	PreemptState string
+	Exec          func(names ...string) procexec.Runner
+	Owner         func(username string) func(path string) error
+	Now           func() time.Time
+	Checks        func() []gate.Check
+	Sudoers       string
+	Token         string
+	CIRoot        string
+	PreemptState  string
+	FullGateState string
 }
 
 func OSDeps() Deps {
 	return Deps{Exec: func(names ...string) procexec.Runner { return procexec.NewOS(names...) }, Owner: ChownTo, Now: time.Now, Checks: catalog.Checks,
 		Sudoers: selfupdate.DefaultSudoers, Token: selfupdate.DefaultPATFile,
-		CIRoot: preempt.DefaultCIRoot, PreemptState: preempt.DefaultState}
+		CIRoot: preempt.DefaultCIRoot, PreemptState: preempt.DefaultState, FullGateState: fullgate.DefaultState}
 }
 
 func Main(ctx context.Context, args []string, env Env, stdio IO) int {
@@ -184,7 +190,7 @@ func Run(ctx context.Context, args []string, env Env, stdio IO, deps Deps) int {
 	counts := &obs.LevelCounts{}
 	log, closeLog := openLogger(cfg, args[0], h, stdio.Stderr, counts)
 	defer closeLog()
-	a := &App{Config: cfg, IO: stdio, Out: stdout, Err: stderr, Now: deps.Now, Log: log, Owner: deps.Owner, Exec: deps.Exec, Checks: deps.Checks, Sudoers: deps.Sudoers, Token: deps.Token, CIRoot: deps.CIRoot, PreemptState: deps.PreemptState}
+	a := &App{Config: cfg, IO: stdio, Out: stdout, Err: stderr, Now: deps.Now, Log: log, Owner: deps.Owner, Exec: deps.Exec, Checks: deps.Checks, Sudoers: deps.Sudoers, Token: deps.Token, CIRoot: deps.CIRoot, PreemptState: deps.PreemptState, FullGateState: deps.FullGateState}
 	started := time.Now()
 	log.Info("command started", "args", len(args)-1)
 	code, panicked := a.invoke(ctx, h, args[1:])

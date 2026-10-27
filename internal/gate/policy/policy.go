@@ -32,13 +32,14 @@ const (
 	percentCeiling = 100
 	purlScheme     = "pkg:"
 	policyChecks   = 8
-	appChecks      = 5
+	appChecks      = 6
 )
 
 var (
 	cpus      = regexp.MustCompile(`^[0-9]{1,2}(\.[0-9]{1,2})?$`)
 	digestRef = regexp.MustCompile(`^[a-z0-9./_-]+@sha256:[0-9a-f]{64}$`)
 	taskRef   = regexp.MustCompile(`#[0-9]+`)
+	workflow  = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}\.ya?ml$`)
 )
 
 var licenseDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
@@ -108,6 +109,7 @@ type App struct {
 	Accepted  []Accepted  `yaml:"accepted_workflow_findings"`
 	Host      *Host       `yaml:"host"`
 	Shell     string      `yaml:"shell_utilities"`
+	FullGate  string      `yaml:"full_gate"`
 }
 
 const ShellBusybox = "busybox"
@@ -288,7 +290,7 @@ func pinned(field, ref string) error {
 
 func (a App) validate(name string) error {
 	errs := make([]error, 0, len(a.Scenarios)+appChecks)
-	errs = append(errs, validate.AppName(name), validate.RepoSlug(a.Repo), a.validateKind(name), validateHost(name, a.Host), a.validateShell(name))
+	errs = append(errs, validate.AppName(name), validate.RepoSlug(a.Repo), a.validateKind(name), validateHost(name, a.Host), a.validateShell(name), a.validateFullGate(name))
 	seen := map[string]bool{}
 	for _, s := range a.Scenarios {
 		errs = append(errs, s.validate(name, seen))
@@ -429,4 +431,11 @@ func validData(app string, dirs []string) error {
 		seen[dir] = true
 	}
 	return nil
+}
+
+func (a App) validateFullGate(name string) error {
+	if a.FullGate == "" || workflow.MatchString(a.FullGate) {
+		return nil
+	}
+	return fmt.Errorf("%w: app %s: full_gate %q must be a workflow file name of .github/workflows", ErrPolicy, name, a.FullGate)
 }

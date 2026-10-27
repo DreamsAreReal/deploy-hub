@@ -1,0 +1,11 @@
+[Unit]
+Description=deploy-hub: start and follow the weekly full gate of one app a night
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/deploy-hub/bin/deploy-hub full-gate
+StateDirectory=deploy-hub
+StateDirectoryMode=0700
+TimeoutStartSec=2min

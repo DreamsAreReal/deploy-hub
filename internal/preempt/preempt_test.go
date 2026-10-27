@@ -139,7 +139,7 @@ func (f *fakeGitHub) one(w http.ResponseWriter, r *http.Request, parts []string,
 		http.Error(w, "boom", http.StatusInternalServerError)
 	case len(parts) == 5 && parts[4] == "cancel" && r.Method == http.MethodPost:
 		f.cancelled = append(f.cancelled, key)
-		run.Status, run.Conclusion = done, conclusionCancel
+		run.Status, run.Conclusion = done, ConclusionCancel
 		w.WriteHeader(http.StatusAccepted)
 	case len(parts) == 5 && parts[4] == "rerun" && r.Method == http.MethodPost:
 		f.reruns = append(f.reruns, key)
@@ -184,7 +184,7 @@ func newFixture(t *testing.T) *fixture {
 }
 
 func push(id int64, status string) Run {
-	return Run{ID: id, Event: eventPush, HeadBranch: mainBranch, Status: status}
+	return Run{ID: id, Event: eventPush, HeadBranch: MainBranch, Status: status}
 }
 
 func pr(id int64, branch, status string) Run {
@@ -198,8 +198,8 @@ func TestAWaitingMainDeployCancelsOnlyPullRequestRuns(t *testing.T) {
 	f.gh.add(repoA, pr(3, prBranch, running))
 	f.gh.add(repoA, pr(4, "other", queued))
 	f.gh.add(repoA, pr(5, "old", done))
-	f.gh.add(repoA, Run{ID: 6, Event: dispatch, HeadBranch: mainBranch, Status: running})
-	f.gh.add(repoA, Run{ID: 8, Event: "schedule", HeadBranch: mainBranch, Status: queued})
+	f.gh.add(repoA, Run{ID: 6, Event: dispatch, HeadBranch: MainBranch, Status: running})
+	f.gh.add(repoA, Run{ID: 8, Event: "schedule", HeadBranch: MainBranch, Status: queued})
 	f.gh.add(repoB, pr(9, prBranch, running))
 	testutil.NoErr(t, f.p.Run(context.Background()))
 	testutil.Equal(t, strings.Join(f.gh.cancelled, " "), "tasks/4 tasks/3")
@@ -402,7 +402,7 @@ func TestOnlyActivePullRequestRunsAreLookedAtAgain(t *testing.T) {
 	f := newFixture(t)
 	f.gh.add(repoA, push(1, queued))
 	f.gh.add(repoA, pr(2, prBranch, done))
-	f.gh.add(repoA, Run{ID: 3, Event: dispatch, HeadBranch: mainBranch, Status: running})
+	f.gh.add(repoA, Run{ID: 3, Event: dispatch, HeadBranch: MainBranch, Status: running})
 	f.gh.add(repoA, pr(4, prBranch, running))
 	log := logged(f)
 	testutil.NoErr(t, f.p.Run(context.Background()))
@@ -476,7 +476,7 @@ func TestARunFinishedOtherwiseCountsNoRerun(t *testing.T) {
 	testutil.Equal(t, f.metrics.value(obs.MetricPreemptRerun, repoA), 0.0)
 	f.gh.notPR = 2
 	f.gh.mu.Lock()
-	f.gh.runs[repoA][2].Conclusion = conclusionCancel
+	f.gh.runs[repoA][2].Conclusion = ConclusionCancel
 	f.gh.mu.Unlock()
 	st, err := Load(f.p.State)
 	testutil.NoErr(t, err)
