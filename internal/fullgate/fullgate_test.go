@@ -217,6 +217,7 @@ func TestNothingStartsOutsideTheNightWindowOfTbilisi(t *testing.T) {
 		testutil.Equal(t, len(f.gh.dispatches), 0)
 		testutil.Equal(t, f.success(t), 1.0)
 		testutil.Equal(t, f.state(t).Since[appTasks], at.UTC())
+		testutil.Equal(t, len(f.gh.recentQueried), 0)
 	}
 }
 
@@ -385,7 +386,7 @@ func TestAPassedRunIsRecordedAndPostedToTheFeed(t *testing.T) {
 }
 
 func TestEveryOtherConclusionIsARedRun(t *testing.T) {
-	for _, conclusion := range []string{failure, "timed_out", "startup_failure", "skipped", ""} {
+	for _, conclusion := range []string{failure, "timed_out", "startup_failure", "skipped", preempt.ConclusionCancel, ""} {
 		f := newFixture(t)
 		f.startTasks(t)
 		f.gh.runs[dispatchRun] = finished(conclusion)
@@ -515,4 +516,48 @@ func TestTheStateFileIsPrivate(t *testing.T) {
 func TestLoadReportsAnUnreadableFile(t *testing.T) {
 	_, err := Load(t.TempDir())
 	testutil.Fails(t, err)
+}
+
+func TestNoGitHubCallIsMadeWhileNoAppIsDue(t *testing.T) {
+	f := newFixture(t)
+	st := f.state(t)
+	for _, app := range []string{appBot, appSTT, appTasks} {
+		st.Results[app] = Result{At: f.now.Add(-24 * time.Hour), Passed: true}
+	}
+	f.save(t, st)
+	f.gh.failRecent = true
+	testutil.NoErr(t, f.tick(t))
+	testutil.Equal(t, len(f.gh.recentQueried), 0)
+}
+
+func TestAFailedLookOverTheRunnersStartsNothing(t *testing.T) {
+	f := newFixture(t)
+	f.gh.failRecent = true
+	testutil.Is(t, f.tick(t), errBoom)
+	testutil.Equal(t, len(f.gh.dispatches), 0)
+	testutil.Equal(t, f.state(t).Night, "")
+}
+
+func TestARunThatCannotBeReadForThirtyHoursIsGivenUp(t *testing.T) {
+	f := newFixture(t)
+	f.startTasks(t)
+	f.gh.failGet = true
+	f.now = f.now.Add(abandonAfter - time.Hour - time.Second)
+	testutil.Is(t, f.tick(t), errBoom)
+	testutil.True(t, f.state(t).Current != nil, "still followed")
+	f.now = f.now.Add(time.Second)
+	testutil.Is(t, f.tick(t), errBoom)
+	testutil.True(t, f.state(t).Current == nil, "given up")
+	_, recorded := f.state(t).Results[appTasks]
+	testutil.True(t, !recorded, "no result for a lost run")
+}
+
+func TestAStateWithEmptiedMapsStillRuns(t *testing.T) {
+	f := newFixture(t)
+	testutil.NoErr(t, os.WriteFile(f.s.State, []byte(`{"results":null,"since":null,"tried":null}`), 0o600))
+	testutil.NoErr(t, f.tick(t))
+	st := f.state(t)
+	testutil.Equal(t, st.Tried[appBot], f.now.UTC())
+	testutil.Equal(t, len(st.Since), 3)
+	testutil.Equal(t, len(st.Results), 0)
 }

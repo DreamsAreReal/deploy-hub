@@ -155,7 +155,6 @@ images:
 apps:
   deploy-hub:
     repo: DreamsAreReal/deploy-hub
-    full_gate: ci.yml
     kind: binary
     accepted_workflow_findings:
       - rule: self-hosted-runner

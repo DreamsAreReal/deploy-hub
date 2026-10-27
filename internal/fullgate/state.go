@@ -41,7 +41,13 @@ func Load(path string) (State, error) {
 	if err != nil {
 		return st, err
 	}
-	return st, json.Unmarshal(data, &st)
+	if err := json.Unmarshal(data, &st); err != nil {
+		return st, err
+	}
+	st.Results = filled(st.Results)
+	st.Since = filled(st.Since)
+	st.Tried = filled(st.Tried)
+	return st, nil
 }
 
 func (s *State) Save(path string) error {
@@ -81,4 +87,11 @@ func (s *State) turn(app string) time.Time {
 		return tried
 	}
 	return last
+}
+
+func filled[V any](m map[string]V) map[string]V {
+	if m == nil {
+		return map[string]V{}
+	}
+	return m
 }

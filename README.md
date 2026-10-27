@@ -1074,8 +1074,10 @@ has `full_gate: <workflow file>` (the caller workflow in the app repo's
 (`/var/lib/ci/<repo>/runner/.runner`). One run of the command:
 
 - **starts** at most one app a night, between 01:00 and 03:00 Tbilisi time
-  (UTC+4), and only while no gated workflow of any runner repo is queued or
-  running, so a full gate never shares the CPUs with another gate. It takes the
+  (UTC+4), and only while no caller workflow of the rotation (any `full_gate`
+  workflow, in any of its repos) is queued or running, so a full gate does not
+  share the CPUs with another gate; every gated workflow of a runner repo
+  therefore belongs in the rotation. It takes the
   app whose last full gate is oldest (an app with none first, policy order on a
   tie); an app is due 6.5 days after its last result. It dispatches the app's
   workflow on `main` with the input `full=true` (`workflow_dispatch`); the
@@ -1084,11 +1086,13 @@ has `full_gate: <workflow file>` (the caller workflow in the app repo's
 - **follows** the dispatched run: it finds it among the `workflow_dispatch` runs
   of that workflow created since the dispatch (gives up after 30 minutes), and
   when the run ends records the result. `success` passes; every other
-  conclusion but `cancelled` is a red run.
+  conclusion is a red run, a cancel by anyone but the command itself (a person,
+  the job timeout) included. A run it cannot read for 30 hours after the
+  dispatch is given up without a result.
 - **gives way**: when another gated run of any runner repo is queued or starts
   while the full gate runs (a deploy in the morning, a pull request gate), it
-  cancels its own run. A cancelled run records no result, so the app stays due
-  and runs on a later night.
+  cancels its own run. A run it cancelled itself records no result, so the app
+  stays due and runs on a later night.
 
 A dispatch that GitHub refuses (for example `422` while the caller workflow
 does not declare the `full` input yet) also uses up the night and moves that

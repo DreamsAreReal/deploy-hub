@@ -23,6 +23,7 @@ const (
 	windowOpens   = time.Hour
 	windowCloses  = 3 * time.Hour
 	lostAfter     = 30 * time.Minute
+	abandonAfter  = 30 * time.Hour
 	clockSkew     = 2 * time.Minute
 	tbilisiOffset = 4 * 60 * 60
 	inputFull     = "full"
@@ -93,14 +94,10 @@ func (s Scheduler) Run(ctx context.Context) error {
 }
 
 func (s Scheduler) step(ctx context.Context, st *State, now time.Time) error {
-	busy, err := s.busy(ctx)
-	if err != nil {
-		return err
-	}
 	if st.Current != nil {
-		return s.follow(ctx, st, busy, now)
+		return s.follow(ctx, st, now)
 	}
-	return s.start(ctx, st, busy, now)
+	return s.start(ctx, st, now)
 }
 
 func (s Scheduler) busy(ctx context.Context) ([]preempt.Run, error) {
@@ -144,7 +141,7 @@ func (s Scheduler) target(app string) (Target, bool) {
 	return s.Targets[i], true
 }
 
-func (s Scheduler) follow(ctx context.Context, st *State, busy []preempt.Run, now time.Time) error {
+func (s Scheduler) follow(ctx context.Context, st *State, now time.Time) error {
 	cur := st.Current
 	t, ok := s.target(cur.App)
 	if !ok {
@@ -156,20 +153,36 @@ func (s Scheduler) follow(ctx context.Context, st *State, busy []preempt.Run, no
 	}
 	run, err := s.Actions.Get(ctx, t.Repo, cur.RunID)
 	if err != nil {
-		return err
+		return s.abandon(st, now, err)
 	}
 	if run.Status == preempt.StatusCompleted {
 		s.finish(ctx, st, t, run, now)
 		return nil
 	}
-	if cur.Yielded || !othersBusy(busy, run.ID) {
+	if cur.Yielded {
 		return nil
 	}
-	if err := s.Actions.Cancel(ctx, t.Repo, run.ID); err != nil {
+	return s.yield(ctx, cur, t, run.ID)
+}
+
+func (s Scheduler) abandon(st *State, now time.Time, err error) error {
+	if now.Sub(st.Current.Dispatched) >= abandonAfter {
+		s.Log.Warn("full gate run cannot be read and is given up", "app", st.Current.App, "run", st.Current.RunID)
+		st.Current = nil
+	}
+	return err
+}
+
+func (s Scheduler) yield(ctx context.Context, cur *Current, t Target, own int64) error {
+	busy, err := s.busy(ctx)
+	if err != nil || !othersBusy(busy, own) {
+		return err
+	}
+	if err := s.Actions.Cancel(ctx, t.Repo, own); err != nil {
 		return err
 	}
 	cur.Yielded = true
-	s.Log.Info("full gate yields to another gate and runs again on a later night", "app", t.App, "run", run.ID)
+	s.Log.Info("full gate yields to another gate and runs again on a later night", "app", t.App, "run", own)
 	return nil
 }
 
@@ -205,9 +218,10 @@ func firstSince(runs []preempt.Run, after time.Time) int64 {
 }
 
 func (s Scheduler) finish(ctx context.Context, st *State, t Target, run preempt.Run, now time.Time) {
+	yielded := st.Current.Yielded
 	st.Current = nil
-	if run.Conclusion == preempt.ConclusionCancel {
-		s.Log.Info("full gate run was cancelled and runs again on a later night", "app", t.App, "run", run.ID)
+	if yielded && run.Conclusion == preempt.ConclusionCancel {
+		s.Log.Info("full gate run gave way and runs again on a later night", "app", t.App, "run", run.ID)
 		return
 	}
 	res := Result{At: now, Passed: run.Conclusion == conclusionOK, SHA: run.HeadSHA, URL: run.URL}
@@ -230,15 +244,19 @@ func (s Scheduler) notify(ctx context.Context, t Target, res Result) {
 	s.Metrics.Push(context.WithoutCancel(ctx), []obs.Sample{{Name: obs.MetricDeliverySuccess, Labels: obs.Labels{}, Value: obs.Bool(err == nil)}})
 }
 
-func (s Scheduler) start(ctx context.Context, st *State, busy []preempt.Run, now time.Time) error {
+func (s Scheduler) start(ctx context.Context, st *State, now time.Time) error {
 	local := now.In(Tbilisi)
 	night := local.Format(time.DateOnly)
-	if !inWindow(local) || st.Night == night || len(busy) > 0 {
+	if !inWindow(local) || st.Night == night {
 		return nil
 	}
 	t, ok := s.due(st, now)
 	if !ok {
 		return nil
+	}
+	busy, err := s.busy(ctx)
+	if err != nil || len(busy) > 0 {
+		return err
 	}
 	st.Night, st.Tried[t.App] = night, now
 	if err := s.Actions.Dispatch(ctx, t.Repo, t.Workflow, preempt.MainBranch, map[string]string{inputFull: inputOn}); err != nil {
