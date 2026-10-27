@@ -308,8 +308,8 @@ to those sources is a new engine. A binary built without it (`go run`, `make
 gate`) neither reuses nor stores any verdict. When anything in a mutant's key
 changes, the mutant runs again. A package whose tests left no test log is never cached.
 What stays outside the key is a read made by a package-level variable
-initializer or by a child process of a test; the scheduled full run without the
-cache is the backstop for those. A run that stops early (an errored mutant, the
+initializer or by a child process of a test; the weekly full gate without the
+cache ([Weekly full gate](#weekly-full-gate)) is the backstop for those. A run that stops early (an errored mutant, the
 check timeout) still keeps the verdicts it finished; a mutant whose run was cut
 off by the cancellation is never kept.
 `deploy-hub gate --mutation-cache FILE --mutation-cache-sha256 sha256:HEX` takes
@@ -480,6 +480,8 @@ commands:
 | `ci-runner-sync` | root (called by `self-update`) | installs the embedded `server/ci-runner` into `/opt/deploy-hub/ci-runner` and runs `ci-runner-setup host` when it changed; restarts the idle runners after a change and the busy ones after their job |
 | `version` | anyone | prints the commit the binary was built from |
 | `prune` | root (systemd timer) | keeps the running image + 2 previous per app |
+| `preempt` | root (systemd timer every 30 seconds) | cancels pull request gates while a main deploy waits and re-runs them after (see [Self-hosted CI runner](#self-hosted-ci-runner)) |
+| `full-gate` | root (systemd timer every 5 minutes) | starts the weekly full gate of one app a night, follows it, records the result (see [Weekly full gate](#weekly-full-gate)) |
 | `provision --app … ` | root (from `onboard`) | prepares `/opt/<app>/` and the allowlist line |
 | `facts <app>` | root (from `onboard`) | reports what already exists on the server |
 | `onboard <repo> …` | operator machine | connects a GitHub repo end-to-end |
@@ -585,7 +587,7 @@ root SSH to. `<vps>` is the server address.
 
    ```
    tar -C server/systemd -cf - . | ssh vpn 'tar -C /etc/systemd/system -xf - --no-same-owner'
-   ssh vpn 'systemctl daemon-reload && systemctl enable --now deploy-hub-prune.timer deploy-hub-status.timer deploy-hub-self-update.timer deploy-hub-preempt.timer'
+   ssh vpn 'systemctl daemon-reload && systemctl enable --now deploy-hub-prune.timer deploy-hub-status.timer deploy-hub-self-update.timer deploy-hub-preempt.timer deploy-hub-full-gate.timer'
    ```
 
 8. **history-guard timer** — the `history-guard` workflow deletes every branch
@@ -1057,6 +1059,80 @@ every repo with a runner. Metrics: `deploy_hub_preempt_success`,
 24 h); alerts `DeployHubPreemptFailing` and `DeployHubPreemptRerunLoop` (one
 gate re-run more than 3 times).
 
+### Weekly full gate
+
+Incremental mutation testing reuses a verdict whenever nothing in its key
+changed, and a few reads stay outside that key (see the verdict cache under
+[The quality gate](#the-quality-gate)). Once a week every app therefore runs
+the whole gate again on its `main`, as a check only: nothing is reported to
+the runner, pushed or deployed.
+
+`deploy-hub-full-gate.timer` runs `deploy-hub full-gate` as root every 5
+minutes. Its rotation is every app of the policy compiled into the binary that
+has `full_gate: <workflow file>` (the caller workflow in the app repo's
+`.github/workflows/`) and whose repo has a runner on this host
+(`/var/lib/ci/<repo>/runner/.runner`). One run of the command:
+
+- **starts** at most one app a night, between 01:00 and 03:00 Tbilisi time
+  (UTC+4), and only while no caller workflow of the rotation (any `full_gate`
+  workflow, in any of its repos) is queued or running, so a full gate does not
+  share the CPUs with another gate; every gated workflow of a runner repo
+  therefore belongs in the rotation. It takes the
+  app whose last full gate is oldest (an app with none first, policy order on a
+  tie); an app is due 6.5 days after its last result. It dispatches the app's
+  workflow on `main` with the input `full=true` (`workflow_dispatch`); the
+  caller passes it to `deploy.yml` as `full: ${{ inputs.full == true }}`, and
+  `deploy.yml` then runs as a gate-only job named `full gate`.
+- **follows** the dispatched run: it finds it among the `workflow_dispatch` runs
+  of that workflow created since the dispatch (gives up after 30 minutes), and
+  when the run ends records the result. `success` passes; every other
+  conclusion is a red run, a cancel by anyone but the command itself (a person,
+  the job timeout) included. A run it cannot read for 30 hours after the
+  dispatch is given up without a result.
+- **gives way**: when another gated run of any runner repo is queued or starts
+  while the full gate runs (a deploy in the morning, a pull request gate), it
+  cancels its own run. A run it cancelled itself records no result, so the app
+  stays due and runs on a later night.
+
+A dispatch that GitHub refuses (for example `422` while the caller workflow
+does not declare the `full` input yet) also uses up the night and moves that
+app behind the other due apps, so one broken caller cannot block the rotation.
+
+A result goes to the tracker as the delivery step `checks ok|fail` with the
+detail `full gate` and the run URL (`delivery_url` of `hub.conf`), and to the
+metrics `deploy_hub_full_gate_passed{app}` (1/0, from the first result on),
+`deploy_hub_full_gate_age_seconds{app}` (since the last result, or since the
+app joined the rotation), `deploy_hub_full_gate_running{app}` and
+`deploy_hub_full_gate_success` (the command run itself), pushed on every run.
+Alerts: `DeployHubFullGateFailed` (the last full gate of an app is red; through
+the tracker's alert intake it opens a task, and it clears when the next one
+passes), `DeployHubFullGateOverdue` (no result for 8 days) and
+`DeployHubFullGateFailing` (no command run succeeded for 30 minutes). State:
+`/var/lib/deploy-hub/full-gate.json` (results with sha and run URL, the run in
+progress, the night last used). The token of `/etc/deploy-hub/github.token`
+needs **Actions: Read and write** on every runner repo, as for `preempt`.
+
+An app joins the rotation with `full_gate:` in `policy/gate.yaml` and a caller
+workflow that declares the input:
+
+```
+on:
+  push: {branches: [main]}
+  workflow_dispatch:
+    inputs:
+      full: {description: Weekly full gate of main started by the hub, required: true, type: boolean, default: true}
+jobs:
+  deploy:
+    uses: DreamsAreReal/deploy-hub/.github/workflows/deploy.yml@main
+    with:
+      app: <app>
+      full: ${{ inputs.full == true }}
+```
+
+A push run has no inputs, so `inputs.full == true` is false and the push deploys
+as before. Check the rotation on the VPS: `cat /var/lib/deploy-hub/full-gate.json`
+and `journalctl -u deploy-hub-full-gate.service -n 50`.
+
 Moving from the shared user `ci` of the first version: `host` stops every runner,
 removes the user `ci`, its drop-ins and its files on the CI disk, then each
 repo is registered again with the `register` line above (`--replace` takes
@@ -1362,6 +1438,10 @@ time quantiles are recording rules in the observability repo
 | `deploy_hub_request` | verb, app | one sample per runner request for a registered app (`app="-"` for `status`) |
 | `deploy_hub_request_refused` | verb, reason | one sample per refusal; reason `bad-request`, `unknown-app`, `bad-tag`, `bad-compose`, `no-identity`, `identity-unverified`, `no-repo-binding`, `not-gated`, `bad-digest`, `bad-verdict`, `bad-cache` |
 | `deploy_hub_mutation_cache_intact` | app | 1 when the stored mutation cache matched its recorded sha256 on read, 0 when it did not |
+| `deploy_hub_full_gate_passed` | app | 1 when the last weekly full gate of the app passed, 0 when it was red |
+| `deploy_hub_full_gate_age_seconds` | app | seconds since the last weekly full gate result (since the app joined the rotation while it has none) |
+| `deploy_hub_full_gate_running` | app | 1 while the weekly full gate of the app is dispatched or running |
+| `deploy_hub_full_gate_success` | — | 1/0 for every `full-gate` run |
 | `deploy_hub_delivery_success` | — | 1/0 for the tracker post of the run (absent when delivery is off or there was nothing to post) |
 | `deploy_hub_journal_readable` | — | 0 when `deploys.log` could not be read; the journal counters are then not pushed |
 
@@ -1374,7 +1454,7 @@ rollback, a gate rejection (per check, `ci-<step>` included), a crashed gate
 check, any refused request, an app unhealthy for 5 minutes, a failed Caddy
 sync, a failed host-sync, a self-update failing for 40 minutes, a deploy waiting over 120 s for the lock, a failed tracker post and an
 unreadable journal, a self-hosted CI runner offline for 10 minutes, its
-state not pushed, broken CI isolation, and the CI disk over 85%. `go test ./internal/obs` fails when a rule uses a metric
+state not pushed, broken CI isolation, the CI disk over 85%, and a red, overdue or failing weekly full gate. `go test ./internal/obs` fails when a rule uses a metric
 that the code does not declare, or when a problem metric has no rule.
 
 To load them, copy the file into the observability stack's `rules/` directory

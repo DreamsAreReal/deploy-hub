@@ -146,3 +146,21 @@ groups:
         annotations:
           summary: "A pull request gate of {{ $labels.repo }} was preempted and re-run {{ $value }} times"
           description: "Main deploys keep cancelling the same pull request gate, so it never finishes. Merge less often for a while or let the gate finish; the runs are in /var/lib/deploy-hub/preempt.json on the VPS."
+
+      - alert: DeployHubFullGateFailed
+        expr: min by (app) (last_over_time(deploy_hub_full_gate_passed[30m])) == 0
+        annotations:
+          summary: "The weekly full gate of {{ $labels.app }} failed"
+          description: "The weekly gate run without the mutation cache failed on the main of {{ $labels.app }}, so main does not pass the gate as it stands: an incremental run may have reused a verdict it should not have, or something outside the repo changed. Nothing was deployed. The run is in /var/lib/deploy-hub/full-gate.json (url) on the VPS; fix the cause on main. The alert clears when the next weekly run of {{ $labels.app }} passes."
+
+      - alert: DeployHubFullGateOverdue
+        expr: max by (app) (last_over_time(deploy_hub_full_gate_age_seconds[30m])) > 8 * 86400
+        annotations:
+          summary: "{{ $labels.app }} has had no weekly full gate for {{ $value | humanizeDuration }}"
+          description: "deploy-hub full-gate starts one app a night between 01:00 and 03:00 Tbilisi time when no gate runs, and gives way (cancels its run) to any gate that starts meanwhile. Busy nights, an offline runner or a caller workflow without the full input keep an app waiting. On the VPS: cat /var/lib/deploy-hub/full-gate.json; journalctl -u deploy-hub-full-gate.service -n 50."
+
+      - alert: DeployHubFullGateFailing
+        expr: max(max_over_time(deploy_hub_full_gate_success[30m])) == 0
+        annotations:
+          summary: "deploy-hub full-gate has failed for 30 minutes"
+          description: "The weekly full gate runs are not dispatched or followed. On the VPS: journalctl -u deploy-hub-full-gate.service -n 50 (a 401/403 means the token in /etc/deploy-hub/github.token lacks Actions: Read and write on a runner repo; a 422 means the caller workflow of the app has no workflow_dispatch input full)."

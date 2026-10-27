@@ -13,10 +13,10 @@ import (
 const (
 	EventPullRequest = "pull_request"
 	eventPush        = "push"
-	mainBranch       = "main"
-	statusCompleted  = "completed"
+	MainBranch       = "main"
+	StatusCompleted  = "completed"
 	statusInProgress = "in_progress"
-	conclusionCancel = "cancelled"
+	ConclusionCancel = "cancelled"
 	runnerMarker     = "runner/.runner"
 	DefaultCIRoot    = "/var/lib/ci"
 	DefaultState     = "/var/lib/deploy-hub/preempt.json"
@@ -45,13 +45,13 @@ func isPR(r Run) bool {
 	return r.Event == EventPullRequest
 }
 
-func active(r Run) bool {
+func Active(r Run) bool {
 	return waiting[r.Status] || r.Status == statusInProgress
 }
 
 func mainWaits(runs []Run) bool {
 	for _, r := range runs {
-		if r.Event == eventPush && r.HeadBranch == mainBranch && waiting[r.Status] {
+		if r.Event == eventPush && r.HeadBranch == MainBranch && waiting[r.Status] {
 			return true
 		}
 	}
@@ -115,7 +115,7 @@ func (p Preempter) cancel(ctx context.Context, repo string, runs []Run, st *Stat
 	var t tally
 	var errs []error
 	for _, r := range runs {
-		if !isPR(r) || !active(r) {
+		if !isPR(r) || !Active(r) {
 			continue
 		}
 		done, err := p.cancelOne(ctx, repo, r.ID, st)
@@ -129,7 +129,7 @@ func (p Preempter) cancel(ctx context.Context, repo string, runs []Run, st *Stat
 
 func (p Preempter) cancelOne(ctx context.Context, repo string, id int64, st *State) (bool, error) {
 	fresh, err := p.GitHub.Get(ctx, repo, id)
-	if err != nil || !isPR(fresh) || !active(fresh) {
+	if err != nil || !isPR(fresh) || !Active(fresh) {
 		return false, err
 	}
 	if err := p.GitHub.Cancel(ctx, repo, fresh.ID); err != nil {
@@ -163,10 +163,10 @@ func (p Preempter) settle(ctx context.Context, repo string, runs []Run, e *Entry
 		return false, nil
 	}
 	r, err := p.GitHub.Get(ctx, repo, e.ID)
-	if err != nil || r.Status != statusCompleted {
+	if err != nil || r.Status != StatusCompleted {
 		return false, err
 	}
-	if !isPR(r) || r.Conclusion != conclusionCancel {
+	if !isPR(r) || r.Conclusion != ConclusionCancel {
 		e.Pending = false
 		return false, nil
 	}

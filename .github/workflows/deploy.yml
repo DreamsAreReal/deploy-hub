@@ -17,6 +17,11 @@ on:
         required: false
         type: string
         default: ""
+      full:
+        description: Weekly full gate started by deploy-hub full-gate on the hub host; only the gate runs, nothing is reported, pushed or deployed
+        required: false
+        type: boolean
+        default: false
     secrets:
       VPS_SSH_KEY:
         required: false
@@ -32,7 +37,7 @@ permissions: {}
 
 jobs:
   deploy:
-    name: ${{ (github.event_name == 'pull_request' || (github.repository == 'DreamsAreReal/deploy-hub' && inputs.app == 'deploy-hub')) && 'gate' || 'gate and deploy' }}
+    name: ${{ inputs.full && 'full gate' || (github.event_name == 'pull_request' || (github.repository == 'DreamsAreReal/deploy-hub' && inputs.app == 'deploy-hub')) && 'gate' || 'gate and deploy' }}
     runs-on: ${{ fromJSON('["self-hosted", "linux", "eu"]') }}
     timeout-minutes: 360
     permissions:
@@ -42,7 +47,7 @@ jobs:
     env:
       APP: ${{ inputs.app }}
       HUB: ${{ github.repository == 'DreamsAreReal/deploy-hub' && inputs.app == 'deploy-hub' }}
-      GATE_ONLY: ${{ github.event_name == 'pull_request' || (github.repository == 'DreamsAreReal/deploy-hub' && inputs.app == 'deploy-hub') }}
+      GATE_ONLY: ${{ inputs.full || github.event_name == 'pull_request' || (github.repository == 'DreamsAreReal/deploy-hub' && inputs.app == 'deploy-hub') }}
       VPS_USER: deploy
       OIDC_AUDIENCE: deploy-hub
     steps:

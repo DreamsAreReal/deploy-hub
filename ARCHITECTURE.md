@@ -37,7 +37,7 @@ programs that subcommand may execute.
 | GitHub Actions runner of an **app** repo | `.github/workflows/deploy.yml` (reusable workflow from this repo) | `tools`, `render`, `gate` | install pinned scanners, render the app's compose file, run the quality gate |
 | EU runner `eu-deploy-hub` of **this** repo | `.github/workflows/ci.yml` → `deploy.yml` | `tools`, `gate` | the same gate, run on deploy-hub itself |
 | **VPS**, user `deploy` | SSH forced command | `runner` | `deploy`, `report`, `rollback`, `status`, `history` |
-| **VPS**, root | sudo (narrow rules), systemd timers, `onboard` over root SSH | `caddy-sync`, `host-sync`, `self-update`, `sudoers-sync`, `prune`, `provision`, `facts` | HTTPS routes, host files from a gated image, image cleanup, preparing `/opt/<app>/` |
+| **VPS**, root | sudo (narrow rules), systemd timers, `onboard` over root SSH | `caddy-sync`, `host-sync`, `self-update`, `sudoers-sync`, `prune`, `provision`, `facts`, `preempt`, `full-gate` | HTTPS routes, host files from a gated image, image cleanup, preparing `/opt/<app>/`, main deploys overtaking pull request gates, the weekly full gate of one app a night |
 | **Operator machine** | you | `onboard` | connect a new app repo end to end |
 | **Operator machine**, under an MCP client | Claude Code, Claude Desktop or any MCP client | `mcp` | MCP server on stdio: `status`, `history`, `rollback` tools, each one SSH request to the runner with the deploy key |
 
@@ -275,6 +275,8 @@ internal/selfupdate/ `self-update` and `sudoers-sync`: install a gated release o
 internal/onboard/   `onboard` on the operator machine: stub, secrets, provision
 internal/mcp/       `mcp`: JSON-RPC over stdio, tool schemas, argument checks before SSH
 internal/prune/     keep running image + 2 previous per app
+internal/preempt/   GitHub Actions client; cancel pull request gates while a main deploy waits
+internal/fullgate/  weekly full gate: dispatch one app a night, follow the run, give way to other gates
 internal/obs/       slog logger, metric names (names.go), pusher, journal-derived counters
 internal/delivery/  post deploy steps to the task tracker
 internal/tools/     install pinned scanners from policy/tools.yaml
@@ -285,7 +287,7 @@ internal/testutil/  assertions for tests
 internal/gate/      the quality gate (below)
 e2e/                end-to-end tests of the real binary with fake docker/caddy/sudo
 policy/             gate.yaml, tools.yaml, golangci.yml, workflow-audit.yml, per-language tool locks
-server/systemd/     timers: status every minute, prune daily, history-guard every 5 min
+server/systemd/     timers: status every minute, prune daily, history-guard every 5 min, preempt every 30 s, full-gate every 5 min
 server/vmalert/     alert rules for the hub's metrics
 .github/            ci.yml, deploy.yml (reusable), history-guard.yml, actions/hub
 ```

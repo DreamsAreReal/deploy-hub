@@ -92,3 +92,12 @@ func TestNotifierOutcomeWithoutAPostOrAURL(t *testing.T) {
 	testutil.Is(t, delivery.Discard{}.Notify(t.Context(), steps), delivery.ErrDisabled)
 	testutil.Equal(t, calls, 0)
 }
+
+func TestAStepCarriesItsLinkOnlyWhenItHasOne(t *testing.T) {
+	linked, err := json.Marshal(delivery.Step{Repo: label, Step: delivery.StepChecks, URL: "https://github.com/Owner/web/actions/runs/1"})
+	testutil.NoErr(t, err)
+	testutil.Contains(t, string(linked), `"url":"https://github.com/Owner/web/actions/runs/1"`)
+	plain, err := json.Marshal(delivery.Step{Repo: label, Step: delivery.StepChecks})
+	testutil.NoErr(t, err)
+	testutil.Excludes(t, string(plain), "url")
+}
