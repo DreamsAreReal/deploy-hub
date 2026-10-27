@@ -637,6 +637,7 @@ apps:
   router-ax23:
     repo: DreamsAreReal/router-ax23
     kind: binary
+    shell_utilities: busybox
     scenarios:
       - id: youtube-hello-passes-the-dpi-split-and-out-of-order
         category: business
@@ -668,6 +669,12 @@ apps:
           - internal/health.TestInternetIsCheckedOnANonYouTubeSiteAndYouTubeSeparately
           - internal/health.TestBrokenVPSFailsTheRightChecks
           - cmd/vps-health.TestVPSHealthServesTheHealthDocument
+      - id: youtube-falls-back-to-the-direct-path
+        category: business
+        tests:
+          - wgru-watchdog.bats > a stale tunnel drops the YouTube route and is bounced
+          - wgru-watchdog.bats > YouTube switched off in the bot goes direct without bouncing the tunnel
+          - wgru-watchdog.bats > a fresh tunnel loads the QUIC reject rule and sends YouTube DNS through it
   observability:
     repo: DreamsAreReal/observability
     kind: worker
