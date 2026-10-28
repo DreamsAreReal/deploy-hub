@@ -20,6 +20,15 @@ const (
 	boardNarrow    = "board-360.png"
 )
 
+var (
+	keyA = strings.Repeat("a", 64)
+	keyB = strings.Repeat("b", 64)
+)
+
+func keyed(key string, lines ...string) string {
+	return "key=" + key + "\n" + strings.Join(lines, "")
+}
+
 func png(body string) []byte {
 	return []byte(pngMagic + body)
 }
@@ -34,6 +43,9 @@ func (e *env) baseline() (string, map[string]string) {
 	for _, line := range strings.Split(e.out.String(), "\n") {
 		if v, ok := strings.CutPrefix(line, "from="); ok {
 			from = v
+		}
+		if v, ok := strings.CutPrefix(line, "key="); ok {
+			from += " " + v
 		}
 		if v, ok := strings.CutPrefix(line, "shot="); ok {
 			name, encoded, _ := strings.Cut(v, shotSeparator)
@@ -50,13 +62,13 @@ func TestUIBaselineIsKeptOnlyForTheDeployedTagAndServedBack(t *testing.T) {
 	testutil.Equal(t, e.dispatch(baselineGetCmd, ""), ExitOK)
 	testutil.Equal(t, e.out.String(), "")
 	e.state(registry.DeployState{Current: goodTag})
-	testutil.Equal(t, e.dispatch(baselinePutCmd, shotLine(boardShot, png("wide"))+shotLine(boardNarrow, png("narrow"))), ExitOK)
+	testutil.Equal(t, e.dispatch(baselinePutCmd, keyed(keyA, shotLine(boardShot, png("wide")), shotLine(boardNarrow, png("narrow")))), ExitOK)
 	testutil.Contains(t, e.out.String(), "ui baseline: 2 shots of "+goodTag+" stored")
 	testutil.True(t, e.locker.released, "the lock is released")
 	e.out.Reset()
 	testutil.Equal(t, e.dispatch(baselineGetCmd, ""), ExitOK)
 	from, shots := e.baseline()
-	testutil.Equal(t, from, goodTag)
+	testutil.Equal(t, from, goodTag+" "+keyA)
 	testutil.Equal(t, shots, map[string]string{boardShot: string(png("wide")), boardNarrow: string(png("narrow"))})
 	want := e.ident.wants[len(e.ident.wants)-1]
 	testutil.Equal(t, []string{want.Repository, want.WorkflowRef, want.Commit}, []string{appRepo, hubRef, strings.TrimPrefix(goodTag, "sha-")})
@@ -66,14 +78,24 @@ func TestUIBaselineIsKeptOnlyForTheDeployedTagAndServedBack(t *testing.T) {
 func TestUIBaselineOfTheSameTagMergesAndANewTagReplacesIt(t *testing.T) {
 	e := newEnv(t)
 	e.state(registry.DeployState{Current: goodTag})
-	testutil.Equal(t, e.dispatch(baselinePutCmd, shotLine(boardShot, png("wide"))), ExitOK)
-	testutil.Equal(t, e.dispatch(baselinePutCmd, shotLine(boardNarrow, png("narrow"))), ExitOK)
-	e.state(registry.DeployState{Current: nextTag, Previous: goodTag})
-	testutil.Equal(t, e.dispatch(VerbBaselinePut+" "+appName+" "+nextTag, shotLine(boardShot, png("new"))), ExitOK)
+	testutil.Equal(t, e.dispatch(baselinePutCmd, keyed(keyA, shotLine(boardShot, png("wide")))), ExitOK)
+	testutil.Equal(t, e.dispatch(baselinePutCmd, keyed(keyA, shotLine(boardNarrow, png("narrow")))), ExitOK)
+	e.out.Reset()
+	testutil.Equal(t, e.dispatch(baselineGetCmd, ""), ExitOK)
+	_, merged := e.baseline()
+	testutil.Equal(t, len(merged), 2)
+	testutil.Equal(t, e.dispatch(baselinePutCmd, keyed(keyB, shotLine(boardNarrow, png("browser")))), ExitOK)
 	e.out.Reset()
 	testutil.Equal(t, e.dispatch(baselineGetCmd, ""), ExitOK)
 	from, shots := e.baseline()
-	testutil.Equal(t, from, nextTag)
+	testutil.Equal(t, from, goodTag+" "+keyB)
+	testutil.Equal(t, shots, map[string]string{boardNarrow: string(png("browser"))})
+	e.state(registry.DeployState{Current: nextTag, Previous: goodTag})
+	testutil.Equal(t, e.dispatch(VerbBaselinePut+" "+appName+" "+nextTag, keyed(keyB, shotLine(boardShot, png("new")))), ExitOK)
+	e.out.Reset()
+	testutil.Equal(t, e.dispatch(baselineGetCmd, ""), ExitOK)
+	from, shots = e.baseline()
+	testutil.Equal(t, from, nextTag+" "+keyB)
 	testutil.Equal(t, shots, map[string]string{boardShot: string(png("new"))})
 	_, err := os.Stat(e.svc.Paths.UIBaseline(appName) + baselineOldDir)
 	testutil.True(t, os.IsNotExist(err), "the replaced set is gone")
@@ -82,17 +104,19 @@ func TestUIBaselineOfTheSameTagMergesAndANewTagReplacesIt(t *testing.T) {
 func TestUIBaselineRefusesTagsThatAreNotLiveAndMalformedShots(t *testing.T) {
 	e := newEnv(t)
 	e.state(registry.DeployState{Current: nextTag})
-	testutil.Equal(t, e.dispatch(baselinePutCmd, shotLine(boardShot, png("x"))), ExitFail)
+	testutil.Equal(t, e.dispatch(baselinePutCmd, keyed(keyA, shotLine(boardShot, png("x")))), ExitFail)
 	e.expectOut(e.err, msgBaselineStale)
 	e.state(registry.DeployState{Current: goodTag})
 	for _, stdin := range []string{
-		"",
-		shotLine("Board.png", png("x")),
-		shotLine("board.jpg", png("x")),
-		shotLine("../board.png", png("x")),
-		shotLine(boardShot, []byte("GIF89a")),
-		"shot=" + boardShot + "\n",
-		"shot=" + boardShot + shotSeparator + "%%%\n",
+		keyed(keyA),
+		keyed(keyA, shotLine("Board.png", png("x"))),
+		keyed(keyA, shotLine("board.jpg", png("x"))),
+		keyed(keyA, shotLine("../board.png", png("x"))),
+		keyed(keyA, shotLine(boardShot, []byte("GIF89a"))),
+		keyed(keyA, "shot="+boardShot+"\n"),
+		keyed(keyA, "shot="+boardShot+shotSeparator+"%%%\n"),
+		shotLine(boardShot, png("x")),
+		keyed("ABC", shotLine(boardShot, png("x"))),
 	} {
 		e.err.Reset()
 		testutil.Equal(t, e.dispatch(baselinePutCmd, stdin), ExitFail)
@@ -109,12 +133,12 @@ func TestUIBaselineNeedsTheHubWorkflowIdentity(t *testing.T) {
 	for _, raw := range []string{baselineGetCmd, baselinePutCmd} {
 		e := newEnv(t)
 		e.bare = true
-		testutil.Equal(t, e.dispatch(raw, shotLine(boardShot, png("x"))), ExitFail)
+		testutil.Equal(t, e.dispatch(raw, keyed(keyA, shotLine(boardShot, png("x")))), ExitFail)
 		e.expectOut(e.err, msgNoIdentity)
 		e2 := newEnv(t)
 		e2.state(registry.DeployState{Current: goodTag})
 		e2.ident.err = oidc.ErrClaims
-		testutil.Equal(t, e2.dispatch(raw, shotLine(boardShot, png("x"))), ExitFail)
+		testutil.Equal(t, e2.dispatch(raw, keyed(keyA, shotLine(boardShot, png("x")))), ExitFail)
 		e2.expectOut(e2.err, msgUnverified)
 	}
 	_, err := ParseRequest(baselineGetCmd + " extra")
@@ -126,6 +150,7 @@ func TestUIBaselineSkipsStrangeFilesAndReportsUnreadableOnes(t *testing.T) {
 	dir := e.svc.Paths.UIBaseline(appName)
 	testutil.Mkdir(t, filepath.Join(dir, "folder.png"))
 	testutil.Write(t, filepath.Join(dir, baselineTagFile), goodTag+"\n")
+	testutil.Write(t, filepath.Join(dir, baselineKeyFile), keyA+"\n")
 	testutil.Write(t, filepath.Join(dir, "notes.txt"), "x")
 	testutil.Write(t, filepath.Join(dir, boardShot), string(png("wide")))
 	testutil.NoErr(t, os.Symlink(filepath.Join(dir, boardShot), filepath.Join(dir, boardNarrow)))

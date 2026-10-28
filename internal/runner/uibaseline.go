@@ -22,6 +22,7 @@ const (
 	VerbBaselineGet  = "ui-baseline-get"
 	VerbBaselinePut  = "ui-baseline-put"
 	baselineTagFile  = "tag"
+	baselineKeyFile  = "render-key"
 	baselineNewDir   = ".new"
 	baselineOldDir   = ".old"
 	baselineDirPerm  = 0o700
@@ -33,6 +34,7 @@ const (
 
 var (
 	shotName         = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,99}\.png$`)
+	renderKey        = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	errBadShots      = errors.New(msgBadShots)
 	errBaselineStale = errors.New(msgBaselineStale)
 )
@@ -41,7 +43,7 @@ func (s *Service) baselineGet(ctx context.Context, raw string, entry registry.En
 	if _, code, ok := s.cacheRequest(ctx, raw, VerbBaselineGet, entry, tag, stdin); !ok {
 		return code
 	}
-	from, shots, err := s.loadBaseline(entry.Name)
+	from, key, shots, err := s.loadBaseline(entry.Name)
 	if errors.Is(err, fs.ErrNotExist) {
 		s.Log.Info("no ui baseline yet", "app", entry.Name)
 		return ExitOK
@@ -52,6 +54,7 @@ func (s *Service) baselineGet(ctx context.Context, raw string, entry registry.En
 		return ExitFail
 	}
 	s.Out.Printf(msgBaselineFrom, from)
+	s.Out.Printf(msgBaselineKey, key)
 	for _, name := range slices.Sorted(maps.Keys(shots)) {
 		s.Out.Printf(msgBaselineShot, name, base64.StdEncoding.EncodeToString(shots[name]))
 	}
@@ -65,6 +68,9 @@ func (s *Service) baselinePut(ctx context.Context, raw string, entry registry.En
 		return code
 	}
 	shots, err := decodeShots(c.meta.Shots)
+	if err == nil && !renderKey.MatchString(c.meta.Key) {
+		err = errBadShots
+	}
 	if err == nil && registry.LoadState(entry.Dir).Current != tag {
 		err = errBaselineStale
 	}
@@ -78,7 +84,7 @@ func (s *Service) baselinePut(ctx context.Context, raw string, entry registry.En
 		return ExitFail
 	}
 	defer release()
-	if err := s.storeBaseline(entry.Name, tag, shots); err != nil {
+	if err := s.storeBaseline(entry.Name, baselineSet{tag: tag, key: c.meta.Key, shots: shots}); err != nil {
 		s.Log.Error("ui baseline not stored", "app", entry.Name, "error", err.Error())
 		s.Err.Println(msgBaselineWrite)
 		return ExitFail
@@ -104,19 +110,31 @@ func decodeShots(lines []string) (map[string][]byte, error) {
 	return shots, nil
 }
 
-func (s *Service) loadBaseline(app string) (string, map[string][]byte, error) {
+type baselineSet struct {
+	tag   string
+	key   string
+	shots map[string][]byte
+}
+
+func (s *Service) loadBaseline(app string) (string, string, map[string][]byte, error) {
 	root, err := os.OpenRoot(s.Paths.UIBaseline(app))
 	if err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
 	defer func() { _ = root.Close() }()
 	from, err := root.ReadFile(baselineTagFile)
-	if err != nil {
-		return "", nil, err
+	key, keyErr := root.ReadFile(baselineKeyFile)
+	if err = errors.Join(err, keyErr); err != nil {
+		return "", "", nil, err
 	}
+	shots, err := readShots(root)
+	return strings.TrimSpace(string(from)), strings.TrimSpace(string(key)), shots, err
+}
+
+func readShots(root *os.Root) (map[string][]byte, error) {
 	entries, err := fs.ReadDir(root.FS(), ".")
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 	shots := map[string][]byte{}
 	for _, item := range entries {
@@ -125,24 +143,27 @@ func (s *Service) loadBaseline(app string) (string, map[string][]byte, error) {
 		}
 		data, err := root.ReadFile(item.Name())
 		if err != nil {
-			return "", nil, err
+			return nil, err
 		}
 		shots[item.Name()] = data
 	}
-	return strings.TrimSpace(string(from)), shots, nil
+	return shots, nil
 }
 
-func (s *Service) storeBaseline(app, tag string, shots map[string][]byte) error {
+func (s *Service) storeBaseline(app string, set baselineSet) error {
 	dir := s.Paths.UIBaseline(app)
-	from, err := os.ReadFile(filepath.Join(dir, baselineTagFile))
-	if err == nil && strings.TrimSpace(string(from)) == tag {
-		return writeShots(dir, shots)
+	from, tagErr := os.ReadFile(filepath.Join(dir, baselineTagFile))
+	key, keyErr := os.ReadFile(filepath.Join(dir, baselineKeyFile))
+	if tagErr == nil && keyErr == nil && strings.TrimSpace(string(from)) == set.tag && strings.TrimSpace(string(key)) == set.key {
+		return writeShots(dir, set.shots)
 	}
 	fresh, old := dir+baselineNewDir, dir+baselineOldDir
 	if err := errors.Join(os.RemoveAll(fresh), os.RemoveAll(old), os.MkdirAll(fresh, baselineDirPerm)); err != nil {
 		return err
 	}
-	if err := errors.Join(writeShots(fresh, shots), writeAtomic(filepath.Join(fresh, baselineTagFile), []byte(tag+"\n"))); err != nil {
+	err := errors.Join(writeShots(fresh, set.shots), writeAtomic(filepath.Join(fresh, baselineTagFile), []byte(set.tag+"\n")),
+		writeAtomic(filepath.Join(fresh, baselineKeyFile), []byte(set.key+"\n")))
+	if err != nil {
 		return err
 	}
 	if err := os.Rename(dir, old); err != nil && !errors.Is(err, fs.ErrNotExist) {

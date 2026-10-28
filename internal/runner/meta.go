@@ -40,6 +40,7 @@ type Meta struct {
 	Verdicts string
 	Mode     string
 	Run      string
+	Key      string
 	Shots    []string
 }
 
@@ -48,7 +49,7 @@ func ReadMeta(r io.Reader) (Meta, error) {
 	fields := map[string]*string{
 		"token": &m.Token, "actor": &m.Actor, "subject": &m.Subject, "start": &m.Start,
 		"compose": &m.Compose, metaMain: &m.Main, "hport": &m.HPort, "hmode": &m.HMode,
-		"oidc": &m.OIDC, "digest": &m.Digest, "verdict": &m.Verdict, "verdicts": &m.Verdicts, "mode": &m.Mode, "run": &m.Run,
+		"oidc": &m.OIDC, "digest": &m.Digest, "verdict": &m.Verdict, "verdicts": &m.Verdicts, "mode": &m.Mode, "run": &m.Run, "key": &m.Key,
 	}
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, initialBuffer), maxMetaLine)

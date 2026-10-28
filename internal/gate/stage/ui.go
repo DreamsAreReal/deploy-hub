@@ -3,6 +3,8 @@ package stage
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -56,6 +58,7 @@ const (
 	VisualFile      = ".gate/visual.yaml"
 	reasonVisual    = "the list of intended interface changes is invalid"
 	screenIDLimit   = 80
+	RenderKeyFile   = "render-key"
 )
 
 var screenID = regexp.MustCompile(fmt.Sprintf(`^[a-z0-9][a-z0-9-]{0,%d}$`, screenIDLimit-1))
@@ -141,6 +144,9 @@ func (s *Stage) crawl(ctx context.Context, accepted []string) gate.Outcome {
 		return gate.Fail(reasonNoCrawl, err.Error())
 	}
 	report, err := os.ReadFile(filepath.Clean(filepath.Join(dir, crawlReport)))
+	if err == nil {
+		err = os.WriteFile(filepath.Join(dir, RenderKeyFile), []byte(s.renderKey()+"\n"), crawlerFileMode)
+	}
 	if err != nil {
 		return gate.Fail(reasonNoCrawl, err.Error())
 	}
@@ -178,9 +184,30 @@ func (s *Stage) crawlArgs(name, scripts string, accepted []string) []string {
 	return append(args, s.ws.Policy.Images.Browser, nodeBinary, nodeTest, crawlerMount+"/"+crawler.File)
 }
 
+func (s *Stage) renderKey() string {
+	sum := sha256.New()
+	for _, part := range [][]byte{crawler.Script, []byte(s.ws.Policy.Images.Browser), []byte(FrozenAt)} {
+		sum.Write(part)
+		sum.Write([]byte{0})
+	}
+	return hex.EncodeToString(sum.Sum(nil))
+}
+
+func (s *Stage) baselineFits() bool {
+	if s.ws.UIBaseline == "" {
+		return false
+	}
+	key, err := os.ReadFile(filepath.Join(s.ws.UIBaseline, RenderKeyFile))
+	fits := err == nil && strings.TrimSpace(string(key)) == s.renderKey()
+	if !fits {
+		s.ws.Log.Info("screens not compared: no baseline, or it was taken by another crawler or browser", "baseline", s.ws.UIBaseline)
+	}
+	return fits
+}
+
 func (s *Stage) visualArgs(accepted []string) []string {
 	var args []string
-	if info, err := os.Stat(s.ws.UIBaseline); s.ws.UIBaseline != "" && err == nil && info.IsDir() {
+	if s.baselineFits() {
 		args = append(args, "-v", s.ws.UIBaseline+":"+crawlBaseline+readOnly, flagEnv, "E2E_BASELINE="+crawlBaseline)
 	}
 	if len(accepted) > 0 {

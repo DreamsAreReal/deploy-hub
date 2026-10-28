@@ -508,7 +508,11 @@ screenshot with the one of the version that is live now:
   a successful deploy CI sends the gate's screenshots of that commit with
   `ui-baseline-put <app> <tag>`; the hub verifies the job's OIDC token and keeps
   them only when `<tag>` is the deployed one (a new tag replaces the set, the
-  same tag adds to it). Before the gate CI fetches them with
+  same tag adds to it). The set carries the render key of the run that took
+  it (sha256 of the crawler, the browser image and the frozen instant, the
+  gate writes it to `ui-crawl/render-key`): when the hub's crawler or the
+  browser image changes, the next gate does not compare and its deploy takes
+  a new set instead of failing every screen. Before the gate CI fetches them with
   `ui-baseline-get <app> <tag>` and the gate mounts them read-only into the
   crawler (`--ui-baseline`, `E2E_BASELINE`). Pull request gates do not talk to
   the hub, so only gates on `main` compare;

@@ -222,6 +222,7 @@ jobs:
               case "$name" in ''|.*|*[!a-z0-9.-]*) return 1 ;; esac
               printf '%s' "${line#*:}" | base64 -d > "$dir/$name" || return 1
             done < <(sed -n 's/^shot=//p' "$served")
+            sed -n 's/^key=//p' "$served" > "$dir/render-key"
           }
           if fetch && [ -n "$(ls -A "$dir")" ]; then
             echo "dir=$dir" >> "$GITHUB_OUTPUT"
@@ -445,7 +446,8 @@ jobs:
         run: |
           set -uo pipefail
           screens="$RUNNER_TEMP/gate/ui-crawl/screens"
-          if [ -z "$(ls -A "$screens" 2>/dev/null)" ]; then
+          key="$RUNNER_TEMP/gate/ui-crawl/render-key"
+          if [ -z "$(ls -A "$screens" 2>/dev/null)" ] || [ ! -s "$key" ]; then
             echo "the gate took no screenshots"
             exit 0
           fi
@@ -454,6 +456,7 @@ jobs:
               "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$OIDC_AUDIENCE" | jq -er .value)" || return 1
             {
               printf 'oidc=%s\n' "$oidc"
+              printf 'key=%s\n' "$(cat "$key")"
               for shot in "$screens"/*.png; do
                 printf 'shot=%s:%s\n' "$(basename "$shot")" "$(base64 -w0 "$shot")"
               done

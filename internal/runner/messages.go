@@ -74,6 +74,7 @@ const (
 	msgBaselineRead     = "error: the stored ui baseline could not be read"
 	msgBaselineWrite    = "error: the ui baseline could not be stored"
 	msgBaselineFrom     = "from=%s\n"
+	msgBaselineKey      = "key=%s\n"
 	msgBaselineShot     = "shot=%s:%s\n"
 	msgBaselineStored   = "ui baseline: %d shots of %s stored\n"
 	msgFullRecorded     = "full mutation run recorded: passed=%t\n"

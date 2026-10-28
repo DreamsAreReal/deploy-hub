@@ -157,15 +157,31 @@ func visualApp(t *testing.T, list string) gate.Workspace {
 func TestUIComparesWithTheDeployedShotsAndPassesTheIntendedChanges(t *testing.T) {
 	ws := visualApp(t, "changes:\n  - screen: board\n    task: 809\n  - screen: memory-topic\n    task: 782\n")
 	ws.UIBaseline = t.TempDir()
+	key := (&Stage{ws: ws}).renderKey()
+	testutil.Write(t, filepath.Join(ws.UIBaseline, RenderKeyFile), key+"\n")
 	out := UI(context.Background(), ws)
 	testutil.Equal(t, out.Status, gate.StatusPass)
 	testutil.Contains(t, strings.Join(procexectest.LinesOf(ws.Exec), "\n"), "-e "+frozenCrawlEnv+FrozenAt+" -v "+ws.UIBaseline+
 		":/baseline:ro -e E2E_BASELINE=/baseline -e E2E_VISUAL_ACCEPT=board,memory-topic browser@sha256:2 node --test /crawler/crawl.mjs")
-	unserved := visualApp(t, "")
-	unserved.UIBaseline = filepath.Join(t.TempDir(), "never-served")
-	testutil.Equal(t, UI(context.Background(), unserved).Status, gate.StatusPass)
-	all := strings.Join(procexectest.LinesOf(unserved.Exec), "\n")
-	testutil.True(t, !strings.Contains(all, "E2E_BASELINE") && !strings.Contains(all, "E2E_VISUAL_ACCEPT"), "nothing to compare with and nothing accepted")
+	testutil.Equal(t, testutil.Read(t, filepath.Join(ws.Out, crawlDir, RenderKeyFile)), key+"\n")
+	for _, baseline := range []string{filepath.Join(t.TempDir(), "never-served"), t.TempDir()} {
+		other := visualApp(t, "")
+		other.UIBaseline = baseline
+		if exists(baseline) {
+			testutil.Write(t, filepath.Join(baseline, RenderKeyFile), strings.Repeat("0", len(key)))
+		}
+		testutil.Equal(t, UI(context.Background(), other).Status, gate.StatusPass)
+		all := strings.Join(procexectest.LinesOf(other.Exec), "\n")
+		testutil.True(t, !strings.Contains(all, "E2E_BASELINE") && !strings.Contains(all, "E2E_VISUAL_ACCEPT"), "no baseline of this crawler and browser, nothing accepted")
+	}
+	browser := visualApp(t, "")
+	browser.Policy.Images.Browser = "browser@sha256:3"
+	testutil.True(t, (&Stage{ws: browser}).renderKey() != key, "a new browser image changes the key")
+}
+
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func TestUIRefusesABrokenListOfIntendedChanges(t *testing.T) {
