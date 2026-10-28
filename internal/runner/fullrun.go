@@ -16,7 +16,7 @@ const (
 	planNew        = "new"
 	planContinue   = "continue"
 	planSkip       = "skip"
-	SessionMaxAge  = 24 * time.Hour
+	SessionMaxAge  = 72 * time.Hour
 	NightlyAge     = 20 * time.Hour
 	NightStartHour = 0
 	NightEndHour   = 6
@@ -76,11 +76,15 @@ func (s *Service) recordRun(app string, c cacheCall, st *cacheState, run mutatio
 		if err := s.drop(app, sessionFile); err != nil {
 			return err
 		}
-	case run.Stale && st.SessionStarted == nil:
+	case st.SessionStarted == nil && (run.Stale || gateAfterFailedFullRun(c, st.Last)):
 		st.Requested = true
 		s.Log.Info("full mutation run requested", "app", app, "tag", c.tag, "bases", run.Bases)
 	}
 	return s.saveState(app, *st)
+}
+
+func gateAfterFailedFullRun(c cacheCall, last *gate.FullRun) bool {
+	return c.meta.Mode != modeFull && last != nil && !last.Passed && last.Commit != strings.TrimPrefix(c.tag, registry.TagPrefix)
 }
 
 func (s *Service) planFull(app string, st *cacheState) (string, error) {

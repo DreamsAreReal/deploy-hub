@@ -353,8 +353,9 @@ run, and a run that saw a base missing from the last full run (`stale`) asks
 the hub for one. The hub keeps that state per app in `state.json` (last full
 run, requested, open session) and plans full runs: a session opens when there
 is no full run, when one was requested, or at night (00:00 to 06:00 UTC) when
-the last full run is more than 20 hours old; a session older than 24 hours is
-dropped.
+the last full run is more than 20 hours old; a session older than 72 hours is
+dropped. After a failed full run, an upload from the deploy gate of another
+commit asks for a new full run, so a fix does not wait for the night.
 
 Large apps get their full run in chunks outside GitHub Actions, on the hub host
 as the app's CI user with the runner's isolation (`ci-mutation@<repo>` in
