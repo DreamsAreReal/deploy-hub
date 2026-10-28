@@ -65,9 +65,12 @@ if [[ ${after} -ge ${DISK_MAX_PERCENT} ]]; then
 	done
 	after=$(used_percent)
 fi
-flag=${DOCKER_HOST:-unix:///nonexistent/docker.sock}
-flag=${flag#unix://}
-rm -f "${flag%/docker.sock}/job-running"
+case "${DOCKER_HOST:-}" in
+unix://*/docker.sock)
+	flag=${DOCKER_HOST#unix://}
+	rm -f "${flag%/docker.sock}/job-running"
+	;;
+esac
 total=$(usage)
 log "disk after: ${after}% (${total})"
 exit 0

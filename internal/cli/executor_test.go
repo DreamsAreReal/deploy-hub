@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -150,8 +152,26 @@ func TestServerDispatchSpoolFailures(t *testing.T) {
 	testutil.Contains(t, h.err.String(), "mutation-dispatch: ")
 }
 
+func TestDispatchFailsWhenTheSpoolCannotBeWritten(t *testing.T) {
+	h, d := executorHarness(t)
+	h.write(filepath.Dir(d.spool), "not a directory")
+	h.want(ExitFail, CmdDispatch, appWeb)
+	testutil.Contains(t, h.err.String(), dispatchPrefix)
+
+	h, d = executorHarness(t)
+	testutil.Mkdir(t, filepath.Join(d.spool, jobFile+".tmp", "busy"))
+	h.want(ExitFail, CmdDispatch, appWeb)
+	testutil.Contains(t, h.err.String(), dispatchPrefix)
+	_, err := os.Stat(filepath.Join(d.spool, jobFile))
+	testutil.True(t, errors.Is(err, fs.ErrNotExist), "a failed write leaves no job behind")
+}
+
 func TestSpoolRootStaysTraversable(t *testing.T) {
 	h, d := executorHarness(t)
+	h.write(filepath.Join(d.spool, jobFile+".tmp"), "stale")
+	testutil.NoErr(t, os.Chmod(filepath.Join(d.spool, jobFile+".tmp"), 0o600))
+	testutil.NoErr(t, os.Chmod(d.spool, 0o600))
+	testutil.NoErr(t, os.Chmod(filepath.Dir(d.spool), 0o600))
 	h.want(ExitOK, CmdDispatch, appWeb)
 	root, err := os.Stat(filepath.Dir(d.spool))
 	testutil.NoErr(t, err)

@@ -42,7 +42,10 @@ esac
 [ "${GITHUB_REF:-}" = "${ref}" ] || refuse "this runner takes only ${ref}, got ${GITHUB_REF:-?}"
 check_workflow
 check_quota
-flag=${DOCKER_HOST:-unix:///nonexistent/docker.sock}
-flag=${flag#unix://}
-: >"${flag%/docker.sock}/job-running"
+case "${DOCKER_HOST:-}" in
+unix://*/docker.sock)
+	flag=${DOCKER_HOST#unix://}
+	: >"${flag%/docker.sock}/job-running"
+	;;
+esac
 exit 0

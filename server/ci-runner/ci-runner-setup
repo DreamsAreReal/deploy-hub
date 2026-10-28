@@ -2,8 +2,7 @@
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 LIB=/usr/local/lib/ci-runner
-UNITS=${CI_RUNNER_UNITS:-/etc/systemd/system}
-SYSTEMCTL=${CI_RUNNER_SYSTEMCTL:-systemctl}
+UNITS=/etc/systemd/system
 WANTS=${UNITS}/multi-user.target.wants
 OWNER=DreamsAreReal
 RUNNER_VERSION=2.338.1
@@ -16,6 +15,7 @@ DISK_SIZE=${CI_DISK_SIZE:-280G}
 SUBID_COUNT=65536
 QUOTAS=${HERE}/ci-disk-quota
 DEPLOY_LOCK=/opt/deploy-hub/deploy.lock
+MUTATION_SPOOL=/var/lib/ci-mutation
 HIDDEN="/opt /root /home /etc/srv-backup /etc/wireguard /etc/deploy-hub /var/backups /var/lib/docker /var/lib/containerd -/var/lib/app-backup -/run/docker.sock -/var/run/docker.sock -/run/containerd"
 
 next_subid() {
@@ -126,7 +126,7 @@ prepare() {
 	restart=$(needs_restart "user@${uid}.service" "/run/netns/ci-$1")
 	[ "${restart}" = no ] || systemctl restart "user@${uid}.service"
 	loginctl enable-linger "ci-$1"
-	install -d -m 755 /var/lib/ci-mutation
+	install -d -m 755 "${MUTATION_SPOOL}"
 	timers "$1"
 }
 
@@ -295,13 +295,13 @@ units() {
 		install -m 644 "${f}" "${UNITS}/${f##*/}"
 	done
 	rm -f "${UNITS}/ci-docker@.service.d/50-ci-user.conf" "${UNITS}/ci-runner@.service.d/50-ci-user.conf"
-	"${SYSTEMCTL}" daemon-reload
+	systemctl daemon-reload
 }
 
 timers() {
 	for f in "${HERE}"/*@.timer; do
 		unit=${f##*/}
-		"${SYSTEMCTL}" enable --now "${unit%@.timer}@$1.timer"
+		systemctl enable --now "${unit%@.timer}@$1.timer"
 	done
 }
 

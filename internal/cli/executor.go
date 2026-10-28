@@ -77,13 +77,7 @@ func runMutationDispatch(ctx context.Context, a *App, ex procexec.Runner, args [
 func (a *App) writeSpool(dir, group string, job runner.FullJob, session []byte) error {
 	data, err := json.Marshal(job)
 	if err == nil {
-		err = os.MkdirAll(filepath.Dir(dir), spoolRootPerm)
-	}
-	if err == nil {
-		err = os.Mkdir(dir, spoolDirPerm)
-	}
-	if errors.Is(err, fs.ErrExist) {
-		err = nil
+		err = makeSpoolDir(dir)
 	}
 	if err == nil {
 		err = a.Group(group)(dir)
@@ -100,9 +94,29 @@ func (a *App) writeSpool(dir, group string, job runner.FullJob, session []byte) 
 	return err
 }
 
+func makeSpoolDir(dir string) error {
+	err := os.MkdirAll(filepath.Dir(dir), spoolRootPerm)
+	if err == nil {
+		err = os.Chmod(filepath.Dir(dir), spoolRootPerm)
+	}
+	if err == nil {
+		err = os.Mkdir(dir, spoolDirPerm)
+	}
+	if errors.Is(err, fs.ErrExist) {
+		err = nil
+	}
+	if err == nil {
+		err = os.Chmod(dir, spoolDirPerm)
+	}
+	return err
+}
+
 func (a *App) spoolFile(path, group string, data []byte) error {
 	tmp := path + ".tmp"
 	err := os.WriteFile(tmp, data, spoolFilePerm)
+	if err == nil {
+		err = os.Chmod(tmp, spoolFilePerm)
+	}
 	if err == nil {
 		err = a.Group(group)(tmp)
 	}

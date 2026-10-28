@@ -11,7 +11,7 @@ df_fake \"\$@\""
   disk 40
   export PATH="${STUBS}:${PATH}" HOME="${WORLD}/home" GITHUB_REPOSITORY_OWNER=DreamsAreReal
   export GITHUB_WORKSPACE="${WORLD}/work/tasks/tasks" RUNNER_TEMP="${WORLD}/work/_temp" TMPDIR="${WORLD}/tmp" RUNNER_TOOL_CACHE="${WORLD}/tool"
-  unset CI_DISK_MAX_PERCENT CI_BUILD_CACHE_KEEP
+  unset CI_DISK_MAX_PERCENT CI_BUILD_CACHE_KEEP DOCKER_HOST
   for d in "$GITHUB_WORKSPACE" "$RUNNER_TEMP" "$TMPDIR" "$RUNNER_TOOL_CACHE" "${WORLD}/work/_actions" "$HOME/.cache" "$HOME/go" "$HOME/.npm" "$HOME/.nuget" "$HOME/runner"; do
     mkdir -p "$d/sub"
     touch "$d/sub/file"
@@ -122,4 +122,12 @@ CALLS
   run bash "$CLEAN"
   [ "$status" -eq 0 ]
   emptied "$GITHUB_WORKSPACE"
+}
+
+@test "a finished job lifts the flag that holds back the full mutation run" {
+  mkdir -p "${WORLD}/run/ci/tasks"
+  touch "${WORLD}/run/ci/tasks/job-running"
+  DOCKER_HOST="unix://${WORLD}/run/ci/tasks/docker.sock" run bash "$CLEAN"
+  [ "$status" -eq 0 ]
+  [ ! -e "${WORLD}/run/ci/tasks/job-running" ]
 }
