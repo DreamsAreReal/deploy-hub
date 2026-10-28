@@ -1264,7 +1264,7 @@ and `deploy_hub_ci_quota_on{runner}` every minute; the alerts
 | `/var/lib/ci/<app>/mutation/` | `stash/` (source, pinned deploy-hub, policy, Go of the last deploy) and `work/` (the current chunk), owned by `ci-<app>` |
 | `/home/deploy/.cache/deploy-hub/jwks.json` | last GitHub OIDC signing keys, used when GitHub is unreachable |
 | `/opt/<app>/docker-compose.yml` | app stack: 127.0.0.1 ports, mem limit, log rotation |
-| `/opt/<app>/app.conf` | `profile=`, `port=`, `health_path=`, `image=`, `repo=`, optional `bluegreen=on\|off` (BYOC: `mode=byoc`, `main=`, `hmode=`) |
+| `/opt/<app>/app.conf` | `profile=`, `port=`, `health_path=`, `image=`, `repo=`, optional `bluegreen=on\|off` and `site=off` (BYOC: `mode=byoc`, `main=`, `hmode=`) |
 | `/opt/<app>/.env` (and other `*.env` files of the app) | app secrets (600), referenced by compose, never in git; with a secrets store the hub writes the stored keys into them on every deploy |
 | `/opt/<app>/.deploy-state` | `current=`/`previous=` sha tags — rollback source of truth |
 | `/var/lib/deploy-hub/host-backup/<app>/` | root, 700: previous host files replaced by `host-sync`, newest 5 runs |
@@ -1432,7 +1432,10 @@ the standby would share that mount with the old instance, so two processes
 would write the same state at once (tasks: SQLite in `/data`). Such apps take
 a few seconds of 502, and a failed gate rolls back to the previous sha.
 `bluegreen=on` in `app.conf` keeps the standby for an app whose mount is only a
-cache; `bluegreen=off` turns it off for any app.
+cache; `bluegreen=off` turns it off for any app. `site=off` keeps an app off the
+internet: caddy-sync writes no `<app>.<slug>.sslip.io` site for it, while it keeps
+its port and standby port, so other apps still reach it over the `shared` network.
+A deploy keeps both settings.
 
 - App with a port: the standby publishes `127.0.0.1:<port+10000>`. While the
   real service is down Caddy sends its requests to the standby by itself (see

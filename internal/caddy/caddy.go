@@ -78,6 +78,7 @@ type Route struct {
 	App     string
 	Port    string
 	Standby string
+	Private bool
 }
 
 func Routes(apps []registry.Entry, busy func(int) bool) []Route {
@@ -106,7 +107,7 @@ func appRoutes(apps []registry.Entry, busy func(int) bool) ([]Route, portPool) {
 		if err != nil || validate.Port(conf.Port) != nil {
 			continue
 		}
-		out = append(out, Route{App: a.Name, Port: conf.Port})
+		out = append(out, Route{App: a.Name, Port: conf.Port, Private: conf.Site == registry.SiteOff})
 		port, _ := strconv.Atoi(conf.Port)
 		pool.taken[port] = true
 	}
@@ -147,6 +148,9 @@ func Render(routes []Route, slug, email string) string {
 	fmt.Fprintf(&b, globalBlock, email)
 	b.WriteString(extraImport)
 	for _, r := range routes {
+		if r.Private {
+			continue
+		}
 		fmt.Fprintf(&b, siteOpen, r.App, slug, r.Port)
 		if r.Standby != "" {
 			fmt.Fprintf(&b, standbyUpstream, r.Standby)
