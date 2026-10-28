@@ -266,6 +266,9 @@ jobs:
             ${{ runner.temp }}/gate/verdict.json
             ${{ runner.temp }}/gate/**/mutation.json
             ${{ runner.temp }}/gate/sbom-*.cdx.json
+            ${{ runner.temp }}/gate/ui-crawl/crawl.md
+            ${{ runner.temp }}/gate/ui-crawl/shots/
+            ${{ runner.temp }}/gate/ui-crawl/visual/
           if-no-files-found: ignore
 
       - name: Summarize the verdict

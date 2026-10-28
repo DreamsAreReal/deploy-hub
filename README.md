@@ -28,7 +28,7 @@ push to default branch
         docker build (local, not pushed yet)
         ssh deploy@vps "mutation-cache-get <app> <tag>"  → the app's mutation verdicts
         ssh deploy@vps "ui-baseline-get <app> <tag>"  → screenshots of the deployed version
-        deploy-hub gate  → verdict.json + SBOMs (kept as workflow artifacts)
+        deploy-hub gate  → verdict.json + SBOMs + the crawl report with its screenshots of problems and changed screens (kept as workflow artifacts)
         ssh deploy@vps "mutation-cache-put <app> <tag>"  ← always, pass or fail
         ssh deploy@vps "report <app> <tag>"  ← always, pass or fail
         gate failed → stop: nothing is pushed or deployed
