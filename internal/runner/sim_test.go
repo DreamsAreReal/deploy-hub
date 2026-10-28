@@ -75,6 +75,8 @@ type sim struct {
 	imageLabel   string
 	runEnv       string
 	bakedEnv     string
+	networks     string
+	networksErr  error
 	stopped      []string
 }
 
@@ -115,6 +117,9 @@ func (s *sim) handle(c procexec.Command) (procexec.Result, error) {
 	case "compose":
 		return s.compose(c)
 	case psVerb:
+		if a[1] == "--format" {
+			return procexec.Result{Stdout: s.networks}, s.networksErr
+		}
 		name := strings.TrimSuffix(strings.TrimPrefix(a[3], "name=^"), "$")
 		if s.running[name] {
 			return procexec.Result{Stdout: "id123\n"}, nil

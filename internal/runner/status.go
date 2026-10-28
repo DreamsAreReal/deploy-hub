@@ -3,6 +3,8 @@ package runner
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/docker"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/arch"
@@ -15,6 +17,7 @@ import (
 
 type appStatus struct {
 	name      string
+	dir       string
 	sha7      string
 	state     string
 	health    string
@@ -46,6 +49,7 @@ func (s *Service) status(ctx context.Context) int {
 		s.Log.Warn("journal read failed", "error", err.Error())
 	}
 	s.Out.Println(statusHeader)
+	shared := s.networkDrift(ctx, apps)
 	for _, a := range apps {
 		st := s.appStatus(ctx, a, journal.ForApp(entries, a.Name))
 		s.Out.Println(st.line())
@@ -54,14 +58,14 @@ func (s *Service) status(ctx context.Context) int {
 			obs.Sample{Name: obs.MetricAppUp, Labels: labels, Value: obs.Bool(st.up())},
 			obs.Sample{Name: obs.MetricAppHealthy, Labels: labels, Value: obs.Bool(st.healthy())},
 		)
-		s.liveDrift(ctx, st)
+		s.liveDrift(ctx, st, shared[a.Name])
 	}
 	s.samples = append(s.samples, obs.Sample{Name: obs.MetricAppsRegistered, Labels: obs.Labels{}, Value: float64(len(apps))})
 	return ExitOK
 }
 
 func (s *Service) appStatus(ctx context.Context, a registry.Entry, entries []journal.Entry) appStatus {
-	st := appStatus{name: a.Name, sha7: statusNone, state: docker.StateMissing, health: docker.NoHealth, last: statusNever}
+	st := appStatus{name: a.Name, dir: a.Dir, sha7: statusNone, state: docker.StateMissing, health: docker.NoHealth, last: statusNever}
 	if cur := registry.LoadState(a.Dir).Current; cur != "" {
 		st.sha7 = registry.Sha7(cur)
 	}
@@ -85,7 +89,33 @@ func (s *Service) appStatus(ctx context.Context, a registry.Entry, entries []jou
 	return st
 }
 
-func (s *Service) liveDrift(ctx context.Context, st appStatus) {
+func (s *Service) networkDrift(ctx context.Context, apps []registry.Entry) map[string][]string {
+	if s.Catalog == nil {
+		return nil
+	}
+	networks, err := s.Docker.ProjectNetworks(ctx)
+	if err != nil {
+		s.Log.Warn("docker networks unreadable", "error", err.Error())
+		return nil
+	}
+	registered := map[string][]string{}
+	for _, a := range apps {
+		if names, ok := networks[a.Name]; ok {
+			registered[a.Name] = names
+		}
+	}
+	return s.Catalog.NetworkDrift(registered)
+}
+
+func secretsDrift(dir string) []string {
+	info, err := os.Stat(filepath.Join(dir, registry.EnvFile))
+	if err != nil || info.Mode().Perm()&groupOtherBits == 0 {
+		return nil
+	}
+	return []string{fmt.Sprintf(msgEnvReadable, registry.EnvFile, info.Mode().Perm())}
+}
+
+func (s *Service) liveDrift(ctx context.Context, st appStatus, shared []string) {
 	if s.Catalog == nil || !st.up() {
 		return
 	}
@@ -99,7 +129,8 @@ func (s *Service) liveDrift(ctx context.Context, st appStatus) {
 		return
 	}
 	service, known := s.Catalog.Services[st.name]
-	drift := service.LiveDrift(arch.Facts{Env: env, Ports: ports})
+	drift := append(service.LiveDrift(arch.Facts{Env: env, Ports: ports}), shared...)
+	drift = append(drift, secretsDrift(st.dir)...)
 	if !known {
 		drift = append(drift, msgNotInCatalog)
 	}

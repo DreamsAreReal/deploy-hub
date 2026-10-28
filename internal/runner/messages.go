@@ -70,6 +70,8 @@ const (
 	msgCachePlan        = "plan=%s\n"
 	msgCacheLast        = "last=%s\n"
 	msgBadShots         = "refused: ui baseline shots missing or malformed"
+	msgEnvReadable      = "secrets file %s can be read by group or others (mode %#o)"
+	groupOtherBits      = 0o077
 	msgBaselineStale    = "refused: the ui baseline comes only from the deployed tag"
 	msgBaselineRead     = "error: the stored ui baseline could not be read"
 	msgBaselineWrite    = "error: the ui baseline could not be stored"

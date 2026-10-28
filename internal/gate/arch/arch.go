@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -19,16 +20,17 @@ import (
 )
 
 const (
-	CatalogFile    = "architecture.yaml"
-	TasksService   = "tasks"
-	reasonDrift    = "the app does something its entry in policy/architecture.yaml does not declare"
-	reasonNoEntry  = "the app has no entry in policy/architecture.yaml"
-	reasonCatalog  = "policy/architecture.yaml cannot be read"
-	dateLayout     = "2006-01-02"
-	envExampleGlob = "*.env.example"
-	portSeparator  = ":"
-	protoSeparator = "/"
-	wholeDay       = 24 * time.Hour
+	CatalogFile          = "architecture.yaml"
+	TasksService         = "tasks"
+	ObservabilityService = "observability"
+	reasonDrift          = "the app does something its entry in policy/architecture.yaml does not declare"
+	reasonNoEntry        = "the app has no entry in policy/architecture.yaml"
+	reasonCatalog        = "policy/architecture.yaml cannot be read"
+	dateLayout           = "2006-01-02"
+	envExampleGlob       = "*.env.example"
+	portSeparator        = ":"
+	protoSeparator       = "/"
+	wholeDay             = 24 * time.Hour
 )
 
 var (
@@ -180,10 +182,11 @@ func exception(name string, call Call, now time.Time) []string {
 }
 
 const (
-	envInRepo   = "environment variable %s is in the repo but not in secrets or config"
-	portInRepo  = "port %d is published by compose but not in exposes"
-	envRunning  = "environment variable %s is set in the running container but not in secrets or config"
-	portRunning = "port %d is published by the running container but not in exposes"
+	networkShared = "docker network %s also connects %s, and the catalog has no call between them"
+	envInRepo     = "environment variable %s is in the repo but not in secrets or config"
+	portInRepo    = "port %d is published by compose but not in exposes"
+	envRunning    = "environment variable %s is set in the running container but not in secrets or config"
+	portRunning   = "port %d is published by the running container but not in exposes"
 )
 
 func (s Service) Drift(facts Facts) []string {
@@ -208,6 +211,47 @@ func (s Service) drift(facts Facts, envLayout, portLayout string) []string {
 		}
 	}
 	return drift
+}
+
+func (c Catalog) Linked(a, b string) bool {
+	return c.calls(a, b) || c.calls(b, a) || c.collects(a, b) || c.collects(b, a)
+}
+
+func (c Catalog) calls(from, to string) bool {
+	return slices.ContainsFunc(c.Services[from].Calls, func(call Call) bool { return call.To == to })
+}
+
+func (c Catalog) collects(collector, service string) bool {
+	return collector == ObservabilityService && len(c.Services[service].Gives) > 0
+}
+
+func (c Catalog) NetworkDrift(networks map[string][]string) map[string][]string {
+	members := map[string][]string{}
+	for _, app := range slices.Sorted(maps.Keys(networks)) {
+		for _, network := range networks[app] {
+			members[network] = append(members[network], app)
+		}
+	}
+	drift := map[string][]string{}
+	for _, network := range slices.Sorted(maps.Keys(members)) {
+		for _, pair := range pairs(members[network]) {
+			if !c.Linked(pair[0], pair[1]) {
+				drift[pair[0]] = append(drift[pair[0]], fmt.Sprintf(networkShared, network, pair[1]))
+				drift[pair[1]] = append(drift[pair[1]], fmt.Sprintf(networkShared, network, pair[0]))
+			}
+		}
+	}
+	return drift
+}
+
+func pairs(apps []string) [][2]string {
+	var out [][2]string
+	for i, a := range apps {
+		for _, b := range apps[i+1:] {
+			out = append(out, [2]string{a, b})
+		}
+	}
+	return out
 }
 
 func (s Service) exposes(port int) bool {

@@ -9,9 +9,12 @@ import (
 )
 
 const (
-	formatEnv   = "{{json .Config.Env}}"
-	formatImage = "{{.Image}}"
-	envAssign   = "="
+	formatEnv      = "{{json .Config.Env}}"
+	formatImage    = "{{.Image}}"
+	envAssign      = "="
+	formatNetworks = `{{.Label "com.docker.compose.project"}}` + "\t{{.Networks}}"
+	fieldSeparator = "\t"
+	listSeparator  = ","
 )
 
 func (c Client) RunEnv(ctx context.Context, container string) ([]string, error) {
@@ -58,4 +61,28 @@ func (c Client) BoundPorts(ctx context.Context, container string) ([]int, error)
 		}
 	}
 	return ports, nil
+}
+
+func (c Client) ProjectNetworks(ctx context.Context) (map[string][]string, error) {
+	res, err := c.run(ctx, nil, "", "", "ps", "--format", formatNetworks)
+	if err != nil {
+		return nil, err
+	}
+	networks := map[string][]string{}
+	for _, line := range strings.Split(res.Stdout, "\n") {
+		project, names, found := strings.Cut(strings.TrimSpace(line), fieldSeparator)
+		if found && project != "" {
+			networks[project] = joinNew(networks[project], strings.Split(names, listSeparator))
+		}
+	}
+	return networks, nil
+}
+
+func joinNew(list, names []string) []string {
+	for _, name := range names {
+		if name != "" && !slices.Contains(list, name) {
+			list = append(list, name)
+		}
+	}
+	return list
 }

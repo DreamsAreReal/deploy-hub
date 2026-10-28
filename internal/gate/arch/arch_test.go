@@ -163,3 +163,29 @@ func TestMermaidIsStable(t *testing.T) {
 	testutil.Equal(t, catalog.Mermaid(), strings.Join(want, "\n")+"\n")
 	testutil.Equal(t, normal, catalog.Services["a"].Critical[:0]+normal)
 }
+
+func TestNetworkDriftNamesNeighboursWithoutACall(t *testing.T) {
+	catalog := Catalog{Services: map[string]Service{
+		TasksService:         {Calls: []Call{{To: "stt"}, {To: ObservabilityService}}},
+		"stt":                {Gives: []string{"metrics"}},
+		"router-bot":         {Gives: []string{"logs"}, Calls: []Call{{To: TasksService}}},
+		ObservabilityService: {},
+		"quiet":              {},
+	}}
+	drift := catalog.NetworkDrift(map[string][]string{
+		TasksService:         {"shared", "tasks_default"},
+		"stt":                {"shared"},
+		"router-bot":         {"shared"},
+		ObservabilityService: {"shared", "observability_default"},
+		"quiet":              {"observability_default"},
+	})
+	testutil.Equal(t, drift, map[string][]string{
+		ObservabilityService: {"docker network observability_default also connects quiet, and the catalog has no call between them"},
+		"quiet":              {"docker network observability_default also connects observability, and the catalog has no call between them"},
+		"router-bot":         {"docker network shared also connects stt, and the catalog has no call between them"},
+		"stt":                {"docker network shared also connects router-bot, and the catalog has no call between them"},
+	})
+	testutil.True(t, catalog.Linked("router-bot", TasksService) && catalog.Linked(TasksService, "router-bot"), "a call links both ways")
+	testutil.True(t, catalog.Linked(ObservabilityService, "stt") && !catalog.Linked(ObservabilityService, "quiet"), "observability reaches only what gives it something")
+	testutil.Equal(t, len(catalog.NetworkDrift(map[string][]string{TasksService: {"tasks_default"}})), 0)
+}

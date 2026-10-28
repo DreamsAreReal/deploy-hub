@@ -64,3 +64,14 @@ func TestRunFactsFailWhenDockerDoes(t *testing.T) {
 		t.Error("garbage env accepted")
 	}
 }
+
+func TestProjectNetworksGroupsTheNetworksOfEveryComposeProject(t *testing.T) {
+	c, f := client(reply("tasks\tshared,tasks_default\nobservability\tobservability_default\nobservability\tshared\n\tbridge\nrouter-bot\tshared,shared\n\n", nil))
+	networks, err := c.ProjectNetworks(context.Background())
+	testutil.NoErr(t, err)
+	testutil.Equal(t, networks, map[string][]string{"tasks": {"shared", "tasks_default"}, "observability": {"observability_default", "shared"}, "router-bot": {"shared"}})
+	testutil.Equal(t, f.Lines(), []string{"docker ps --format " + formatNetworks})
+	broken, _ := client(reply("", errBoom))
+	_, err = broken.ProjectNetworks(context.Background())
+	testutil.Fails(t, err)
+}
