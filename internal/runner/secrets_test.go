@@ -41,3 +41,15 @@ func TestDeployWaitsWhenTheSecretsStoreIsLocked(t *testing.T) {
 	testutil.Equal(t, quiet.dispatch("deploy web "+goodTag, meta()), ExitOK)
 	testutil.True(t, !strings.Contains(quiet.logs.String(), "secrets laid"), "nothing laid, nothing logged")
 }
+
+func TestKeyBoundToOneAppCannotTouchAnother(t *testing.T) {
+	e := newEnv(t)
+	e.svc.Only = "other"
+	testutil.Equal(t, e.dispatch("deploy web "+goodTag, meta()), ExitFail)
+	e.expectOut(e.err, msgOtherApp)
+	testutil.Equal(t, e.exec.Count("docker pull"), 0)
+	bound := newEnv(t)
+	bound.svc.Only = appName
+	testutil.Equal(t, bound.dispatch("deploy web "+goodTag, meta()), ExitOK)
+	testutil.Equal(t, refusalReason(msgOtherApp), reasonOtherApp)
+}

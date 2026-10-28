@@ -578,6 +578,13 @@ root SSH to. `<vps>` is the server address.
    EOF
    ```
 
+   Better, one key per repository bound to its app: with
+   `command="/opt/deploy-hub/bin/deploy-hub runner --only <app>"` the runner refuses
+   every request for another app (`refused: this deploy key is bound to another app`,
+   reason `other-app`), so a key leaked from one repository deploys nothing else. Put
+   each key into the `VPS_SSH_KEY` secret of its repository and keep one line per key
+   in `authorized_keys`; remove the shared key once every repository has its own.
+
 5. **Hub directory, server config, GitHub token and binary** (`<host-slug>`
    is the address with dashes, as used by sslip.io, e.g. `203-0-113-7`).
    The repo is private, so the hub reads releases and CI runs with a

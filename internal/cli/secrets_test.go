@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/secrets"
@@ -25,4 +26,18 @@ func TestSecretsStoreIsUsedOnlyWhenConfigured(t *testing.T) {
 	layer, ok := (&App{Config: cfg}).secrets(nil).(secrets.Store)
 	testutil.True(t, ok, "a configured store lays secrets")
 	testutil.Equal(t, []string{layer.File, layer.KeyFile, layer.Age}, []string{storePath, keyPath, agePath})
+}
+
+func TestRunnerKeyBoundToOneApp(t *testing.T) {
+	h := newHarness(t)
+	h.write(filepath.Join(h.hubDir, "apps.list"), appWeb+"\n")
+	h.env[envSSHOriginal] = "history " + appWeb
+	if code := h.run(CmdRunner, flagOnly, "other"); code != ExitFail {
+		t.Fatalf("a key bound to another app was let through: %s", h.out)
+	}
+	testutil.Contains(t, h.err.String(), "bound to another app")
+	own := newHarness(t)
+	own.write(filepath.Join(own.hubDir, "apps.list"), appWeb+"\n")
+	own.env[envSSHOriginal] = "history " + appWeb
+	testutil.Equal(t, own.run(CmdRunner, flagOnly, appWeb), ExitOK)
 }

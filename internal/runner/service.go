@@ -64,6 +64,7 @@ type Service struct {
 	WorkflowRef string
 	Delivery    delivery.Notifier
 	Secrets     SecretLayer
+	Only        string
 	Host        HostSyncer
 	HostApps    []string
 	samples     []obs.Sample
@@ -90,6 +91,9 @@ func (s *Service) Dispatch(ctx context.Context, raw string, stdin io.Reader) int
 	if req.Verb == VerbStatus {
 		s.requested(req.Verb, journal.NoValue)
 		return s.status(ctx)
+	}
+	if s.Only != "" && req.App != s.Only {
+		return s.refuse(raw, msgOtherApp)
 	}
 	entry, err := s.Apps.Lookup(req.App)
 	if err != nil {

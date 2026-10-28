@@ -3,6 +3,7 @@ package runner
 const (
 	msgRefused          = "refused: only 'deploy <app> <tag>', 'report <app> <tag>', 'rollback <app> [tag]', 'status', 'history <app>', 'mutation-cache-get <app> <tag>', 'mutation-cache-put <app> <tag>' are accepted"
 	msgUnknownApp       = "refused: app not in allowlist"
+	msgOtherApp         = "refused: this deploy key is bound to another app"
 	msgBadTag           = "refused: tag must match ^sha-[0-9a-f]{7,40}$"
 	msgBadMain          = "refused: bad main service"
 	msgBadHPort         = "refused: bad hport"
@@ -77,6 +78,7 @@ const (
 	reasonOther      = "other"
 	reasonBadRequest = "bad-request"
 	reasonUnknownApp = "unknown-app"
+	reasonOtherApp   = "other-app"
 	reasonBadTag     = "bad-tag"
 	reasonBadCompose = "bad-compose"
 	reasonNoIdentity = "no-identity"
@@ -104,4 +106,5 @@ var refusalReasons = map[string]string{
 	msgBadDigest:      reasonBadDigest,
 	msgBadVerdict:     reasonBadVerdict,
 	msgBadCache:       reasonBadCache,
+	msgOtherApp:       reasonOtherApp,
 }

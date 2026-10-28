@@ -27,6 +27,7 @@ import (
 )
 
 const (
+	flagOnly     = "--only"
 	LockWait     = 300 * time.Second
 	lockPoll     = time.Second
 	renderArgs   = 3
@@ -47,6 +48,10 @@ func (a *App) journal() journal.Journal {
 }
 
 func runRunner(ctx context.Context, a *App, ex procexec.Runner, args []string) int {
+	only := ""
+	if len(args) > 1 && args[0] == flagOnly {
+		only, args = args[1], args[2:]
+	}
 	raw := a.Config.SSHCommand
 	if raw == "" {
 		raw = strings.Join(args, " ")
@@ -80,6 +85,7 @@ func runRunner(ctx context.Context, a *App, ex procexec.Runner, args []string) i
 		WorkflowRef: a.Config.WorkflowRef(),
 		Host:        runner.SudoHost{Exec: ex, Binary: a.Config.Paths.Binary()},
 		HostApps:    a.hostApps(),
+		Only:        only,
 	}
 	return svc.Dispatch(ctx, raw, a.IO.Stdin)
 }
