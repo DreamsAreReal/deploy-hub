@@ -239,10 +239,7 @@ func (a *App) metrics() obs.Pusher {
 }
 
 func (a *App) delivery() delivery.Notifier {
-	if a.Config.Delivery == "" {
-		return delivery.Discard{}
-	}
-	return delivery.HTTPNotifier{URL: a.Config.Delivery, Client: &http.Client{}, Log: a.Log}
+	return delivery.LogNotifier{Log: a.Log}
 }
 
 func ChownTo(username string) func(path string) error {

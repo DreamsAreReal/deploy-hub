@@ -1,16 +1,10 @@
 package delivery
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
-	"net/http"
-	"net/url"
 	"strings"
-	"time"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/journal"
 )
@@ -26,9 +20,6 @@ const (
 	DefaultTarget = "prod"
 	githubHost    = "github.com/"
 	hostSeparator = "."
-	sendTimeout   = 5 * time.Second
-	firstBadCode  = 300
-	contentType   = "application/json"
 	detailRestore = "rollback"
 )
 
@@ -93,54 +84,19 @@ func stateOf(result string) string {
 	return StateFail
 }
 
-type HTTPNotifier struct {
-	URL    string
-	Client *http.Client
-	Log    *slog.Logger
+const (
+	EventStep = "delivery_step"
+	msgStep   = "delivery step"
+)
+
+type LogNotifier struct {
+	Log *slog.Logger
 }
 
-func (n HTTPNotifier) Notify(ctx context.Context, steps []Step) error {
-	if n.URL == "" {
-		return ErrDisabled
-	}
-	if len(steps) == 0 {
-		return nil
-	}
-	if err := n.send(ctx, steps); err != nil {
-		n.Log.Warn("delivery steps not sent", "error", withoutURL(err), "steps", len(steps))
-		return err
-	}
-	n.Log.Info("delivery steps sent", "steps", len(steps))
-	return nil
-}
-
-func withoutURL(err error) string {
-	var failed *url.Error
-	if errors.As(err, &failed) {
-		return failed.Op + ": " + failed.Err.Error()
-	}
-	return err.Error()
-}
-
-func (n HTTPNotifier) send(ctx context.Context, steps []Step) error {
-	body, err := json.Marshal(steps)
-	if err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(ctx, sendTimeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, n.URL, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", contentType)
-	resp, err := n.Client.Do(req)
-	if err != nil {
-		return err
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode >= firstBadCode {
-		return fmt.Errorf("%w: status %d", ErrRejected, resp.StatusCode)
+func (n LogNotifier) Notify(ctx context.Context, steps []Step) error {
+	for _, step := range steps {
+		n.Log.InfoContext(ctx, msgStep, "event", EventStep, "repo", step.Repo, "target", step.Target, "sha", step.SHA,
+			"step", step.Step, "state", step.State, "detail", step.Detail)
 	}
 	return nil
 }

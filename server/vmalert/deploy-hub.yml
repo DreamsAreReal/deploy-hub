@@ -81,12 +81,6 @@ groups:
           summary: "Deploy of {{ $labels.app }} waited {{ $value | humanizeDuration }} for the lock"
           description: "Deploys queue behind each other; after 300 s a deploy gives up. Check for a stuck deploy in /opt/deploy-hub/logs/runner.log."
 
-      - alert: DeployHubDeliveryFailed
-        expr: min(min_over_time(deploy_hub_delivery_success[15m])) == 0
-        annotations:
-          summary: "deploy-hub could not post delivery steps to the tracker"
-          description: "Deploys go on, but the tracker misses their path to prod. Check delivery_url in /opt/deploy-hub/hub.conf and the tracker; log message \"delivery steps not sent\"."
-
       - alert: DeployHubMutationCacheCorrupt
         expr: min by (app) (min_over_time(deploy_hub_mutation_cache_intact[15m])) == 0
         annotations:

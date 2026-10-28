@@ -608,9 +608,8 @@ root SSH to. `<vps>` is the server address.
 
    `hub.conf` also accepts `acme_email=` (default `admin@<host-slug>.sslip.io`);
    the environment variables `HOST_SLUG`/`ACME_EMAIL` override it.
-   Optional `delivery_url=<tracker>/api/deliveries/<secret>` reports every
-   gate verdict, deploy and rollback to the task tracker as delivery steps
-   (see [Delivery steps](#delivery-steps)); `DEPLOY_HUB_DELIVERY_URL` overrides it.
+   Gate verdicts, deploys and rollbacks are written as delivery steps to the
+   logs (see [Delivery steps](#delivery-steps)); the hub needs no tracker address.
 
 6. **sudoers rule** — the runner (user `deploy`) may run only the root
    commands listed under `hub:` in `policy/gate.yaml` (`caddy-sync`,
@@ -1144,7 +1143,7 @@ and `deploy_hub_ci_quota_on{runner}` every minute; the alerts
 | Path | What |
 |---|---|
 | `/opt/deploy-hub/bin/deploy-hub` | the binary (root-owned, 755) |
-| `/opt/deploy-hub/hub.conf` | `host_slug=`, optional `acme_email=`, `delivery_url=` |
+| `/opt/deploy-hub/hub.conf` | `host_slug=`, optional `acme_email=` (an old `delivery_url=` line is ignored) |
 | `/opt/deploy-hub/apps.list` | allowlist: `<app> [dir]` per line; unknown apps are refused |
 | `/opt/deploy-hub/deploys.log` | append-only journal: `[ISO] app@sha7 action result Ns [smoke=ok\|skip\|fail]` |
 | `/opt/deploy-hub/logs/<command>.log` | structured JSON logs (rotated at 10 MiB) |
@@ -1360,8 +1359,8 @@ metrics show which step broke.
 
 ### Delivery steps
 
-With `delivery_url=` set, every command also posts what it proved to the task
-tracker as a JSON array of steps `{repo, target, sha, step, state}`
+Every command also writes what it proved as one JSON log line per step,
+`{"msg":"delivery step","event":"delivery_step","repo","target","sha","step","state","detail"}`
 (`repo` = `github.com/<app repo>`, `target` = `prod`, `sha` = the journal sha7):
 
 | Journal entry | Steps |
@@ -1371,8 +1370,11 @@ tracker as a JSON array of steps `{repo, target, sha, step, state}`
 | `deploy fail` | `deploy fail` |
 | `rollback ok` | `live ok` for the restored sha |
 
-A failed post is logged and never fails the deploy. The tracker matches the sha
-to the tasks whose commits it contains and draws their path to prod.
+The hub knows nothing about the task tracker: Vector ships the line to
+VictoriaLogs and the tracker pulls `event:delivery_step` records itself
+(tasks `DELIVERY_LOGS_URL`), matches the sha to the tasks whose commits it
+contains and draws their path to prod. While the tracker is down nothing is
+lost: it catches up from its cursor.
 
 Metrics — pushed to VictoriaMetrics after every command
 (`DEPLOY_HUB_METRICS_URL`, default

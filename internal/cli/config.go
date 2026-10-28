@@ -23,7 +23,6 @@ const (
 	envCaddyUser   = "CADDY_USER"
 	envDeployUser  = "DEPLOY_USER"
 	envMetricsURL  = "DEPLOY_HUB_METRICS_URL"
-	envDeliveryURL = "DEPLOY_HUB_DELIVERY_URL"
 	envLogLevel    = "DEPLOY_HUB_LOG_LEVEL"
 	envLogFile     = "DEPLOY_HUB_LOG_FILE"
 	envHostAlias   = "VPS_HOST_ALIAS"
@@ -56,7 +55,6 @@ const (
 	acmeEmailFormat   = "admin@%s.sslip.io"
 	confHostSlug      = "host_slug"
 	confACMEEmail     = "acme_email"
-	confDeliveryURL   = "delivery_url"
 	schemeHTTP        = "http"
 	schemeHTTPS       = "https"
 )
@@ -64,7 +62,6 @@ const (
 var (
 	ErrHubDir     = errors.New("invalid HUB_DIR: must be an absolute path")
 	ErrMetricsURL = errors.New("invalid DEPLOY_HUB_METRICS_URL: must be an http(s) URL or empty")
-	ErrDelivery   = errors.New("invalid delivery_url: must be an http(s) URL or empty")
 	ErrUser       = errors.New("invalid user name")
 	ErrGate       = errors.New("invalid health gate timing: timeout 60s..10m, interval 1s..30s")
 	ErrJWKSURL    = errors.New("invalid DEPLOY_HUB_JWKS_URL: must be an http(s) URL")
@@ -85,7 +82,6 @@ type Config struct {
 	CaddyUser  string
 	DeployUser string
 	MetricsURL string
-	Delivery   string
 	LogLevel   string
 	LogFile    string
 	HostAlias  string
@@ -115,7 +111,6 @@ func LoadConfig(env Env) (Config, error) {
 		CaddyUser:  env.get(envCaddyUser, caddy.DefaultUser),
 		DeployUser: env.get(envDeployUser, defaultDeployUser),
 		MetricsURL: defaultMetricsURL,
-		Delivery:   env.get(envDeliveryURL, server[confDeliveryURL]),
 		LogLevel:   env.get(envLogLevel, ""),
 		LogFile:    env.get(envLogFile, ""),
 		HostAlias:  env.get(envHostAlias, defaultHostAlias),
@@ -175,9 +170,6 @@ func (c Config) validateEndpoints() error {
 	}
 	if validMetricsURL(c.JWKSURL) != nil {
 		return ErrJWKSURL
-	}
-	if validMetricsURL(c.Delivery) != nil {
-		return ErrDelivery
 	}
 	return nil
 }

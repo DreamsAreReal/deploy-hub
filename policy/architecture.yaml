@@ -9,10 +9,6 @@ services:
     calls:
       - to: github
         why: releases, CI status and the self-update check need the GitHub API
-      - to: tasks
-        why: gate verdicts and deploys are posted as delivery steps
-        until: "2026-12-31"
-        task: "#786"
     secrets: [GH_TOKEN, GH_OWNER, RELEASE_TOKEN, VPS_SSH_KEY]
   tasks:
     owner: DreamsAreReal
@@ -25,9 +21,11 @@ services:
       - to: stt
         why: dictation audio from the browser is passed to the speech service
       - to: observability
+        why: delivery steps of deploy-hub are read from its logs in VictoriaLogs
+      - to: observability
         why: errors go to Bugsink through the Sentry SDK
     secrets: [STT_TOKEN, TASKS_AGENT_TOKEN, SENTRY_DSN, SENTRY_DSN_RUNNER, SENTRY_DSN_WEB]
-    config: [HOST, PORT, METRICS_PORT, DB_PATH, REQUIRE_DATA_MOUNT, DEV_LOGIN, PUBLIC_URL, STT_URL, AGENT_BASE_DIR, TASKS_API_URL, TASKS_AGENT_EPIC, AGENT_STATE_DIR, RADAR_CONTEXTS]
+    config: [HOST, PORT, METRICS_PORT, DB_PATH, REQUIRE_DATA_MOUNT, DEV_LOGIN, PUBLIC_URL, STT_URL, AGENT_BASE_DIR, TASKS_API_URL, TASKS_AGENT_EPIC, AGENT_STATE_DIR, RADAR_CONTEXTS, DELIVERY_LOGS_URL]
     data: [/data]
   stt:
     owner: DreamsAreReal
