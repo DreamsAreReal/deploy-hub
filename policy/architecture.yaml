@@ -22,7 +22,7 @@ services:
       - to: stt
         why: dictation audio from the browser is passed to the speech service
       - to: observability
-        why: delivery steps of deploy-hub are read from its logs in VictoriaLogs
+        why: delivery steps of deploy-hub and the error records the assistant watches are read from VictoriaLogs
       - to: observability
         why: errors go to Bugsink through the Sentry SDK
     secrets: [STT_TOKEN, TASKS_AGENT_TOKEN, SENTRY_DSN, SENTRY_DSN_RUNNER, SENTRY_DSN_WEB]
