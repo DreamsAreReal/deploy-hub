@@ -16,6 +16,7 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/delivery"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/docker"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/arch"
 	"github.com/DreamsAreReal/deploy-hub/internal/health"
 	"github.com/DreamsAreReal/deploy-hub/internal/hub"
 	"github.com/DreamsAreReal/deploy-hub/internal/journal"
@@ -67,6 +68,7 @@ type Service struct {
 	Only        string
 	Host        HostSyncer
 	HostApps    []string
+	Catalog     *arch.Catalog
 	samples     []obs.Sample
 	steps       []delivery.Step
 }

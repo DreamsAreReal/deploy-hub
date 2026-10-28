@@ -93,6 +93,13 @@ groups:
           summary: "deploy-hub cannot read its journal"
           description: "/opt/deploy-hub/deploys.log is unreadable: rollbacks lose their targets and the journal counters are not pushed. Check its owner (deploy) and mode on the VPS."
 
+      - alert: DeployHubLiveDrift
+        expr: max by (app) (deploy_hub_arch_live_drift) > 0
+        for: 30m
+        annotations:
+          summary: "{{ $labels.app }} runs with something its catalog entry does not declare"
+          description: "For 30 minutes the running container of {{ $labels.app }} has had {{ $value }} environment variables (beyond its image) or published ports that policy/architecture.yaml does not list: a hand edit of /opt/{{ $labels.app }}/.env, a leftover secret or an app missing from the catalog. Which ones: VictoriaLogs msg:\"live drift\" app:{{ $labels.app }}. Declare them in the catalog through the hub's gate or remove them from the server."
+
       - alert: DeployHubCIRunnerOffline
         expr: max by (runner) (max_over_time(deploy_hub_ci_runner_up[10m])) == 0
         annotations:

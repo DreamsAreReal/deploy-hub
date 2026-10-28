@@ -40,6 +40,7 @@ const (
 	msgLive             = "%s — %s@%s live (%s)\n"
 	msgNoHistory        = "no journal entries for %s\n"
 	msgRegistryError    = "error: cannot read apps.list"
+	msgNotInCatalog     = "the app is not in policy/architecture.yaml"
 	statusHeader        = "app | sha | health | last deploy"
 	statusNone          = "none"
 	statusNever         = "never"

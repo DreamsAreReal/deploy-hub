@@ -12,6 +12,7 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/caddy"
 	"github.com/DreamsAreReal/deploy-hub/internal/compose"
 	"github.com/DreamsAreReal/deploy-hub/internal/docker"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/arch"
 	"github.com/DreamsAreReal/deploy-hub/internal/health"
 	"github.com/DreamsAreReal/deploy-hub/internal/journal"
 	"github.com/DreamsAreReal/deploy-hub/internal/lock"
@@ -24,6 +25,7 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/registry"
 	"github.com/DreamsAreReal/deploy-hub/internal/runner"
 	"github.com/DreamsAreReal/deploy-hub/internal/validate"
+	embedded "github.com/DreamsAreReal/deploy-hub/policy"
 )
 
 const (
@@ -84,6 +86,7 @@ func runRunner(ctx context.Context, a *App, ex procexec.Runner, args []string) i
 		Audience:    a.Config.Audience,
 		WorkflowRef: a.Config.WorkflowRef(),
 		Host:        runner.SudoHost{Exec: ex, Binary: a.Config.Paths.Binary()},
+		Catalog:     a.catalog(),
 		HostApps:    a.hostApps(),
 		Only:        only,
 	}
@@ -195,4 +198,13 @@ func runOnboard(ctx context.Context, a *App, ex procexec.Runner, args []string) 
 		Exec: ex, Out: a.Out, Err: a.Err, Log: a.Log,
 	}
 	return o.Run(ctx, args)
+}
+
+func (a *App) catalog() *arch.Catalog {
+	catalog, err := arch.Parse(embedded.Architecture())
+	if err != nil {
+		a.Log.Warn("catalog unreadable, no live drift check", "error", err.Error())
+		return nil
+	}
+	return &catalog
 }

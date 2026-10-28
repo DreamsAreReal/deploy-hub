@@ -73,6 +73,8 @@ type sim struct {
 	rwMounts     string
 	mountsErr    error
 	imageLabel   string
+	runEnv       string
+	bakedEnv     string
 	stopped      []string
 }
 
@@ -133,6 +135,9 @@ func (s *sim) inspectCall(a []string) (procexec.Result, error) {
 func (s *sim) lifecycle(a []string) (procexec.Result, error) {
 	switch a[0] {
 	case "image":
+		if a[1] == verbInsp && a[3] == envFormat {
+			return procexec.Result{Stdout: s.bakedEnv}, nil
+		}
 		if a[1] == verbInsp {
 			return procexec.Result{Stdout: s.imageLabel + "\n"}, nil
 		}
@@ -197,6 +202,8 @@ func (s *sim) inspect(format, container string) procexec.Result {
 		return procexec.Result{Stdout: "unhealthy"}
 	case "{{range $p,$c := .NetworkSettings.Ports}}{{range $c}}{{$p}} {{.HostPort}}\n{{end}}{{end}}":
 		return procexec.Result{Stdout: "8080/tcp " + appPort + "\n"}
+	case envFormat:
+		return procexec.Result{Stdout: s.runEnv}
 	default:
 		return procexec.Result{Stdout: "web_default\n"}
 	}

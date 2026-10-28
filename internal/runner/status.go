@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/docker"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/arch"
 	"github.com/DreamsAreReal/deploy-hub/internal/health"
 	"github.com/DreamsAreReal/deploy-hub/internal/journal"
 	"github.com/DreamsAreReal/deploy-hub/internal/netprobe"
@@ -13,11 +14,12 @@ import (
 )
 
 type appStatus struct {
-	name   string
-	sha7   string
-	state  string
-	health string
-	last   string
+	name      string
+	sha7      string
+	state     string
+	health    string
+	last      string
+	container string
 }
 
 func (s appStatus) line() string {
@@ -52,6 +54,7 @@ func (s *Service) status(ctx context.Context) int {
 			obs.Sample{Name: obs.MetricAppUp, Labels: labels, Value: obs.Bool(st.up())},
 			obs.Sample{Name: obs.MetricAppHealthy, Labels: labels, Value: obs.Bool(st.healthy())},
 		)
+		s.liveDrift(ctx, st)
 	}
 	s.samples = append(s.samples, obs.Sample{Name: obs.MetricAppsRegistered, Labels: obs.Labels{}, Value: float64(len(apps))})
 	return ExitOK
@@ -70,6 +73,7 @@ func (s *Service) appStatus(ctx context.Context, a registry.Entry, entries []jou
 	if cname == "" {
 		return st
 	}
+	st.container = cname
 	st.state = s.Docker.State(ctx, cname)
 	st.health = s.Docker.HealthStatus(ctx, cname)
 	if st.health == docker.NoHealth && st.up() && confErr == nil && conf.HealthMode() == registry.HealthHTTP {
@@ -79,6 +83,30 @@ func (s *Service) appStatus(ctx context.Context, a registry.Entry, entries []jou
 		}
 	}
 	return st
+}
+
+func (s *Service) liveDrift(ctx context.Context, st appStatus) {
+	if s.Catalog == nil || !st.up() {
+		return
+	}
+	env, err := s.Docker.RunEnv(ctx, st.container)
+	var ports []int
+	if err == nil {
+		ports, err = s.Docker.BoundPorts(ctx, st.container)
+	}
+	if err != nil {
+		s.Log.Warn("live facts unreadable", "app", st.name, "error", err.Error())
+		return
+	}
+	service, known := s.Catalog.Services[st.name]
+	drift := service.LiveDrift(arch.Facts{Env: env, Ports: ports})
+	if !known {
+		drift = append(drift, msgNotInCatalog)
+	}
+	for _, item := range drift {
+		s.Log.Warn("live drift", "app", st.name, "item", item)
+	}
+	s.samples = append(s.samples, obs.Sample{Name: obs.MetricArchLiveDrift, Labels: obs.Labels{obs.LabelApp: st.name}, Value: float64(len(drift))})
 }
 
 func (s *Service) history(app string) int {
