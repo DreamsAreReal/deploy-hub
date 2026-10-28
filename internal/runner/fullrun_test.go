@@ -148,9 +148,10 @@ func TestGateOfAnotherCommitRequestsFullRunAfterFailedOne(t *testing.T) {
 	verdicts := verdictsMeta(t, map[string]mutation.Status{cacheKeyA: mutation.StatusKilled})
 	gateRun := runMeta(t, mutation.RunSummary{Complete: true, Passed: true, Bases: []string{cacheBase}})
 	started := night.Add(-time.Hour)
-	failedElsewhere := &gate.FullRun{Commit: "bbbbbbb2222", Bases: []string{cacheBase}, Time: night.Add(-time.Hour)}
+	otherCommit := strings.TrimPrefix(good2Tag, "sha-")
+	failedElsewhere := &gate.FullRun{Commit: otherCommit, Bases: []string{cacheBase}, Time: night.Add(-time.Hour)}
 	failedHere := &gate.FullRun{Commit: strings.TrimPrefix(goodTag, "sha-"), Bases: []string{cacheBase}, Time: night.Add(-time.Hour)}
-	passedElsewhere := &gate.FullRun{Commit: "bbbbbbb2222", Bases: []string{cacheBase}, Passed: true, Time: night.Add(-time.Hour)}
+	passedElsewhere := &gate.FullRun{Commit: otherCommit, Bases: []string{cacheBase}, Passed: true, Time: night.Add(-time.Hour)}
 	cases := []struct {
 		name string
 		st   cacheState
