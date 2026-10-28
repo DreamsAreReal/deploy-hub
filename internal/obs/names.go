@@ -47,6 +47,7 @@ const (
 	MetricPreemptRerun         = "deploy_hub_preempt_rerun"
 	MetricPreemptRerunsMax     = "deploy_hub_preempt_reruns_max"
 	MetricMutationCacheIntact  = "deploy_hub_mutation_cache_intact"
+	MetricTextfileWritten      = "deploy_hub_textfile_written_timestamp_seconds"
 
 	LabelApp     = "app"
 	LabelAction  = "action"
@@ -59,6 +60,7 @@ const (
 	LabelCommand = "command"
 	LabelLevel   = "level"
 	LabelReason  = "reason"
+	LabelSource  = "source"
 
 	LevelWarn  = "warn"
 	LevelError = "error"

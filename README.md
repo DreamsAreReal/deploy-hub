@@ -1566,6 +1566,17 @@ pushed and its series go stale. Change failure rate, deploy frequency and lead
 time quantiles are recording rules in the observability repo
 (`rules/dora.yml`, queries in its README).
 
+With `DEPLOY_HUB_TEXTFILE_DIR` set (empty by default) every command also writes
+the samples of its run for node-exporter's textfile collector, next to the push:
+`deploy-hub-<command>.prom` (the forced `runner` writes one file per verb,
+`deploy-hub-runner-status.prom`, `deploy-hub-runner-deploy.prom` and so on), through a
+temporary file and a rename. Every sample gets the label `source` with that name,
+so two files never carry the same series, and
+`deploy_hub_textfile_written_timestamp_seconds{source}` says when the run ended.
+A file holds the values of the last run of its command; pushed samples carry
+their own time. This is the first step of moving the hub from push to textfile
+(tasks #792): both ways run side by side until the alert rules read the files.
+
 | Metric | Labels | Meaning |
 |---|---|---|
 | `deploy_hub_operations_total` | app, action, result | journal-derived counters (deploy, gate, rollback, redeploy, stop, prune, refuse) |

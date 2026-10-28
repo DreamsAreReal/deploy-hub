@@ -31,6 +31,10 @@ type Sample struct {
 }
 
 func (s Sample) Line(ts time.Time) string {
+	return fmt.Sprintf("%s %s %d", s.series(), formatValue(s.Value), ts.UnixMilli())
+}
+
+func (s Sample) series() string {
 	keys := make([]string, 0, len(s.Labels))
 	for k := range s.Labels {
 		keys = append(keys, k)
@@ -40,8 +44,11 @@ func (s Sample) Line(ts time.Time) string {
 	for _, k := range keys {
 		parts = append(parts, k+`="`+escape(s.Labels[k])+`"`)
 	}
-	value := strconv.FormatFloat(s.Value, 'f', -1, 64)
-	return fmt.Sprintf("%s{%s} %s %d", s.Name, strings.Join(parts, ","), value, ts.UnixMilli())
+	return s.Name + "{" + strings.Join(parts, ",") + "}"
+}
+
+func formatValue(v float64) string {
+	return strconv.FormatFloat(v, 'f', -1, 64)
 }
 
 func escape(v string) string {

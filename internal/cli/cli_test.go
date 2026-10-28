@@ -125,6 +125,7 @@ func TestConfigValidation(t *testing.T) {
 	cases := map[string]string{
 		envHubDir:      relativeDir,
 		envMetricsURL:  "ftp://x",
+		envTextfileDir: relativeDir,
 		envDeployUser:  "Bad User",
 		envHostSlug:    "bad slug",
 		envHubRepo:     "no-slash",
@@ -203,6 +204,17 @@ func TestDefaultsAndMetricsToggle(t *testing.T) {
 	testutil.True(t, ok && p.URL == unreachableURL && p.Client != nil, "HTTP pusher for a configured URL")
 	_, off := (&App{}).metrics().(obs.Discard)
 	testutil.True(t, off, "an empty URL disables metrics")
+	dir := t.TempDir()
+	both := &App{Config: Config{MetricsURL: unreachableURL, TextfileDir: dir}, Now: time.Now, source: "prune"}
+	fanout, fans := both.metrics().(obs.Fanout)
+	testutil.True(t, fans && len(fanout) == 2 && both.metrics().(obs.Fanout)[1] == fanout[1], "push and one shared textfile for the whole run")
+	only := &App{Config: Config{TextfileDir: dir}, Now: time.Now, source: "prune"}
+	file, alone := only.metrics().(*obs.Textfile)
+	testutil.True(t, alone && file.Path() == filepath.Join(dir, "deploy-hub-prune.prom"), "a textfile alone")
+	for request, want := range map[string]string{"status": "runner-status", "  deploy web sha-1": "runner-deploy", "Bad;verb": "runner-other", "": "runner-other"} {
+		testutil.Equal(t, textfileSource(CmdRunner, request), want)
+	}
+	testutil.Equal(t, textfileSource(CmdPrune, "status"), CmdPrune)
 }
 
 func TestRenderCommand(t *testing.T) {

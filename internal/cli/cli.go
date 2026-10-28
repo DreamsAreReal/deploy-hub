@@ -9,8 +9,10 @@ import (
 	"net/http"
 	"os"
 	"os/user"
+	"regexp"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/console"
@@ -34,6 +36,8 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/selfupdate"
 	"github.com/DreamsAreReal/deploy-hub/internal/tools"
 )
+
+const otherSource = "other"
 
 const (
 	ExitOK    = 0
@@ -119,6 +123,8 @@ type App struct {
 	Token        string
 	CIRoot       string
 	PreemptState string
+	source       string
+	textfile     *obs.Textfile
 }
 
 type handler struct {
@@ -127,6 +133,8 @@ type handler struct {
 	onServer bool
 	verbose  bool
 }
+
+var sourceWord = regexp.MustCompile(`^[a-z][a-z-]{0,39}$`)
 
 var handlers = map[string]handler{
 	CmdRunner:     {run: runRunner, binaries: []string{binDocker, binSudo}, onServer: true},
@@ -202,7 +210,8 @@ func Run(ctx context.Context, args []string, env Env, stdio IO, deps Deps) int {
 	counts := &obs.LevelCounts{}
 	log, closeLog := openLogger(cfg, args[0], h, stdio.Stderr, counts)
 	defer closeLog()
-	a := &App{Config: cfg, IO: stdio, Out: stdout, Err: stderr, Now: deps.Now, Log: log, Owner: deps.Owner, Group: deps.Group, Exec: deps.Exec, Checks: deps.Checks, Sudoers: deps.Sudoers, Token: deps.Token, CIRoot: deps.CIRoot, PreemptState: deps.PreemptState}
+	a := &App{Config: cfg, IO: stdio, Out: stdout, Err: stderr, Now: deps.Now, Log: log, Owner: deps.Owner, Group: deps.Group, Exec: deps.Exec, Checks: deps.Checks, Sudoers: deps.Sudoers, Token: deps.Token, CIRoot: deps.CIRoot, PreemptState: deps.PreemptState,
+		source: textfileSource(args[0], cfg.SSHCommand)}
 	started := time.Now()
 	log.Info("command started", "args", len(args)-1)
 	code, panicked := a.invoke(ctx, h, args[1:])
@@ -250,10 +259,34 @@ func openLogger(cfg Config, command string, h handler, stderr io.Writer, counts 
 }
 
 func (a *App) metrics() obs.Pusher {
-	if a.Config.MetricsURL == "" {
-		return obs.Discard{}
+	var pushers obs.Fanout
+	if a.Config.MetricsURL != "" {
+		pushers = append(pushers, obs.HTTPPusher{URL: a.Config.MetricsURL, Client: &http.Client{}, Now: a.Now, Log: a.Log})
 	}
-	return obs.HTTPPusher{URL: a.Config.MetricsURL, Client: &http.Client{}, Now: a.Now, Log: a.Log}
+	if a.Config.TextfileDir != "" {
+		if a.textfile == nil {
+			a.textfile = &obs.Textfile{Dir: a.Config.TextfileDir, Source: a.source, Now: a.Now, Log: a.Log}
+		}
+		pushers = append(pushers, a.textfile)
+	}
+	switch len(pushers) {
+	case 0:
+		return obs.Discard{}
+	case 1:
+		return pushers[0]
+	}
+	return pushers
+}
+
+func textfileSource(command, request string) string {
+	if command != CmdRunner {
+		return command
+	}
+	verb, _, _ := strings.Cut(strings.TrimSpace(request), " ")
+	if !sourceWord.MatchString(verb) {
+		verb = otherSource
+	}
+	return command + "-" + verb
 }
 
 func (a *App) delivery() delivery.Notifier {

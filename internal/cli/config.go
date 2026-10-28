@@ -38,6 +38,7 @@ const (
 	envJWKSURL     = "DEPLOY_HUB_JWKS_URL"
 	envJWKSCache   = "DEPLOY_HUB_JWKS_CACHE"
 	envStoreFile   = "DEPLOY_HUB_SECRETS_FILE"
+	envTextfileDir = "DEPLOY_HUB_TEXTFILE_DIR"
 	envStoreAge    = "DEPLOY_HUB_SECRETS_KEY"
 	envAge         = "DEPLOY_HUB_AGE"
 	defaultAge     = "/usr/bin/age"
@@ -67,6 +68,7 @@ const (
 var (
 	ErrHubDir     = errors.New("invalid HUB_DIR: must be an absolute path")
 	ErrMetricsURL = errors.New("invalid DEPLOY_HUB_METRICS_URL: must be an http(s) URL or empty")
+	ErrTextfile   = errors.New("invalid DEPLOY_HUB_TEXTFILE_DIR: must be an absolute path or empty")
 	ErrUser       = errors.New("invalid user name")
 	ErrGate       = errors.New("invalid health gate timing: timeout 60s..10m, interval 1s..30s")
 	ErrJWKSURL    = errors.New("invalid DEPLOY_HUB_JWKS_URL: must be an http(s) URL")
@@ -82,26 +84,27 @@ func (e Env) get(key, fallback string) string {
 }
 
 type Config struct {
-	Paths      hub.Paths
-	Caddy      caddy.Config
-	CaddyUser  string
-	DeployUser string
-	MetricsURL string
-	LogLevel   string
-	LogFile    string
-	HostAlias  string
-	VPSAddr    string
-	DeployKey  string
-	HubRepo    string
-	RepoOwner  string
-	SSHCommand string
-	GateWait   time.Duration
-	GateTick   time.Duration
-	Audience   string
-	JWKSURL    string
-	JWKSCache  string
-	Secrets    SecretsConfig
-	SpoolRoot  string
+	Paths       hub.Paths
+	Caddy       caddy.Config
+	CaddyUser   string
+	DeployUser  string
+	MetricsURL  string
+	TextfileDir string
+	LogLevel    string
+	LogFile     string
+	HostAlias   string
+	VPSAddr     string
+	DeployKey   string
+	HubRepo     string
+	RepoOwner   string
+	SSHCommand  string
+	GateWait    time.Duration
+	GateTick    time.Duration
+	Audience    string
+	JWKSURL     string
+	JWKSCache   string
+	Secrets     SecretsConfig
+	SpoolRoot   string
 }
 
 type SecretsConfig struct {
@@ -119,24 +122,25 @@ func LoadConfig(env Env) (Config, error) {
 	server, _ := registry.ReadKV(paths.HubConf())
 	slug := env.get(envHostSlug, server[confHostSlug])
 	c := Config{
-		Paths:      paths,
-		Caddy:      caddy.Config{Caddyfile: env.get(envCaddyfile, caddy.DefaultCaddyfile), HostSlug: slug, Email: env.get(envACMEEmail, acmeEmail(server[confACMEEmail], slug))},
-		CaddyUser:  env.get(envCaddyUser, caddy.DefaultUser),
-		DeployUser: env.get(envDeployUser, defaultDeployUser),
-		MetricsURL: defaultMetricsURL,
-		LogLevel:   env.get(envLogLevel, ""),
-		LogFile:    env.get(envLogFile, ""),
-		HostAlias:  env.get(envHostAlias, defaultHostAlias),
-		VPSAddr:    env.get(envVPSAddr, ""),
-		DeployKey:  env.get(envDeployKey, filepath.Join(env.get(envHome, ""), defaultDeployKey)),
-		HubRepo:    env.get(envHubRepo, defaultHubRepo),
-		RepoOwner:  env.get(envRepoOwner, defaultRepoOwner),
-		SSHCommand: env.get(envSSHOriginal, ""),
-		Audience:   env.get(envAudience, defaultAudience),
-		JWKSURL:    env.get(envJWKSURL, oidc.JWKSURL),
-		JWKSCache:  env.get(envJWKSCache, filepath.Join(env.get(envHome, ""), defaultJWKSCache)),
-		Secrets:    SecretsConfig{File: env.get(envStoreFile, ""), Key: env.get(envStoreAge, defaultAgeKey), Age: env.get(envAge, defaultAge)},
-		SpoolRoot:  env.get(envSpoolRoot, defaultSpool),
+		Paths:       paths,
+		Caddy:       caddy.Config{Caddyfile: env.get(envCaddyfile, caddy.DefaultCaddyfile), HostSlug: slug, Email: env.get(envACMEEmail, acmeEmail(server[confACMEEmail], slug))},
+		CaddyUser:   env.get(envCaddyUser, caddy.DefaultUser),
+		DeployUser:  env.get(envDeployUser, defaultDeployUser),
+		MetricsURL:  defaultMetricsURL,
+		LogLevel:    env.get(envLogLevel, ""),
+		LogFile:     env.get(envLogFile, ""),
+		HostAlias:   env.get(envHostAlias, defaultHostAlias),
+		VPSAddr:     env.get(envVPSAddr, ""),
+		DeployKey:   env.get(envDeployKey, filepath.Join(env.get(envHome, ""), defaultDeployKey)),
+		HubRepo:     env.get(envHubRepo, defaultHubRepo),
+		RepoOwner:   env.get(envRepoOwner, defaultRepoOwner),
+		SSHCommand:  env.get(envSSHOriginal, ""),
+		Audience:    env.get(envAudience, defaultAudience),
+		JWKSURL:     env.get(envJWKSURL, oidc.JWKSURL),
+		JWKSCache:   env.get(envJWKSCache, filepath.Join(env.get(envHome, ""), defaultJWKSCache)),
+		Secrets:     SecretsConfig{File: env.get(envStoreFile, ""), Key: env.get(envStoreAge, defaultAgeKey), Age: env.get(envAge, defaultAge)},
+		SpoolRoot:   env.get(envSpoolRoot, defaultSpool),
+		TextfileDir: env.get(envTextfileDir, ""),
 	}
 	if v, ok := env(envMetricsURL); ok {
 		c.MetricsURL = v
@@ -182,6 +186,9 @@ func (c Config) validate() error {
 func (c Config) validateEndpoints() error {
 	if err := validMetricsURL(c.MetricsURL); err != nil {
 		return err
+	}
+	if c.TextfileDir != "" && !filepath.IsAbs(c.TextfileDir) {
+		return ErrTextfile
 	}
 	if validMetricsURL(c.JWKSURL) != nil {
 		return ErrJWKSURL
