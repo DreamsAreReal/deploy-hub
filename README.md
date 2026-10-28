@@ -143,6 +143,9 @@ versions and checksums: [`policy/tools.yaml`](policy/tools.yaml).
 | `dast` | any ZAP alert of Low risk or above on the running app | OWASP ZAP full scan |
 | `load` | p95 above the profile, errors above the profile, crash, restart or OOM under load | built in |
 
+What this table covers and what it misses, seen from what an agent could break:
+[docs/gate-map.md](docs/gate-map.md).
+
 **Language packs.** The checks marked "per stack" run once per project in the
 repository; a project is the directory of a stack manifest. A repository with
 several projects (an API and a web front end, say) gets every project checked

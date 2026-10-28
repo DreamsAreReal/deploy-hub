@@ -1,0 +1,35 @@
+# What the gate catches, and what it does not
+
+Agents change the apps without anyone reading the diffs (30 days: 1182 unattended Claude
+sessions, about 16 interactive ones), so the gate is the review. This map lists what an
+agent can break, the check that stops it, and the gaps. Checks are only ever added;
+none of them is weakened to make a release pass.
+
+| An agent could… | Caught by | Status |
+|---|---|---|
+| ship code that does not build or fails a test | `tests`, per stack | yes |
+| ship untested code or tests that assert nothing | `line-coverage`, `branch-coverage`, `mutation` (90%) | yes |
+| break a security or business scenario | `scenarios` (registered tests must pass) | yes |
+| commit a secret | `secrets-gitleaks`, `secrets-trufflehog` (whole history), `hygiene` (key files) | yes |
+| add a vulnerable or unknown dependency | `dependencies` (approved list), `sca`, `vulnerabilities`, `sbom-licenses` | yes |
+| hide a finding with a suppression comment | `comments` (no comments at all), `hygiene` (no suppression files) | yes |
+| leave work half done | `markers` | yes |
+| make code unreadable or copy-pasted | `lint`, `cognitive-complexity` (9), `duplication` (2%), `dead-code` | yes |
+| open a hole in CI or the image | `workflows`, `dockerfile`, `iac`, `image` | yes |
+| break the running app's security or speed | `dast`, `load` | yes |
+| add a link to another service, a port or an env variable nobody declared | `architecture` against `policy/architecture.yaml` | yes |
+| make an app call tasks directly | `architecture` (`tasks_callers`, dated exceptions) | yes |
+| put a secret outside the store | `architecture` (an env variable must be a declared secret or config) + deploy-hub lays only stored keys | partly: a declared secret may still be set by hand on the server until the app moves to the store (#743) |
+| weaken the gate | thresholds and exceptions live only in this repository's `policy/`; app repositories cannot change them | yes, as long as this repository needs the owner's review (#812) |
+| change UI markup or look by accident | tasks' own screen snapshots and design rules | partly: per app, not in the gate (#808, #809) |
+| add a cron job, timer or a new public site | — | **no** (#822: catalog check for timers and sites) |
+| grow code without removing any (month: +76.7k / −4.7k lines) | — | **no** (#822: growth report and threshold per service) |
+| break API or database compatibility so a rollback fails | — | **no** (#822: migration and API compatibility check) |
+| change behaviour without updating the docs | — | **no** (#822: touched modules vs touched docs) |
+| hard-code domain logic into the assistant | — | **no** (#822: heuristics on assistant code) |
+| deploy without the gate | deploy credentials are used only by the hub workflow after the gate | partly (#812: deploy step separated from the checkout, #814: one deploy key per app) |
+| replace the hub binary | self-update checks the release commit | partly (#813: verify the binary's signature) |
+
+Speed matters as much: the tasks gate takes 3.3–5.4 h today. New checks run on what
+changed and in parallel with the heavy ones; a check that slows every release has to
+pay for itself.
