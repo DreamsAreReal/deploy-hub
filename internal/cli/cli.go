@@ -29,6 +29,8 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/onboard"
 	"github.com/DreamsAreReal/deploy-hub/internal/preempt"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
+	"github.com/DreamsAreReal/deploy-hub/internal/runner"
+	"github.com/DreamsAreReal/deploy-hub/internal/secrets"
 	"github.com/DreamsAreReal/deploy-hub/internal/selfupdate"
 	"github.com/DreamsAreReal/deploy-hub/internal/tools"
 )
@@ -240,6 +242,14 @@ func (a *App) metrics() obs.Pusher {
 
 func (a *App) delivery() delivery.Notifier {
 	return delivery.LogNotifier{Log: a.Log}
+}
+
+func (a *App) secrets(ex procexec.Runner) runner.SecretLayer {
+	c := a.Config.Secrets
+	if c.File == "" {
+		return nil
+	}
+	return secrets.Store{File: c.File, KeyFile: c.Key, Sops: c.Sops, Exec: ex}
 }
 
 func ChownTo(username string) func(path string) error {

@@ -63,6 +63,7 @@ type Service struct {
 	Audience    string
 	WorkflowRef string
 	Delivery    delivery.Notifier
+	Secrets     SecretLayer
 	Host        HostSyncer
 	HostApps    []string
 	samples     []obs.Sample

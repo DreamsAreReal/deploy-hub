@@ -56,6 +56,9 @@ func (s *Service) newOperation(entry registry.Entry, tag, start string) *operati
 }
 
 func (s *Service) deployLocked(ctx context.Context, op *operation, conf registry.AppConf, meta Meta) int {
+	if !s.laySecrets(ctx, op) {
+		return ExitFail
+	}
 	if meta.BYOC() {
 		installed, err := s.installCompose(ctx, op, conf, meta)
 		if err != nil {

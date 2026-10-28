@@ -37,6 +37,11 @@ const (
 	envAudience    = "DEPLOY_HUB_OIDC_AUDIENCE"
 	envJWKSURL     = "DEPLOY_HUB_JWKS_URL"
 	envJWKSCache   = "DEPLOY_HUB_JWKS_CACHE"
+	envStoreFile   = "DEPLOY_HUB_SECRETS_FILE"
+	envStoreAge    = "DEPLOY_HUB_SECRETS_KEY"
+	envSops        = "DEPLOY_HUB_SOPS"
+	defaultSops    = "/usr/local/bin/sops"
+	defaultAgeKey  = "/run/deploy-hub/age.key"
 
 	minGateTimeout = 60 * time.Second
 	maxGateTimeout = 10 * time.Minute
@@ -95,6 +100,13 @@ type Config struct {
 	Audience   string
 	JWKSURL    string
 	JWKSCache  string
+	Secrets    SecretsConfig
+}
+
+type SecretsConfig struct {
+	File string
+	Key  string
+	Sops string
 }
 
 func (c Config) WorkflowRef() string {
@@ -122,6 +134,7 @@ func LoadConfig(env Env) (Config, error) {
 		Audience:   env.get(envAudience, defaultAudience),
 		JWKSURL:    env.get(envJWKSURL, oidc.JWKSURL),
 		JWKSCache:  env.get(envJWKSCache, filepath.Join(env.get(envHome, ""), defaultJWKSCache)),
+		Secrets:    SecretsConfig{File: env.get(envStoreFile, ""), Key: env.get(envStoreAge, defaultAgeKey), Sops: env.get(envSops, defaultSops)},
 	}
 	if v, ok := env(envMetricsURL); ok {
 		c.MetricsURL = v

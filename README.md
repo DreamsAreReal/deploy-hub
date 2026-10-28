@@ -1153,7 +1153,7 @@ and `deploy_hub_ci_quota_on{runner}` every minute; the alerts
 | `/home/deploy/.cache/deploy-hub/jwks.json` | last GitHub OIDC signing keys, used when GitHub is unreachable |
 | `/opt/<app>/docker-compose.yml` | app stack: 127.0.0.1 ports, mem limit, log rotation |
 | `/opt/<app>/app.conf` | `profile=`, `port=`, `health_path=`, `image=`, `repo=`, optional `bluegreen=on\|off` (BYOC: `mode=byoc`, `main=`, `hmode=`) |
-| `/opt/<app>/.env` | app secrets (600), referenced by compose, never in git |
+| `/opt/<app>/.env` (and other `*.env` files of the app) | app secrets (600), referenced by compose, never in git; with a secrets store the hub writes the stored keys into them on every deploy |
 | `/opt/<app>/.deploy-state` | `current=`/`previous=` sha tags — rollback source of truth |
 | `/var/lib/deploy-hub/host-backup/<app>/` | root, 700: previous host files replaced by `host-sync`, newest 5 runs |
 
@@ -1213,6 +1213,27 @@ that never passed the gate cannot be started by hand through the runner.
 
 Runner settings: `DEPLOY_HUB_OIDC_AUDIENCE` (default `deploy-hub`),
 `DEPLOY_HUB_JWKS_URL` (default GitHub's), `DEPLOY_HUB_JWKS_CACHE`, `HUB_REPO`.
+
+### Secrets store
+
+With `DEPLOY_HUB_SECRETS_FILE` set, every deploy first lays the app's secrets
+from one SOPS file encrypted with age (the store lives in the private
+`server-ops` repository, `secrets/values.sops.yaml`; see its README):
+
+    <app>:
+      .env:           {KEY: value, ...}
+      ingest.env:     {KEY: value, ...}
+
+The hub decrypts the file with `sops` (`DEPLOY_HUB_SOPS`, default
+`/usr/local/bin/sops`) and the age key at `DEPLOY_HUB_SECRETS_KEY` (default
+`/run/deploy-hub/age.key`: tmpfs, fetched from the home router at boot, never
+on disk), and writes only that app's keys into those files of the app folder:
+a stored key replaces its line, a new one is appended, every other line (plain
+config) stays, the file is replaced atomically with mode 600. The log line
+`secrets laid` names the files and keys, never values. Without the key the
+deploy stops with `secrets store is locked`: running apps keep their files;
+new deploys wait until the router is back. Apps without a section in the store
+are left alone, so apps move to the store one by one.
 
 `status` columns: `sha` is the sha7 of the running version; `health` is
 `<container state>/<check>` where `<check>` is the container healthcheck, a live
