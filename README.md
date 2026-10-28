@@ -112,6 +112,7 @@ versions and checksums: [`policy/tools.yaml`](policy/tools.yaml).
 | Check | What blocks a deploy | Tool |
 |---|---|---|
 | `registration` | app missing from the policy or deployed from another repository | — |
+| `architecture` | the app's entry in [`policy/architecture.yaml`](policy/architecture.yaml) is missing or broken (unknown callee, a link without `why`, a direct call to `tasks` by an app outside `tasks_callers` without an `until` date and the task that removes it, an ended exception), or the repository does something the entry does not declare: an environment variable of a `*.env.example` file or of compose that is in neither `secrets` nor `config`, a port published by compose that is not in `exposes`. Apps sharing one repository are checked against their entries together. The catalog lives in the hub so an app change cannot add its own links; `Catalog.Mermaid` draws the map | — |
 | `hygiene` | state/backup/debug/report files, keys, scanner-suppression files tracked in git, except the exact paths an app lists in `allowed_files` | — |
 | `comments` | any comment or documentation string in source and configuration files of any language (Python docstrings included); prose (`.md`, `.txt`, …) and tool-generated lockfiles are not source, `// indirect` is the only note allowed in `go.mod` | go/scanner, YAML parser, chroma lexers |
 | `markers` | work markers (the four listed in the policy) anywhere in tracked files | — |

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/arch"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/dupl"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/pack"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/scan"
@@ -25,6 +26,7 @@ func Checks() []gate.Check {
 	}
 	return []gate.Check{
 		{Name: "registration", Kind: gate.KindSecurity, Run: Registration},
+		{Name: "architecture", Kind: gate.KindSecurity, Run: arch.Check},
 		{Name: "hygiene", Kind: gate.KindSecurity, Run: source.Hygiene},
 		{Name: "comments", Kind: gate.KindQuality, Run: source.Comments},
 		{Name: "markers", Kind: gate.KindQuality, Run: source.Markers},
