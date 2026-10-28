@@ -179,17 +179,32 @@ func exception(name string, call Call, now time.Time) []string {
 	return nil
 }
 
+const (
+	envInRepo   = "environment variable %s is in the repo but not in secrets or config"
+	portInRepo  = "port %d is published by compose but not in exposes"
+	envRunning  = "environment variable %s is set in the running container but not in secrets or config"
+	portRunning = "port %d is published by the running container but not in exposes"
+)
+
 func (s Service) Drift(facts Facts) []string {
+	return s.drift(facts, envInRepo, portInRepo)
+}
+
+func (s Service) LiveDrift(facts Facts) []string {
+	return s.drift(facts, envRunning, portRunning)
+}
+
+func (s Service) drift(facts Facts, envLayout, portLayout string) []string {
 	declared := append(slices.Clone(s.Secrets), s.Config...)
 	var drift []string
 	for _, key := range facts.Env {
 		if !slices.Contains(declared, key) {
-			drift = append(drift, fmt.Sprintf("environment variable %s is in the repo but not in secrets or config", key))
+			drift = append(drift, fmt.Sprintf(envLayout, key))
 		}
 	}
 	for _, port := range facts.Ports {
 		if !s.exposes(port) {
-			drift = append(drift, fmt.Sprintf("port %d is published by compose but not in exposes", port))
+			drift = append(drift, fmt.Sprintf(portLayout, port))
 		}
 	}
 	return drift
@@ -271,7 +286,13 @@ func composeFacts(src string, facts *Facts) error {
 }
 
 func (c compose) collect(facts *Facts) {
-	for _, service := range c.Services {
+	names := make([]string, 0, len(c.Services))
+	for name := range c.Services {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		service := c.Services[name]
 		for _, mapping := range service.Ports {
 			if port, ok := containerPort(mapping); ok && !slices.Contains(facts.Ports, port) {
 				facts.Ports = append(facts.Ports, port)
