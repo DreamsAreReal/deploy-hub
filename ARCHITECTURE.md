@@ -291,7 +291,6 @@ e2e/                end-to-end tests of the real binary with fake docker/caddy/s
 policy/             gate.yaml, tools.yaml, golangci.yml, workflow-audit.yml, per-language tool locks
 templates/service/  the one template of a new service: a Go module of its own, gated with this repo
 server/systemd/     timers: status every minute, prune daily, history-guard every 5 min
-server/vmalert/     alert rules for the hub's metrics
 .github/            ci.yml, deploy.yml (reusable), history-guard.yml, actions/hub
 ```
 
@@ -396,12 +395,12 @@ simulator tests (`internal/runner/*_test.go`) and, for anything visible over
 SSH, a scenario in `e2e/scenarios_test.go`. Update README if the interface or
 journal format changes.
 
-**Add a metric.** Declare the name in `internal/obs/names.go`. If it signals a
-problem, add it to the list in `TestEveryProblemSignalHasAnAlert`
-(`internal/obs/alerts_test.go`) and write an alert in
-`server/vmalert/deploy-hub.yml`; the test fails when an alert uses an
-undeclared metric or a problem metric has no alert. Document it in README
-"Observability".
+**Add a metric.** Declare the name in `internal/obs/names.go` and document it in
+README "Observability". If it signals a problem, the alert goes to the
+observability repo, the only home of alert rules: add the name to the list of
+hub signals in its `internal/rulecheck` test, write the alert in
+`rules/deploy-hub.yml` and a unit test that fires it in
+`tests/deploy-hub.test.yaml`.
 
 **Add a gate check.** A repo-wide check is a
 `func(context.Context, gate.Workspace) gate.Outcome` added to

@@ -1525,23 +1525,19 @@ time quantiles are recording rules in the observability repo
 
 ### Alerts
 
-[`server/vmalert/deploy-hub.yml`](server/vmalert/deploy-hub.yml) holds the
-vmalert rules over these metrics: a hub that pushed nothing for 5 minutes, a
-panic, error log records, a failed server command, a failed deploy, redeploy or
-rollback, a gate rejection (per check, `ci-<step>` included), a crashed gate
-check, any refused request, an app unhealthy for 5 minutes, a failed Caddy
-sync, a failed host-sync, a self-update failing for 40 minutes, a deploy waiting over 120 s for the lock, a failed tracker post and an
-unreadable journal, a self-hosted CI runner offline for 10 minutes, its
-state not pushed, broken CI isolation, and the CI disk over 85%. `go test ./internal/obs` fails when a rule uses a metric
-that the code does not declare, or when a problem metric has no rule.
-
-To load them, copy the file into the observability stack's `rules/` directory
-and add `-rule=/etc/vmalert/deploy-hub.yml` to its `vmalert-metrics`
-service. Check a change before shipping it:
-
-```
-docker run --rm -v $PWD/server/vmalert:/r:ro victoriametrics/vmalert:v1.152.0 -dryRun -rule=/r/deploy-hub.yml
-```
+The alerts over these metrics live only in the observability repo
+(DreamsAreReal/observability, `rules/deploy-hub.yml`), which also sends them:
+a hub that pushed nothing for 5 minutes, a panic, error log records, a failed
+server command, a failed deploy, redeploy or rollback, a gate rejection (per
+check, `ci-<step>` included), a crashed gate check, any refused request, an app
+unhealthy for 5 minutes, a failed Caddy sync or host-sync, a self-update failing
+for 40 minutes, a corrupt mutation cache, a deploy waiting over 120 s for the
+lock, an unreadable journal, a self-hosted CI runner offline or silent, broken
+CI isolation, the CI disk or a runner's quota nearly full or the quota off,
+preemption failing or looping, and a running app that drifts from its catalog
+entry. There, `go test ./internal/rulecheck` fails when an alert lacks a
+description or a unit test that fires it, or when a problem signal of the hub
+has no alert.
 
 ### Usage analytics
 
