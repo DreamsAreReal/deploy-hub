@@ -15,7 +15,7 @@ import (
 const (
 	appName   = "web"
 	storeJSON = `{"web": {".env": {"API_TOKEN": "s3cr3t", "DSN": "https://dsn.example/3?x=1&y=2"}, "ingest.env": {"INGEST_TOKEN": "t0k"}}, "other": {".env": {"X": "y"}}}`
-	existing  = "# config\nPORT=8080\nAPI_TOKEN=old\n\nAPI_TOKEN=older\nexport MODE=prod\n"
+	existing  = "# config\nPORT=8080\nAPI_TOKEN=old\n\nAPI_TOKEN=older\nDSN\nexport MODE=prod\n"
 )
 
 func store(t *testing.T, reply procexec.Result, fail error) (Store, *procexectest.Fake) {
@@ -34,7 +34,7 @@ func TestLayWritesOnlyTheAppSecretsAndKeepsTheRest(t *testing.T) {
 	testutil.NoErr(t, err)
 	testutil.Equal(t, strings.Join(keys, ","), ".env:API_TOKEN,.env:DSN,ingest.env:INGEST_TOKEN")
 	testutil.Equal(t, testutil.Read(t, filepath.Join(dir, "ingest.env")), "INGEST_TOKEN=t0k\n")
-	testutil.Equal(t, testutil.Read(t, filepath.Join(dir, EnvFile)), "# config\nPORT=8080\nAPI_TOKEN=s3cr3t\n\nexport MODE=prod\nDSN='https://dsn.example/3?x=1&y=2'\n")
+	testutil.Equal(t, testutil.Read(t, filepath.Join(dir, EnvFile)), "# config\nPORT=8080\nAPI_TOKEN=s3cr3t\n\nDSN\nexport MODE=prod\nDSN='https://dsn.example/3?x=1&y=2'\n")
 	info, err := os.Stat(filepath.Join(dir, EnvFile))
 	testutil.NoErr(t, err)
 	testutil.Equal(t, info.Mode().Perm(), os.FileMode(0o600))

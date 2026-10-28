@@ -41,6 +41,7 @@ var (
 
 type Catalog struct {
 	TasksCallers []string           `yaml:"tasks_callers"`
+	LinkBudget   int                `yaml:"link_budget"`
 	Services     map[string]Service `yaml:"services"`
 }
 
@@ -108,7 +109,9 @@ func Check(_ context.Context, ws gate.Workspace) gate.Outcome {
 	}
 	repo := catalog.Merged(siblings(ws))
 	findings := append(catalog.Problems(ws.AppName, time.Now()), repo.Drift(facts)...)
-	return gate.Findings(reasonDrift, findings)
+	outcome := gate.Findings(reasonDrift, findings)
+	outcome.Findings = append(outcome.Findings, catalog.budgetFindings()...)
+	return outcome
 }
 
 func siblings(ws gate.Workspace) []string {

@@ -97,29 +97,38 @@ func Keys[V any](values map[string]V) []string {
 	return keys
 }
 
+type envLine struct {
+	text string
+	key  string
+}
+
 func Merge(existing []byte, values map[string]string) ([]byte, error) {
 	written := map[string]bool{}
-	var out []string
-	for _, line := range strings.Split(strings.TrimRight(string(existing), "\n"), "\n") {
-		key := keyOf(line)
+	var lines []envLine
+	for _, text := range strings.Split(strings.TrimRight(string(existing), "\n"), "\n") {
+		key := keyOf(text)
 		if _, managed := values[key]; !managed {
-			out = appendLine(out, line)
-			continue
+			lines = appendLine(lines, text)
+		} else if !written[key] {
+			lines, written[key] = append(lines, envLine{key: key}), true
 		}
-		if written[key] {
-			continue
-		}
-		pair, err := format(key, values[key])
-		if err != nil {
-			return nil, err
-		}
-		out, written[key] = append(out, pair), true
 	}
 	for _, key := range Keys(values) {
-		if written[key] {
+		if !written[key] {
+			lines = append(lines, envLine{key: key})
+		}
+	}
+	return render(lines, values)
+}
+
+func render(lines []envLine, values map[string]string) ([]byte, error) {
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if line.key == "" {
+			out = append(out, line.text)
 			continue
 		}
-		pair, err := format(key, values[key])
+		pair, err := format(line.key, values[line.key])
 		if err != nil {
 			return nil, err
 		}
@@ -128,11 +137,11 @@ func Merge(existing []byte, values map[string]string) ([]byte, error) {
 	return []byte(strings.Join(out, "\n") + "\n"), nil
 }
 
-func appendLine(out []string, line string) []string {
-	if line == "" && len(out) == 0 {
-		return out
+func appendLine(lines []envLine, text string) []envLine {
+	if text == "" && len(lines) == 0 {
+		return lines
 	}
-	return append(out, line)
+	return append(lines, envLine{text: text})
 }
 
 func keyOf(line string) string {

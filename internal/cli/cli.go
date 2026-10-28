@@ -42,6 +42,7 @@ const (
 
 	CmdRunner     = "runner"
 	CmdRender     = "render"
+	CmdArchReport = "arch-report"
 	CmdCaddySync  = "caddy-sync"
 	CmdPrune      = "prune"
 	CmdProvision  = "provision"
@@ -121,6 +122,7 @@ type handler struct {
 var handlers = map[string]handler{
 	CmdRunner:     {run: runRunner, binaries: []string{binDocker, binSudo}, onServer: true},
 	CmdRender:     {run: runRender},
+	CmdArchReport: {run: runArchReport},
 	CmdCaddySync:  {run: runCaddySync, binaries: []string{binCaddy, binSystemctl}, onServer: true},
 	CmdPrune:      {run: runPrune, binaries: []string{binDocker}, onServer: true},
 	CmdProvision:  {run: runProvision, binaries: []string{binCaddy, binSystemctl}, onServer: true},

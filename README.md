@@ -146,6 +146,14 @@ versions and checksums: [`policy/tools.yaml`](policy/tools.yaml).
 What this table covers and what it misses, seen from what an agent could break:
 [docs/gate-map.md](docs/gate-map.md).
 
+`link_budget` at the top of `policy/architecture.yaml` caps the number of links between
+services: a catalog over it still passes, with a finding in every app's verdict, so a new
+link is a visible decision. `deploy-hub arch-report [metrics-file]` prints, from the
+catalog embedded in the binary, the counts (services, links, secrets, public sites, the
+longest call chain) and for every service what it can call if it is hacked and what stops
+if it is down; with a file argument it also writes the same numbers in the Prometheus text
+format (`deploy_hub_arch_*`) for a textfile collector.
+
 **Language packs.** The checks marked "per stack" run once per project in the
 repository; a project is the directory of a stack manifest. A repository with
 several projects (an API and a web front end, say) gets every project checked

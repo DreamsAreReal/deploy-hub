@@ -1,3 +1,4 @@
+link_budget: 14
 tasks_callers:
   - runner
   - caddy
