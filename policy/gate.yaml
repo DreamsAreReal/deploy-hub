@@ -356,6 +356,7 @@ apps:
       - internal/texts/
       - internal/web/static/
       - internal/seed/*.json
+      - internal/connectors/catalog/
       - widget/
       - testdata/
       - tools/e2e/
@@ -492,6 +493,7 @@ apps:
       - internal/texts/
       - internal/web/static/
       - internal/seed/*.json
+      - internal/connectors/catalog/
       - widget/
       - testdata/
       - tools/e2e/
