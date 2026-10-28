@@ -78,6 +78,7 @@ func TestFullRunSessionLifecycle(t *testing.T) {
 func TestFullRunPlan(t *testing.T) {
 	passed := &gate.FullRun{Bases: []string{cacheBase}, Passed: true, Time: night.Add(-21 * time.Hour)}
 	started := night.Add(-time.Hour)
+	twoDays := night.Add(-48 * time.Hour)
 	expired := night.Add(-SessionMaxAge)
 	cases := []struct {
 		name string
@@ -91,6 +92,7 @@ func TestFullRunPlan(t *testing.T) {
 		{"due but daytime", cacheState{Last: passed}, night.Add(10 * time.Hour), planSkip},
 		{"night but recent", cacheState{Last: &gate.FullRun{Passed: true, Time: night.Add(-time.Hour)}}, night, planSkip},
 		{"session open", cacheState{Last: passed, SessionStarted: &started}, night, planContinue},
+		{"session open for two days", cacheState{Last: passed, SessionStarted: &twoDays}, night, planContinue},
 		{"session expired", cacheState{Last: passed, SessionStarted: &expired}, night.Add(10 * time.Hour), planSkip},
 	}
 	for _, c := range cases {
@@ -140,4 +142,40 @@ func TestCorruptStateStopsTheCache(t *testing.T) {
 	e.expectOut(e.err, msgCacheCorrupt)
 	testutil.Equal(t, e.dispatch(putCmd, verdictsMeta(t, map[string]mutation.Status{cacheKeyA: mutation.StatusKilled})+runMeta(t, mutation.RunSummary{Stale: true, Bases: []string{cacheBase}})), ExitOK)
 	testutil.True(t, e.cacheState().Requested, "a put rewrites a corrupt state")
+}
+
+func TestGateOfAnotherCommitRequestsFullRunAfterFailedOne(t *testing.T) {
+	verdicts := verdictsMeta(t, map[string]mutation.Status{cacheKeyA: mutation.StatusKilled})
+	gateRun := runMeta(t, mutation.RunSummary{Complete: true, Passed: true, Bases: []string{cacheBase}})
+	started := night.Add(-time.Hour)
+	otherCommit := strings.TrimPrefix(good2Tag, "sha-")
+	failedElsewhere := &gate.FullRun{Commit: otherCommit, Bases: []string{cacheBase}, Time: night.Add(-time.Hour)}
+	failedHere := &gate.FullRun{Commit: strings.TrimPrefix(goodTag, "sha-"), Bases: []string{cacheBase}, Time: night.Add(-time.Hour)}
+	passedElsewhere := &gate.FullRun{Commit: otherCommit, Bases: []string{cacheBase}, Passed: true, Time: night.Add(-time.Hour)}
+	cases := []struct {
+		name string
+		st   cacheState
+		meta string
+		want bool
+	}{
+		{"failed on another commit", cacheState{Last: failedElsewhere}, "", true},
+		{"failed on this commit", cacheState{Last: failedHere}, "", false},
+		{"passed on another commit", cacheState{Last: passedElsewhere}, "", false},
+		{"session already open", cacheState{Last: failedElsewhere, SessionStarted: &started}, "", false},
+		{"full chunk without a session", cacheState{Last: failedElsewhere}, fullMeta, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			e := newEnv(t)
+			e.at(night.Add(10 * time.Hour))
+			testutil.NoErr(t, e.svc.saveState(appName, c.st))
+			testutil.Equal(t, e.dispatch(putCmd, c.meta+verdicts+gateRun), ExitOK)
+			testutil.Equal(t, e.cacheState().Requested, c.want)
+		})
+	}
+	e := newEnv(t)
+	e.at(night.Add(10 * time.Hour))
+	testutil.NoErr(t, e.svc.saveState(appName, cacheState{Last: failedElsewhere}))
+	testutil.Equal(t, e.dispatch(putCmd, verdicts+gateRun), ExitOK)
+	testutil.Equal(t, e.plan(), planNew)
 }

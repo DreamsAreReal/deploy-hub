@@ -40,7 +40,7 @@ func (e *engine) keyBase(ctx context.Context) (KeyBase, error) {
 	if err != nil {
 		return KeyBase{}, fmt.Errorf(envFailed, err, gate.Tail(procexec.Output(err)))
 	}
-	pol, err := json.Marshal([]any{e.ws.Policy.Thresholds, e.ws.Policy.Limits, e.ws.App})
+	pol, err := json.Marshal([]any{e.ws.Policy.Thresholds, e.ws.Policy.Limits})
 	if err != nil {
 		return KeyBase{}, err
 	}

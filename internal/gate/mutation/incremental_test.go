@@ -230,7 +230,7 @@ func TestVerdictCacheIsVerifiedBySHA256(t *testing.T) {
 	}
 }
 
-func TestKeyBaseFollowsModuleToolchainAndPolicy(t *testing.T) {
+func TestKeyBaseFollowsModuleToolchainAndPolicyNotTheApp(t *testing.T) {
 	src := t.TempDir()
 	testutil.Write(t, filepath.Join(src, "go.sum"), "x v1 h1:a=\n")
 	env := goEnvOld
@@ -249,6 +249,8 @@ func TestKeyBaseFollowsModuleToolchainAndPolicy(t *testing.T) {
 	env = goEnvNew
 	third := base()
 	testutil.True(t, third.Toolchain != second.Toolchain, "the go version changes the toolchain part")
+	e.ws.App = policy.App{Repo: "o/r", Port: 8790, Health: "/health", CPUs: "2", Memory: "768m", Env: []string{"K=v"}}
+	testutil.Equal(t, base(), third)
 	e.ws.Policy.Limits.MutantFactor = 5
 	fourth := base()
 	testutil.True(t, fourth.Policy != third.Policy && fourth.Digest() != third.Digest(), "the policy changes the policy part")

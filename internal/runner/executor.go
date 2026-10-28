@@ -26,11 +26,7 @@ func (j FullJob) Runs() bool {
 }
 
 func (s *Service) DispatchFull(ctx context.Context, app string) (FullJob, []byte, error) {
-	entry, err := s.Apps.Lookup(app)
-	if err != nil {
-		return FullJob{}, nil, err
-	}
-	conf, err := s.loadConf(entry.Dir, entry.Name)
+	conf, repo, err := s.fullRunCache(app)
 	if err != nil {
 		return FullJob{}, nil, err
 	}
@@ -39,21 +35,34 @@ func (s *Service) DispatchFull(ctx context.Context, app string) (FullJob, []byte
 		return FullJob{}, nil, err
 	}
 	defer release()
-	st, err := s.loadState(app)
+	st, err := s.loadState(repo)
 	if err != nil {
 		return FullJob{}, nil, err
 	}
-	plan, err := s.planFull(app, &st)
+	plan, err := s.planFull(repo, &st)
 	job := FullJob{Plan: plan, App: app, Repo: conf.Repo}
 	if err != nil || plan != planContinue {
 		return job, nil, err
 	}
-	data, sum, err := s.loadStored(app, sessionFile)
+	data, sum, err := s.loadStored(repo, sessionFile)
 	if errors.Is(err, fs.ErrNotExist) {
 		return job, nil, nil
 	}
 	job.SessionSHA256 = sum
 	return job, data, err
+}
+
+func (s *Service) fullRunCache(app string) (registry.AppConf, string, error) {
+	entry, err := s.Apps.Lookup(app)
+	if err != nil {
+		return registry.AppConf{}, "", err
+	}
+	conf, err := s.loadConf(entry.Dir, entry.Name)
+	if err != nil {
+		return conf, "", err
+	}
+	repo, err := repoCache(conf)
+	return conf, repo, err
 }
 
 func (s *Service) ImportFull(ctx context.Context, app, commit string, verdicts, run []byte) error {
@@ -71,12 +80,16 @@ func (s *Service) ImportFull(ctx context.Context, app, commit string, verdicts, 
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrImport, err)
 	}
+	_, repo, err := s.fullRunCache(app)
+	if err != nil {
+		return err
+	}
 	release, err := s.CacheLocker.Acquire(ctx, func() {})
 	if err != nil {
 		return err
 	}
 	defer release()
-	c := cacheCall{entry: registry.Entry{Name: app}, tag: registry.TagPrefix + commit, meta: Meta{Mode: modeFull}}
+	c := cacheCall{entry: registry.Entry{Name: app}, repo: repo, tag: registry.TagPrefix + commit, meta: Meta{Mode: modeFull}}
 	if s.keepUpload(c, v, &summary) != ExitOK {
 		return fmt.Errorf("%w: the hub could not store it", ErrImport)
 	}
