@@ -139,13 +139,17 @@ func runMutationImport(ctx context.Context, a *App, ex procexec.Runner, args []s
 		a.Err.Println(err.Error())
 		return ExitUsage
 	}
-	files, err := readChunk(filepath.Join(a.CIRoot, app, chunkWork, chunkOut))
+	out := filepath.Join(a.CIRoot, app, chunkWork, chunkOut)
+	files, err := readChunk(out)
 	if errors.Is(err, fs.ErrNotExist) {
 		a.Out.Printf(msgNoChunk, app)
 		return ExitOK
 	}
 	if err == nil {
 		err = a.runnerService(ex).ImportFull(ctx, app, strings.TrimSpace(string(files[0])), files[1], files[2])
+	}
+	if err == nil {
+		err = takeChunk(out)
 	}
 	if err != nil {
 		return a.failWith(importPrefix, err)
@@ -169,6 +173,15 @@ func readChunk(dir string) ([][]byte, error) {
 		out = append(out, data)
 	}
 	return out, nil
+}
+
+func takeChunk(dir string) error {
+	root, err := os.OpenRoot(dir)
+	if err == nil {
+		err = root.Remove(commitFile)
+		_ = root.Close()
+	}
+	return err
 }
 
 var chunkFiles = []string{commitFile, mutation.VerdictsFile, mutation.RunFile}

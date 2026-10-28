@@ -90,6 +90,7 @@ func TestServerFullRunChunkEndToEnd(t *testing.T) {
 	testutil.Equal(t, testutil.Read(t, filepath.Join(d.work, chunkOut, commitFile)), commitSha+"\n")
 	h.want(ExitOK, CmdImport, appWeb)
 	testutil.Contains(t, h.out.String(), "mutation-import: web chunk of "+commitSha+" taken")
+	testutil.Missing(t, filepath.Join(d.work, chunkOut, commitFile))
 	h.want(ExitOK, CmdDispatch, appWeb)
 	job := readJob(t, d)
 	testutil.True(t, job.Plan == "continue" && job.SessionSHA256 == mutation.Digest([]byte(testutil.Read(t, filepath.Join(d.spool, sessionFile)))), "the next chunk continues with the session")
@@ -102,6 +103,10 @@ func TestServerFullRunChunkEndToEnd(t *testing.T) {
 	testutil.Missing(t, filepath.Join(d.spool, sessionFile))
 	testutil.Equal(t, h.run(d.args()...), ExitOK)
 	testutil.Contains(t, h.out.String(), "mutation-run: nothing to do (plan skip)")
+	h.want(ExitOK, CmdImport, appWeb)
+	testutil.Contains(t, h.out.String(), "mutation-import: web has no chunk to take")
+	h.want(ExitOK, CmdDispatch, appWeb)
+	testutil.Equal(t, readJob(t, d).Plan, "skip")
 }
 
 func TestServerChunkSkipsAndRefuses(t *testing.T) {

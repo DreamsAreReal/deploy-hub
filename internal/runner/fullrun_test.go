@@ -179,3 +179,40 @@ func TestGateOfAnotherCommitRequestsFullRunAfterFailedOne(t *testing.T) {
 	testutil.Equal(t, e.dispatch(putCmd, verdicts+gateRun), ExitOK)
 	testutil.Equal(t, e.plan(), planNew)
 }
+
+func TestFullChunkNeverRequestsAFullRun(t *testing.T) {
+	verdicts := verdictsMeta(t, map[string]mutation.Status{cacheKeyA: mutation.StatusKilled})
+	passed := &gate.FullRun{Commit: strings.TrimPrefix(goodTag, "sha-"), Bases: []string{cacheBase}, Passed: true, Time: night.Add(-time.Hour)}
+	cases := []struct {
+		name string
+		last *gate.FullRun
+		run  mutation.RunSummary
+	}{
+		{"stale chunk after a passed full run", passed, mutation.RunSummary{Complete: true, Passed: true, Stale: true, Bases: []string{cacheBase}}},
+		{"stale chunk with no full run yet", nil, mutation.RunSummary{Stale: true, Bases: []string{cacheBase}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			e := newEnv(t)
+			e.at(night.Add(10 * time.Hour))
+			testutil.NoErr(t, e.svc.saveState(appName, cacheState{Last: c.last}))
+			testutil.Equal(t, e.dispatch(putCmd, fullMeta+verdicts+runMeta(t, c.run)), ExitOK)
+			st := e.cacheState()
+			testutil.True(t, !st.Requested, "a full chunk without a session requests nothing")
+			testutil.Equal(t, st.Last, c.last)
+		})
+	}
+}
+
+func TestOldCompletingChunkImportedAgainKeepsThePassedFullRun(t *testing.T) {
+	e := newEnv(t)
+	e.at(night.Add(10 * time.Hour))
+	testutil.Equal(t, e.plan(), planNew)
+	done := runMeta(t, mutation.RunSummary{Complete: true, Passed: true, Fresh: true, Stale: true, Bases: []string{cacheBase}})
+	chunk := fullMeta + verdictsMeta(t, map[string]mutation.Status{cacheKeyA: mutation.StatusKilled}) + done
+	testutil.Equal(t, e.dispatch(putCmd, chunk), ExitOK)
+	testutil.Equal(t, e.plan(), planSkip)
+	testutil.Equal(t, e.dispatch(putCmd, chunk), ExitOK)
+	testutil.True(t, !e.cacheState().Requested && e.cacheState().Last.Passed, "the same chunk taken twice requests nothing")
+	testutil.Equal(t, e.plan(), planSkip)
+}

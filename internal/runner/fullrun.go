@@ -67,8 +67,9 @@ func nightlyDue(last, now time.Time) bool {
 
 func (s *Service) recordRun(c cacheCall, st *cacheState, run mutation.RunSummary) error {
 	full := c.meta.Mode == modeFull && st.SessionStarted != nil
+	deployGate := c.meta.Mode != modeFull
 	switch {
-	case run.Complete && (full || (run.Fresh && c.meta.Mode != modeFull)):
+	case run.Complete && (full || (run.Fresh && deployGate)):
 		st.Last = &gate.FullRun{Commit: strings.TrimPrefix(c.tag, registry.TagPrefix), Bases: run.Bases, Passed: run.Passed, Time: s.Now().UTC()}
 		st.SessionStarted, st.Requested = nil, false
 		s.Log.Info("full mutation run recorded", "app", c.entry.Name, "repo", c.repo, "tag", c.tag, "passed", run.Passed, "bases", run.Bases)
@@ -76,7 +77,7 @@ func (s *Service) recordRun(c cacheCall, st *cacheState, run mutation.RunSummary
 		if err := s.drop(c.repo, sessionFile); err != nil {
 			return err
 		}
-	case st.SessionStarted == nil && (run.Stale || gateAfterFailedFullRun(c, st.Last)):
+	case deployGate && st.SessionStarted == nil && (run.Stale || gateAfterFailedFullRun(c, st.Last)):
 		st.Requested = true
 		s.Log.Info("full mutation run requested", "app", c.entry.Name, "repo", c.repo, "tag", c.tag, "bases", run.Bases)
 	}
@@ -84,7 +85,7 @@ func (s *Service) recordRun(c cacheCall, st *cacheState, run mutation.RunSummary
 }
 
 func gateAfterFailedFullRun(c cacheCall, last *gate.FullRun) bool {
-	return c.meta.Mode != modeFull && last != nil && !last.Passed && last.Commit != strings.TrimPrefix(c.tag, registry.TagPrefix)
+	return last != nil && !last.Passed && last.Commit != strings.TrimPrefix(c.tag, registry.TagPrefix)
 }
 
 func (s *Service) planFull(repo string, st *cacheState) (string, error) {
