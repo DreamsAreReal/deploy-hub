@@ -99,6 +99,7 @@ type Config struct {
 	Audience   string
 	JWKSURL    string
 	JWKSCache  string
+	SpoolRoot  string
 }
 
 func (c Config) WorkflowRef() string {
@@ -127,6 +128,7 @@ func LoadConfig(env Env) (Config, error) {
 		Audience:   env.get(envAudience, defaultAudience),
 		JWKSURL:    env.get(envJWKSURL, oidc.JWKSURL),
 		JWKSCache:  env.get(envJWKSCache, filepath.Join(env.get(envHome, ""), defaultJWKSCache)),
+		SpoolRoot:  env.get(envSpoolRoot, defaultSpool),
 	}
 	if v, ok := env(envMetricsURL); ok {
 		c.MetricsURL = v

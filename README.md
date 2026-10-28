@@ -354,13 +354,40 @@ the hub for one. The hub keeps that state per app in `state.json` (last full
 run, requested, open session) and plans full runs: a session opens when there
 is no full run, when one was requested, or at night (00:00 to 06:00 UTC) when
 the last full run is more than 20 hours old; a session older than 24 hours is
-dropped. Large apps get their full run in chunks of
-`--mutation-full --mutation-budget 45m` (only the `tests` and `mutation`
-checks; when the budget runs out the finished verdicts are kept) outside
-GitHub Actions, on the hub host as the app's CI user with the runner's
-isolation, giving the CI runner way. That executor is not part of this
-release yet: until it is, a large app whose base changed stays red until a
-full run is recorded.
+dropped.
+
+Large apps get their full run in chunks outside GitHub Actions, on the hub host
+as the app's CI user with the runner's isolation (`ci-mutation@<repo>` in
+[`server/ci-runner`](server/ci-runner)):
+
+1. After the gate, `deploy.yml` (self-hosted runner only) keeps the source
+   (`git archive HEAD`), the pinned `deploy-hub`, the policy directory and the
+   job's Go toolchain in `~ci-<repo>/mutation/stash/`, replacing the previous
+   one, so a chunk mutates with exactly the engine, policy and Go of the gate.
+2. `ci-mutation@<repo>.timer` starts the service every 10 minutes. It does not
+   start while `/run/ci/<repo>/job-running` exists: the job-started hook
+   creates that file and the job-completed hook removes it.
+3. As root, `deploy-hub mutation-dispatch <repo>` asks the hub's state for a
+   plan (`new`, `continue` or `skip`) and writes `job.json` and the session's
+   verdicts to `/var/lib/ci-mutation/<repo>/` (root, group `ci-<repo>`, files
+   0640), out of reach of the CI user.
+4. As `ci-<repo>` (network namespace, read-only system, hidden paths, the
+   repo's slice, `CPUWeight=1` so the runner keeps priority),
+   `mutation-run` unpacks the stash into `~/mutation/work` and runs the gate
+   with only the Go `mutation` check, `--mutation-full --mutation-budget 3h
+   --mutation-yield /run/ci/<repo>/job-running` and the session verdicts as the
+   cache. When a CI job starts, the chunk stops within 15 seconds and keeps
+   what it finished. Packs without a verdict cache are `n/a` there: they mutate
+   in full in every gate anyway.
+5. As root, `deploy-hub mutation-import <repo>` reads the chunk's verdicts and
+   run summary through `os.Root` (regular files of at most 16 MiB, no
+   symlinks), validates them like an upload and merges them into the session,
+   the cache and the state. The chunk that completes the session records the
+   full run.
+
+Disk: the stash is one copy, the work directory is emptied before every chunk
+and dropped when the CI disk is over 70 %, the gate's disk guard bounds the
+chunk's report directory, and the spool holds two files of at most 16 MiB.
 
 **Load test, done for a 1-CPU VPS.** The image runs in an isolated docker
 network on the CI runner with the production limits from the policy (`cpus`,
@@ -521,6 +548,9 @@ commands:
 | `gate …` | CI | the quality gate |
 | `tools --manifest … --dir …` | CI | installs the pinned scanners, checksums verified |
 | `engine-version` | build (make) | sha256 of the mutation engine sources, linked into the binary |
+| `mutation-dispatch <app>` | root (`ci-mutation@<app>`) | plans the next full mutation chunk into `/var/lib/ci-mutation/<app>` |
+| `mutation-run …` | `ci-<app>` (`ci-mutation@<app>`) | runs one full mutation chunk from the stash |
+| `mutation-import <app>` | root (`ci-mutation@<app>`) | takes the chunk's verdicts into the hub |
 | `caddy-sync` | root (via a narrow sudoers rule) | regenerates the Caddyfile from `apps.list` |
 | `host-sync <app> <tag>` | root (via a narrow sudoers rule, called by `runner`) | installs the host files of an app's gated image, as listed in the policy (see [Host files](#host-files-host-sync)) |
 | `self-update [sha-<commit>]` | root (systemd timer every 10 minutes) | replaces the binary with the newest gated release of this repo (see [Releases and self-update](#releases-and-self-update)) |
@@ -1069,7 +1099,14 @@ gh api -X POST repos/DreamsAreReal/<app>/actions/runners/registration-token --jq
 that ext4 project quotas need), the
 nftables table, the units, and for every repo already registered its user,
 subordinate ids, home, drop-ins, network namespace and linger (a user manager
-still running in another namespace is restarted). `register` does the same for one
+still running in another namespace is restarted, and the timer of every
+template timer such as `ci-mutation@<app>.timer` is enabled). `host` installs
+the units with `ci-runner-setup units`: every `*.service` and `*.timer` of
+the directory, templates included, then one `systemctl daemon-reload`
+(`var-lib-ci.mount` stays with the disk step, which knows whether the image
+has project quotas); `ci-runner-setup timers <app>` enables the template
+timers of a repo. `server/ci-runner/setup_test.go` runs both with a stand-in `systemctl`.
+`register` does the same for one
 repo (`<app>` lowercase, at most 29 characters, so `ci-<app>` is a valid user
 name), downloads the pinned runner (sha256-checked), configures it as
 `eu-<app>` with the label `eu` and starts `ci-runner@<app>`. The runner updates
@@ -1150,6 +1187,8 @@ and `deploy_hub_ci_quota_on{runner}` every minute; the alerts
 | `/opt/deploy-hub/smoke.conf` | optional host TCP ports a deploy must not break; absent → `smoke=skip` |
 | `/opt/deploy-hub/last-error.log` | recent pull errors (when CI logs are unreachable) |
 | `/opt/deploy-hub/mutation-cache/<app>/` | `verdicts.json` (the mutation verdict cache), `session.json` (verdicts of the open full run session), `state.json` (last full run, requested, session start), each with the `.sha256` the runner recorded when it stored it; `mutation-cache.lock` serializes uploads |
+| `/var/lib/ci-mutation/<app>/` | `job.json` and `session.json` of the next full mutation chunk (root, group `ci-<app>`, 0640) |
+| `/var/lib/ci/<app>/mutation/` | `stash/` (source, pinned deploy-hub, policy, Go of the last deploy) and `work/` (the current chunk), owned by `ci-<app>` |
 | `/home/deploy/.cache/deploy-hub/jwks.json` | last GitHub OIDC signing keys, used when GitHub is unreachable |
 | `/opt/<app>/docker-compose.yml` | app stack: 127.0.0.1 ports, mem limit, log rotation |
 | `/opt/<app>/app.conf` | `profile=`, `port=`, `health_path=`, `image=`, `repo=`, optional `bluegreen=on\|off` (BYOC: `mode=byoc`, `main=`, `hmode=`) |

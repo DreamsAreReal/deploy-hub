@@ -9,7 +9,7 @@ setup() {
   export PATH="${STUBS}:${PATH}" HOME="${WORLD}/home"
   export GITHUB_REPOSITORY=DreamsAreReal/tasks GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/main
   export GITHUB_WORKFLOW_REF=DreamsAreReal/tasks/.github/workflows/deploy.yml@refs/heads/main
-  unset GITHUB_BASE_REF GITHUB_EVENT_PATH
+  unset GITHUB_BASE_REF GITHUB_EVENT_PATH DOCKER_HOST
 }
 
 disk() {
@@ -129,4 +129,18 @@ refused() {
   run bash "$HOOK"
   [ "$status" -eq 0 ]
   grep -qx 'df -B1G --output=used,size,pcent /nonexistent' "$CALLS"
+}
+
+@test "a taken job raises the flag that holds back the full mutation run" {
+  mkdir -p "${WORLD}/run/ci/tasks"
+  DOCKER_HOST="unix://${WORLD}/run/ci/tasks/docker.sock" run bash "$HOOK"
+  [ "$status" -eq 0 ]
+  [ -e "${WORLD}/run/ci/tasks/job-running" ]
+}
+
+@test "a refused job raises no flag" {
+  mkdir -p "${WORLD}/run/ci/tasks"
+  GITHUB_REF=refs/heads/dev DOCKER_HOST="unix://${WORLD}/run/ci/tasks/docker.sock" run bash "$HOOK"
+  [ "$status" -eq 1 ]
+  [ ! -e "${WORLD}/run/ci/tasks/job-running" ]
 }
