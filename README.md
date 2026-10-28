@@ -27,6 +27,7 @@ push to default branch
         [repo has a compose file] deploy-hub render
         docker build (local, not pushed yet)
         ssh deploy@vps "mutation-cache-get <app> <tag>"  → the app's mutation verdicts
+        ssh deploy@vps "ui-baseline-get <app> <tag>"  → screenshots of the deployed version
         deploy-hub gate  → verdict.json + SBOMs (kept as workflow artifacts)
         ssh deploy@vps "mutation-cache-put <app> <tag>"  ← always, pass or fail
         ssh deploy@vps "report <app> <tag>"  ← always, pass or fail
@@ -44,6 +45,7 @@ push to default branch
                 (apps with a writable mount are recreated in place instead)
               → ok:   state advanced, journal line, metrics pushed
               → fail: standby discarded, the current version keeps serving
+        ssh deploy@vps "ui-baseline-put <app> <tag>"  ← the gate's screenshots, after a successful deploy
 ```
 
 Images are built only in CI, never by the hub on the VPS. For private app
@@ -142,7 +144,7 @@ versions and checksums: [`policy/tools.yaml`](policy/tools.yaml).
 | `image` | any vulnerability, secret or misconfiguration in the built image | trivy |
 | `dast` | any ZAP alert of Low risk or above on the running app | OWASP ZAP full scan |
 | `load` | p95 above the profile, errors above the profile, crash, restart or OOM under load | built in |
-| `ui` | a problem the app's crawl finds in the seeded stage: page or console error, 5xx, hang, dead or covered button, duplicate or ambiguous button, delete without confirmation, cut text, page wider than the screen, unreadable contrast | the app's crawl in the pinned browser image |
+| `ui` | a problem the app's crawl finds in the seeded stage: page or console error, 5xx, hang, dead or covered button, duplicate or ambiguous button, delete without confirmation, cut text, page wider than the screen, unreadable contrast, a screen that looks different from the deployed version without a line in `.gate/visual.yaml` | the app's crawl in the pinned browser image |
 
 What this table covers and what it misses, seen from what an agent could break:
 [docs/gate-map.md](docs/gate-map.md).
@@ -490,6 +492,42 @@ output. An app needs no crawl code of its own, only to keep this contract:
 The checks themselves (overlaps, cut text, contrast, tap sizes, near-aligned
 edges, rows of uneven buttons, dead buttons, hangs, console errors and the rest)
 are in the crawler and are the same for every app.
+
+**Screens against the deployed version.** The stage also compares every
+screenshot with the one of the version that is live now:
+
+- the clock stands still: the app gets `GATE_FROZEN_AT=2030-01-15T09:30:00Z`
+  (seed and server) and the crawler fixes `Date` in the browser to the same
+  instant (`E2E_FROZEN_AT`). An app with a clock of its own uses it in its test
+  mode only (tasks: with `DEV_LOGIN`); a cookie that expires by the frozen clock
+  needs `Max-Age`, not `Expires`;
+- before each screenshot animations are finished, the caret is hidden and
+  elements with `data-volatile` (whatever changes by itself) are made invisible;
+- the screenshots of the live version (the UI baseline) live on the hub in
+  `ui-baseline/<app>/` next to `mutation-cache/`, written only by the hub. After
+  a successful deploy CI sends the gate's screenshots of that commit with
+  `ui-baseline-put <app> <tag>`; the hub verifies the job's OIDC token and keeps
+  them only when `<tag>` is the deployed one (a new tag replaces the set, the
+  same tag adds to it). Before the gate CI fetches them with
+  `ui-baseline-get <app> <tag>` and the gate mounts them read-only into the
+  crawler (`--ui-baseline`, `E2E_BASELINE`). Pull request gates do not talk to
+  the hub, so only gates on `main` compare;
+- a screen whose screenshot differs in more than 0.2% of its pixels (at least
+  40) by more than 24 levels of a color channel is the finding `looks-changed`;
+  `visual/` of the report holds `<shot>-before.png` and `<shot>-diff.png`
+  (changed pixels red over a faded page);
+- an intended change is listed in `.gate/visual.yaml` of the app with its task:
+
+  ```yaml
+  changes:
+    - screen: board    # the screen id of the app map
+      task: 809
+  ```
+
+  Listed screens may differ. Once the change is deployed the baseline shows it,
+  and a listed screen whose every screenshot matches again is the finding
+  `visual-accept-stale`: remove the line. A list with an unknown key, a bad
+  screen id or no task fails the stage.
 
 A `kind: binary` app other than the hub (router-ax23: tools for hosts the hub
 does not deploy to yet) has no image. Its caller stub passes `image: false`
@@ -1283,9 +1321,11 @@ status                  # app | sha | health | last deploy
 history <app>           # last 20 journal lines of the app
 mutation-cache-get <app> <tag>   # the app's mutation verdict cache
 mutation-cache-put <app> <tag>   # merge new mutation verdicts into it
+ui-baseline-get <app> <tag>      # screenshots of the deployed version
+ui-baseline-put <app> <tag>      # keep the screenshots of the deployed tag
 ```
 
-`deploy`, `report` and the two `mutation-cache` requests read `key=value` lines on stdin. All of them require `oidc` — a
+`deploy`, `report` and the `mutation-cache` and `ui-baseline` requests read `key=value` lines on stdin. All of them require `oidc` — a
 GitHub Actions OIDC token (audience `deploy-hub`) whose signature verifies
 against GitHub's published keys, whose `job_workflow_ref` is
 `<HUB_REPO>/.github/workflows/deploy.yml@refs/heads/main`, whose `repository`

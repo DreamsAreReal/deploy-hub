@@ -103,6 +103,7 @@ type Workspace struct {
 	Log         *slog.Logger
 	MemoryLimit int64
 	Mutation    MutationPlan
+	UIBaseline  string
 }
 
 type MutationPlan struct {

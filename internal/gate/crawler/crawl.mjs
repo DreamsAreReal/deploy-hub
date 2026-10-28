@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const env = process.env;
@@ -25,6 +25,10 @@ const chromeFlags = ['--headless=new', '--no-sandbox', '--disable-gpu', '--remot
   '--no-default-browser-check', '--mute-audio', '--disable-background-networking', '--disable-component-update'];
 const appMap = env.E2E_APPMAP ? JSON.parse(readFileSync(env.E2E_APPMAP, 'utf8')) : { screens: [] };
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+const frozenAt = Date.parse(env.E2E_FROZEN_AT ?? '');
+const baseline = env.E2E_BASELINE ?? '';
+const accepted = new Set((env.E2E_VISUAL_ACCEPT ?? '').split(',').map((id) => id.trim()).filter(Boolean));
+const visual = { tolerance: 24, share: 0.002, least: 40 };
 
 const placeholder = (part) => part.startsWith('{') || /^\d+$/.test(part);
 const shape = (route) => route.split('?')[0].split('/').map((part) => (placeholder(part) ? 'N' : part)).join('/');
@@ -39,6 +43,58 @@ const skipped = (target) => target.unsafe || forbidden.some((pattern) => pattern
 const firstLine = (error) => String(error?.message ?? error).split('\n')[0];
 const nameOf = (target) => target.testid || `«${target.label}»`;
 const cell = (text) => text.replaceAll('|', String.raw`\|`).replaceAll('\n', ' ');
+
+function frozenClock(at) {
+  const Real = Date;
+  function Frozen(...args) {
+    if (!new.target) return new Real(at).toString();
+    return args.length === 0 ? new Real(at) : new Real(...args);
+  }
+  Frozen.prototype = Real.prototype;
+  Frozen.now = () => at;
+  Frozen.parse = Real.parse;
+  Frozen.UTC = Real.UTC;
+  globalThis.Date = Frozen;
+}
+
+async function pixelDiff({ before, after, tolerance }) {
+  const channels = 4;
+  const green = 1;
+  const blue = 2;
+  const opaque = 255;
+  const lift = 160;
+  const fade = 9;
+  const chunk = 32768;
+  const decode = (data) => createImageBitmap(new Blob([Uint8Array.from(atob(data), (char) => char.codePointAt(0))], { type: 'image/png' }));
+  const [old, now] = await Promise.all([decode(before), decode(after)]);
+  const { width, height } = now;
+  const total = width * height;
+  if (old.width !== width || old.height !== height) return { differ: total, total, diff: '' };
+  const canvas = new OffscreenCanvas(width, height);
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  const read = (image) => {
+    context.clearRect(0, 0, width, height);
+    context.drawImage(image, 0, 0);
+    return context.getImageData(0, 0, width, height).data;
+  };
+  const was = read(old);
+  const is = read(now);
+  const marked = context.createImageData(width, height);
+  const off = (at) => Math.max(Math.abs(is[at] - was[at]), Math.abs(is[at + green] - was[at + green]), Math.abs(is[at + blue] - was[at + blue]));
+  let differ = 0;
+  for (let at = 0; at < is.length; at += channels) {
+    const hit = off(at) > tolerance;
+    const grey = lift + (is[at] + is[at + green] + is[at + blue]) / fade;
+    marked.data.set(hit ? [opaque, 0, 0, opaque] : [grey, grey, grey, opaque], at);
+    differ += Number(hit);
+  }
+  if (differ === 0) return { differ, total, diff: '' };
+  context.putImageData(marked, 0, 0);
+  const bytes = new Uint8Array(await (await canvas.convertToBlob({ type: 'image/png' })).arrayBuffer());
+  const chunks = [];
+  for (let at = 0; at < bytes.length; at += chunk) chunks.push(String.fromCodePoint(...bytes.subarray(at, at + chunk)));
+  return { differ, total, diff: btoa(chunks.join('')) };
+}
 
 function helpers() {
   const opened = (id) => {
@@ -604,6 +660,7 @@ async function start(crawl) {
     listen(crawl);
     for (const domain of ['Page', 'Runtime', 'Network', 'Log']) await call(crawl, `${domain}.enable`);
     await call(crawl, 'Emulation.setDeviceMetricsOverride', viewport);
+    if (Number.isFinite(frozenAt)) await call(crawl, 'Page.addScriptToEvaluateOnNewDocument', { source: `(${frozenClock})(${frozenAt})` });
     await call(crawl, 'Page.addScriptToEvaluateOnNewDocument', { source: `(${helpers})()` });
     await call(crawl, 'Page.addScriptToEvaluateOnNewDocument', { source: `(${checks})()` });
     await call(crawl, 'Page.addScriptToEvaluateOnNewDocument', { source: `performance.setResourceTimingBufferSize(${limits.timings})` });
@@ -642,9 +699,76 @@ async function tap(crawl, selector, name) {
   return true;
 }
 
+function holdStill() {
+  for (const animation of document.getAnimations()) {
+    try {
+      animation.finish();
+    } catch {
+      animation.cancel();
+    }
+  }
+  const hidden = [...document.querySelectorAll('[data-volatile]')].map((node) => [node, node.style.visibility]);
+  for (const [node] of hidden) node.style.visibility = 'hidden';
+  const field = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  window.crawlStill = { hidden, field, caret: field?.style.caretColor ?? '' };
+  if (field) field.style.caretColor = 'transparent';
+  return true;
+}
+
+function letGo() {
+  const held = window.crawlStill;
+  if (!held) return;
+  for (const [node, visibility] of held.hidden) node.style.visibility = visibility;
+  if (held.field) held.field.style.caretColor = held.caret;
+  delete window.crawlStill;
+}
+
 async function screenshot(crawl, file) {
+  const held = Number.isFinite(frozenAt) && (await inPage(crawl, holdStill));
   const shot = await call(crawl, 'Page.captureScreenshot', { format: 'png' }).catch(() => null);
+  if (held) await inPage(crawl, letGo);
   if (shot) writeFileSync(join(crawl.out, file), Buffer.from(shot.data, 'base64'));
+}
+
+const stemOf = (file) => file.replace(/\.png$/, '');
+
+function screenOf(stem) {
+  const suffix = sizes.map((size) => `-${size.name}`).find((end) => stem.endsWith(end));
+  return suffix ? stem.slice(0, -suffix.length) : stem;
+}
+
+async function compareShot(crawl, file) {
+  const known = join(baseline, file);
+  if (!existsSync(known)) return null;
+  const pair = { before: readFileSync(known).toString('base64'), after: readFileSync(join(crawl.out, 'screens', file)).toString('base64'), tolerance: visual.tolerance };
+  const result = await inPage(crawl, pixelDiff, pair);
+  if (!result) return null;
+  if (result.differ <= Math.max(visual.least, result.total * visual.share)) return true;
+  const stem = stemOf(file);
+  const screen = screenOf(stem);
+  copyFileSync(known, join(crawl.out, 'visual', `${stem}-before.png`));
+  if (result.diff) writeFileSync(join(crawl.out, 'visual', `${stem}-diff.png`), Buffer.from(result.diff, 'base64'));
+  if (!accepted.has(screen)) {
+    problem(crawl, 'looks-changed', `screens/${file}: ${result.differ} of ${result.total} pixels differ from the deployed version (visual/${stem}-diff.png); if intended, list «${screen}» with its task in .gate/visual.yaml`);
+  }
+  return false;
+}
+
+async function compareShots(crawl) {
+  if (!baseline) return;
+  if (!existsSync(baseline)) return note(crawl, 'no-baseline', 'no shots of the deployed version yet: nothing to compare with');
+  mkdirSync(join(crawl.out, 'visual'), { recursive: true });
+  crawl.steps = ['compare with the deployed version'];
+  await goto(crawl, 'about:blank').catch(() => null);
+  const same = new Map();
+  for (const file of readdirSync(join(crawl.out, 'screens')).filter((name) => name.endsWith('.png')).sort()) {
+    const verdict = await compareShot(crawl, file);
+    const screen = screenOf(stemOf(file));
+    if (verdict !== null) same.set(screen, (same.get(screen) ?? true) && verdict);
+  }
+  for (const screen of [...accepted].filter((id) => same.get(id) === true)) {
+    problem(crawl, 'visual-accept-stale', `«${screen}» is listed in .gate/visual.yaml, but every shot of it matches the deployed version: remove the line`);
+  }
 }
 
 const finishedInPage = (crawl, sent) =>
@@ -1106,6 +1230,7 @@ test('a robot opens every screen and presses every safe button', { skip: !(base 
     await (quick ? narrowPass(crawl) : sizesPass(crawl));
     mixedWords(crawl);
     titleGaps(crawl);
+    await compareShots(crawl);
   } finally {
     chrome.kill();
   }

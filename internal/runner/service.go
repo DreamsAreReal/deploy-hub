@@ -113,6 +113,10 @@ func (s *Service) Dispatch(ctx context.Context, raw string, stdin io.Reader) int
 		return s.cacheGet(ctx, raw, entry, req.Tag, stdin)
 	case VerbCachePut:
 		return s.cachePut(ctx, raw, entry, req.Tag, stdin)
+	case VerbBaselineGet:
+		return s.baselineGet(ctx, raw, entry, req.Tag, stdin)
+	case VerbBaselinePut:
+		return s.baselinePut(ctx, raw, entry, req.Tag, stdin)
 	default:
 		return s.rollback(ctx, raw, entry, req.Tag)
 	}

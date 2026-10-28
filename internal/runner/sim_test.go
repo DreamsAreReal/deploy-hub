@@ -413,7 +413,7 @@ func (e *env) state(s registry.DeployState) {
 }
 
 func (e *env) dispatch(raw, stdin string) int {
-	if !e.bare && slices.ContainsFunc([]string{VerbDeploy, VerbReport, VerbCacheGet, VerbCachePut}, func(v string) bool { return strings.HasPrefix(raw, v+" ") }) {
+	if !e.bare && slices.ContainsFunc([]string{VerbDeploy, VerbReport, VerbCacheGet, VerbCachePut, VerbBaselineGet, VerbBaselinePut}, func(v string) bool { return strings.HasPrefix(raw, v+" ") }) {
 		stdin = identity() + stdin
 	}
 	return e.svc.Dispatch(context.Background(), raw, strings.NewReader(stdin))

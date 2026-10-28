@@ -37,7 +37,7 @@ const (
 )
 
 var maxWords = map[string]int{VerbStatus: statusWords, VerbHistory: historyWords, VerbDeploy: opWords, VerbRollback: opWords, VerbReport: opWords,
-	VerbCacheGet: opWords, VerbCachePut: opWords}
+	VerbCacheGet: opWords, VerbCachePut: opWords, VerbBaselineGet: opWords, VerbBaselinePut: opWords}
 
 func ParseRequest(raw string) (Request, error) {
 	f := strings.Fields(raw)
@@ -52,7 +52,7 @@ func ParseRequest(raw string) (Request, error) {
 		return Request{Verb: r.Verb}, nil
 	case VerbHistory:
 		return Request{Verb: r.Verb, App: r.App}, appErr(r.App)
-	case VerbDeploy, VerbReport, VerbCacheGet, VerbCachePut:
+	case VerbDeploy, VerbReport, VerbCacheGet, VerbCachePut, VerbBaselineGet, VerbBaselinePut:
 		return r, errors.Join(appErr(r.App), tagErr(r.Tag))
 	case VerbRollback:
 		return r, errors.Join(appErr(r.App), optionalTagErr(r.Tag))

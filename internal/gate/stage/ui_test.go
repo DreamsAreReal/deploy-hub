@@ -84,11 +84,13 @@ func TestUISeedsTheStandAndCrawlsItQuickly(t *testing.T) {
 	lines := procexectest.LinesOf(ws.Exec)
 	all := strings.Join(lines, "\n")
 	testutil.Contains(t, all,
-		"docker run --rm --network none --security-opt no-new-privileges -e MODE=test -e DEV_LOGIN=1 --mount type=volume,src=deploy-hub-gate-web-ui-data-0,dst=/data web:gate seed --db /data/app.db",
-		"-e MODE=test -e DEV_LOGIN=1 --mount type=volume,src=deploy-hub-gate-web-ui-data-0,dst=/data web:gate\n",
+		"docker run --rm --network none --security-opt no-new-privileges -e MODE=test -e DEV_LOGIN=1 -e "+frozenAppEnv+FrozenAt+
+			" --mount type=volume,src=deploy-hub-gate-web-ui-data-0,dst=/data web:gate seed --db /data/app.db",
+		"-e MODE=test -e DEV_LOGIN=1 -e "+frozenAppEnv+FrozenAt+" --mount type=volume,src=deploy-hub-gate-web-ui-data-0,dst=/data web:gate\n",
 		"docker run --name "+crawlName+" --network deploy-hub-gate-web-ui-net --cpus 2 --memory 2g --memory-swap 2g --shm-size 1g --pids-limit 1024",
 		"-v /repo:/src:ro -v "+filepath.Join(ws.Out, crawlerDir)+":/crawler:ro -w /src -e E2E_BASE=http://deploy-hub-gate-web-ui:8080 -e E2E_OUT=/out "+
-			"-e E2E_CHROMIUM=/ms/chrome -e CRAWL_MODE=quick -e E2E_APPMAP=/src/web/appmap.json browser@sha256:2 node --test /crawler/crawl.mjs",
+			"-e E2E_CHROMIUM=/ms/chrome -e CRAWL_MODE=quick -e E2E_APPMAP=/src/web/appmap.json -e "+frozenCrawlEnv+FrozenAt+
+			" browser@sha256:2 node --test /crawler/crawl.mjs",
 		"docker cp "+crawlName+":/out "+filepath.Join(ws.Out, crawlDir))
 	testutil.Equal(t, strings.Count(all, "docker rm -f "+crawlName), 2)
 	seedAt, standAt := -1, -1
@@ -141,6 +143,52 @@ func TestUIFailsWithoutAReportOrWhenTheCrawlBreaks(t *testing.T) {
 	all := strings.Join(procexectest.LinesOf(seedless.Exec), "\n")
 	testutil.True(t, !strings.Contains(all, "docker run -d"), "no stand without its seed")
 	testutil.Equal(t, strings.Count(all, "docker network rm deploy-hub-gate-web-ui-net"), 2)
+}
+
+func visualApp(t *testing.T, list string) gate.Workspace {
+	t.Helper()
+	ws := uiApp(t, &crawlSim{report: cleanReport})
+	ws.Src = t.TempDir()
+	testutil.Mkdir(t, filepath.Join(ws.Src, filepath.Dir(VisualFile)))
+	testutil.Write(t, filepath.Join(ws.Src, VisualFile), list)
+	return ws
+}
+
+func TestUIComparesWithTheDeployedShotsAndPassesTheIntendedChanges(t *testing.T) {
+	ws := visualApp(t, "changes:\n  - screen: board\n    task: 809\n  - screen: memory-topic\n    task: 782\n")
+	ws.UIBaseline = t.TempDir()
+	out := UI(context.Background(), ws)
+	testutil.Equal(t, out.Status, gate.StatusPass)
+	testutil.Contains(t, strings.Join(procexectest.LinesOf(ws.Exec), "\n"), "-e "+frozenCrawlEnv+FrozenAt+" -v "+ws.UIBaseline+
+		":/baseline:ro -e E2E_BASELINE=/baseline -e E2E_VISUAL_ACCEPT=board,memory-topic browser@sha256:2 node --test /crawler/crawl.mjs")
+	unserved := visualApp(t, "")
+	unserved.UIBaseline = filepath.Join(t.TempDir(), "never-served")
+	testutil.Equal(t, UI(context.Background(), unserved).Status, gate.StatusPass)
+	all := strings.Join(procexectest.LinesOf(unserved.Exec), "\n")
+	testutil.True(t, !strings.Contains(all, "E2E_BASELINE") && !strings.Contains(all, "E2E_VISUAL_ACCEPT"), "nothing to compare with and nothing accepted")
+}
+
+func TestUIRefusesABrokenListOfIntendedChanges(t *testing.T) {
+	for _, list := range []string{
+		"changes:\n  - screen: board\n",
+		"changes:\n  - screen: Board!\n    task: 1\n",
+		"changes:\n  - screen: board\n    task: -3\n",
+		"changes:\n  - screen: " + strings.Repeat("a", screenIDLimit+1) + "\n    task: 1\n",
+		"changes:\n  - screen: board\n    task: 1\n    why: looks nicer\n",
+		"changes: [",
+	} {
+		ws := visualApp(t, list)
+		out := UI(context.Background(), ws)
+		testutil.Equal(t, out.Status, gate.StatusFail)
+		testutil.Equal(t, out.Reason, reasonVisual)
+		testutil.True(t, !strings.Contains(strings.Join(procexectest.LinesOf(ws.Exec), "\n"), "docker run"), "no stand for a broken list")
+	}
+	escaped := visualApp(t, "")
+	outside := filepath.Join(t.TempDir(), "visual.yaml")
+	testutil.Write(t, outside, "changes:\n  - screen: board\n    task: 1\n")
+	testutil.NoErr(t, os.Remove(filepath.Join(escaped.Src, VisualFile)))
+	testutil.NoErr(t, os.Symlink(outside, filepath.Join(escaped.Src, VisualFile)))
+	testutil.Equal(t, UI(context.Background(), escaped).Reason, reasonVisual)
 }
 
 func TestProblemRowsReadOnlyTheProblemsTable(t *testing.T) {

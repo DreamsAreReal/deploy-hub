@@ -201,6 +201,36 @@ jobs:
           fi
           rm -f "$dir/served" "$dir/outputs"
 
+      - name: Fetch the UI baseline from the hub
+        id: baseline
+        if: env.GATE_ONLY != 'true'
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          set -uo pipefail
+          dir="$RUNNER_TEMP/ui-baseline"
+          served="$RUNNER_TEMP/ui-baseline.served"
+          fetch() {
+            install -d -m 700 "$dir" || return 1
+            oidc="$(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$OIDC_AUDIENCE" | jq -er .value)" || return 1
+            printf 'oidc=%s\n' "$oidc" | ssh -i "$RUNNER_TEMP/ssh/deploy_key" -o IdentitiesOnly=yes \
+              -o UserKnownHostsFile="$RUNNER_TEMP/ssh/known_hosts" "$VPS_USER@$VPS_HOST" \
+              "ui-baseline-get $APP sha-${GITHUB_SHA}" > "$served" || return 1
+            while IFS= read -r line; do
+              name="${line%%:*}"
+              case "$name" in ''|.*|*[!a-z0-9.-]*) return 1 ;; esac
+              printf '%s' "${line#*:}" | base64 -d > "$dir/$name" || return 1
+            done < <(sed -n 's/^shot=//p' "$served")
+          }
+          if fetch && [ -n "$(ls -A "$dir")" ]; then
+            echo "dir=$dir" >> "$GITHUB_OUTPUT"
+            echo "UI baseline of $(sed -n 's/^from=//p' "$served"): $(find "$dir" -type f | wc -l) screenshots"
+          else
+            echo "no UI baseline for $APP yet; screens are not compared"
+          fi
+          rm -f "$served"
+
       - name: Quality gate
         id: gate
         env:
@@ -211,6 +241,7 @@ jobs:
           CACHE_FILE: ${{ steps.cache.outputs.file }}
           CACHE_SHA256: ${{ steps.cache.outputs.sha256 }}
           LAST: ${{ steps.cache.outputs.last }}
+          BASELINE: ${{ steps.baseline.outputs.dir }}
         run: |
           set -o pipefail
           export PATH="$TOOLCHAIN:$PATH"
@@ -218,6 +249,7 @@ jobs:
           if [ "$BUILT" = true ]; then extra+=(--image "$IMAGE"); fi
           if [ -n "$CACHE_FILE" ]; then extra+=(--mutation-cache "$CACHE_FILE" --mutation-cache-sha256 "$CACHE_SHA256"); fi
           if [ -n "$LAST" ]; then extra+=(--mutation-last "$LAST"); fi
+          if [ -n "$BASELINE" ]; then extra+=(--ui-baseline "$BASELINE"); fi
           while sleep 30; do
             echo "resources: $(free -m | awk '/^Mem:/ {print "mem_available_mb=" $7}') $(df -m / "$RUNNER_TEMP" | awk 'NR > 1 {print $6 "_free_mb=" $4}' | tr '\n' ' ')top_dirs_mb=$(du -xsm "$RUNNER_TEMP"/gate/* /tmp 2>/dev/null | sort -rn | head -3 | awk '{printf "%s:%s,", $2, $1}')"
           done &
@@ -405,3 +437,27 @@ jobs:
             fi
           } | ssh -i "$RUNNER_TEMP/ssh/deploy_key" -o IdentitiesOnly=yes -o UserKnownHostsFile="$RUNNER_TEMP/ssh/known_hosts" \
                 "$VPS_USER@$VPS_HOST" "deploy $APP sha-${GITHUB_SHA}"
+
+      - name: Keep the deployed screens as the UI baseline
+        if: env.GATE_ONLY != 'true'
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          set -uo pipefail
+          screens="$RUNNER_TEMP/gate/ui-crawl/screens"
+          if [ -z "$(ls -A "$screens" 2>/dev/null)" ]; then
+            echo "the gate took no screenshots"
+            exit 0
+          fi
+          upload() {
+            oidc="$(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$OIDC_AUDIENCE" | jq -er .value)" || return 1
+            {
+              printf 'oidc=%s\n' "$oidc"
+              for shot in "$screens"/*.png; do
+                printf 'shot=%s:%s\n' "$(basename "$shot")" "$(base64 -w0 "$shot")"
+              done
+            } | ssh -i "$RUNNER_TEMP/ssh/deploy_key" -o IdentitiesOnly=yes -o UserKnownHostsFile="$RUNNER_TEMP/ssh/known_hosts" \
+                  "$VPS_USER@$VPS_HOST" "ui-baseline-put $APP sha-${GITHUB_SHA}"
+          }
+          upload || echo "::warning::the hub did not take the UI baseline; the next gate compares with the previous one"

@@ -104,6 +104,10 @@ not, so search for the name.
    Before it, `mutation-cache-get` fetches the app's mutation verdict cache
    from the hub; after it, pass or fail, `mutation-cache-put` uploads the
    verdicts of this run (README "Verdict cache"). Both only warn on failure.
+   `ui-baseline-get` fetches the screenshots of the deployed version for the
+   `ui` stage to compare with; after a successful deploy `ui-baseline-put`
+   hands the gate's screenshots of the new tag to the hub (README "Screens
+   against the deployed version").
 6. **Report** (pass or fail; skipped only when the workflow inputs were
    invalid): the verdict is sent
    over SSH as `report <app> sha-<commit>` together with a GitHub OIDC token.

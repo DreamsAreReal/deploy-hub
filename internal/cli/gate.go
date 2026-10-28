@@ -46,7 +46,7 @@ var ErrGateArgs = errors.New("usage: deploy-hub gate --app NAME --repo OWNER/NAM
 
 type gateArgs struct {
 	app, repo, commit, src, out, policy, image string
-	cache, cacheSum, last, yield               string
+	cache, cacheSum, last, yield, baseline     string
 	budget                                     time.Duration
 	fork, full                                 bool
 }
@@ -69,6 +69,7 @@ func parseGateArgs(args []string) (gateArgs, error) {
 	fs.DurationVar(&g.budget, "mutation-budget", 0, "stop mutation testing after this long and keep the finished verdicts")
 	fs.StringVar(&g.last, "mutation-last", "", "the last full mutation run the hub recorded (absolute path)")
 	fs.StringVar(&g.yield, "mutation-yield", "", "stop mutation testing as soon as this file exists (absolute path)")
+	fs.StringVar(&g.baseline, "ui-baseline", "", "screenshots of the deployed version from the hub (absolute path)")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		return g, ErrGateArgs
 	}
@@ -83,7 +84,18 @@ func (g *gateArgs) normalize() error {
 	if rel, _ := filepath.Rel(g.src, g.out); !strings.HasPrefix(rel, "..") {
 		return fmt.Errorf("%w: reports must live outside the source tree", ErrGateArgs)
 	}
-	return errors.Join(validate.AppName(g.app), validate.RepoSlug(g.repo), validate.Commit(g.commit), nonEmptyArg(g.policy), g.cacheArgs(), g.fullRunArgs())
+	return errors.Join(validate.AppName(g.app), validate.RepoSlug(g.repo), validate.Commit(g.commit), nonEmptyArg(g.policy), g.cacheArgs(), g.fullRunArgs(), g.baselineArgs())
+}
+
+func (g *gateArgs) baselineArgs() error {
+	if g.baseline == "" {
+		return nil
+	}
+	if !filepath.IsAbs(g.baseline) || !outside(g.src, filepath.Clean(g.baseline)) {
+		return fmt.Errorf("%w: --ui-baseline needs an absolute path outside the source tree", ErrGateArgs)
+	}
+	g.baseline = filepath.Clean(g.baseline)
+	return nil
 }
 
 func outside(dir, path string) bool {
@@ -156,7 +168,8 @@ func newWorkspace(ctx context.Context, g *gateArgs, a *App, ex procexec.Runner, 
 		return gate.Workspace{}, err
 	}
 	app, _ := pol.App(g.app)
-	ws := gate.Workspace{Src: g.src, Out: g.out, PolicyDir: filepath.Dir(g.policy), Image: g.image, AppName: g.app, Repo: g.repo, App: app, Policy: pol, Exec: ex, Log: a.Log}
+	ws := gate.Workspace{Src: g.src, Out: g.out, PolicyDir: filepath.Dir(g.policy), Image: g.image, AppName: g.app, Repo: g.repo, App: app, Policy: pol, Exec: ex, Log: a.Log,
+		UIBaseline: g.baseline}
 	plan, err := g.mutationPlan()
 	if err != nil {
 		return ws, err

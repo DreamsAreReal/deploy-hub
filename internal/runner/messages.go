@@ -1,7 +1,7 @@
 package runner
 
 const (
-	msgRefused          = "refused: only 'deploy <app> <tag>', 'report <app> <tag>', 'rollback <app> [tag]', 'status', 'history <app>', 'mutation-cache-get <app> <tag>', 'mutation-cache-put <app> <tag>' are accepted"
+	msgRefused          = "refused: only 'deploy <app> <tag>', 'report <app> <tag>', 'rollback <app> [tag]', 'status', 'history <app>', 'mutation-cache-get <app> <tag>', 'mutation-cache-put <app> <tag>', 'ui-baseline-get <app> <tag>', 'ui-baseline-put <app> <tag>' are accepted"
 	msgUnknownApp       = "refused: app not in allowlist"
 	msgOtherApp         = "refused: this deploy key is bound to another app"
 	msgBadTag           = "refused: tag must match ^sha-[0-9a-f]{7,40}$"
@@ -69,6 +69,13 @@ const (
 	msgCacheStored      = "mutation cache: %d verdicts received, sha256 %s\n"
 	msgCachePlan        = "plan=%s\n"
 	msgCacheLast        = "last=%s\n"
+	msgBadShots         = "refused: ui baseline shots missing or malformed"
+	msgBaselineStale    = "refused: the ui baseline comes only from the deployed tag"
+	msgBaselineRead     = "error: the stored ui baseline could not be read"
+	msgBaselineWrite    = "error: the ui baseline could not be stored"
+	msgBaselineFrom     = "from=%s\n"
+	msgBaselineShot     = "shot=%s:%s\n"
+	msgBaselineStored   = "ui baseline: %d shots of %s stored\n"
 	msgFullRecorded     = "full mutation run recorded: passed=%t\n"
 	wordPassed          = "passed"
 	wordBlocked         = "blocked"
@@ -89,6 +96,8 @@ const (
 	reasonBadDigest  = "bad-digest"
 	reasonBadVerdict = "bad-verdict"
 	reasonBadCache   = "bad-cache"
+	reasonBadShots   = "bad-shots"
+	reasonNotLive    = "not-live"
 )
 
 var refusalReasons = map[string]string{
@@ -107,5 +116,7 @@ var refusalReasons = map[string]string{
 	msgBadDigest:      reasonBadDigest,
 	msgBadVerdict:     reasonBadVerdict,
 	msgBadCache:       reasonBadCache,
+	msgBadShots:       reasonBadShots,
+	msgBaselineStale:  reasonNotLive,
 	msgOtherApp:       reasonOtherApp,
 }

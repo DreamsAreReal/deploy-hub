@@ -12,6 +12,7 @@ const (
 	smokeFile     = "smoke.conf"
 	lastErrorFile = "last-error.log"
 	mutationDir   = "mutation-cache"
+	baselineDir   = "ui-baseline"
 	cacheLockFile = "mutation-cache.lock"
 	hubConfFile   = "hub.conf"
 	binDir        = "bin"
@@ -35,6 +36,10 @@ func (p Paths) CacheLock() string { return filepath.Join(p.Dir, cacheLockFile) }
 func (p Paths) MutationCache(app string) string {
 	return filepath.Join(p.Dir, mutationDir, app)
 }
+func (p Paths) UIBaseline(app string) string {
+	return filepath.Join(p.Dir, baselineDir, app)
+}
+
 func (p Paths) AppsRoot() string { return filepath.Dir(p.Dir) }
 
 func (p Paths) LogFile(command string) string {
