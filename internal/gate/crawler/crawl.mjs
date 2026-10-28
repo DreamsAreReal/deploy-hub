@@ -742,7 +742,10 @@ async function compareShot(crawl, file) {
   if (!existsSync(known)) return null;
   const pair = { before: readFileSync(known).toString('base64'), after: readFileSync(join(crawl.out, 'screens', file)).toString('base64'), tolerance: visual.tolerance };
   const result = await inPage(crawl, pixelDiff, pair);
-  if (!result) return null;
+  if (!result) {
+    problem(crawl, 'compare-failed', `screens/${file} could not be compared with the deployed version`);
+    return null;
+  }
   if (result.differ <= Math.max(visual.least, result.total * visual.share)) return true;
   const stem = stemOf(file);
   const screen = screenOf(stem);

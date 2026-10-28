@@ -515,7 +515,8 @@ screenshot with the one of the version that is live now:
 - a screen whose screenshot differs in more than 0.2% of its pixels (at least
   40) by more than 24 levels of a color channel is the finding `looks-changed`;
   `visual/` of the report holds `<shot>-before.png` and `<shot>-diff.png`
-  (changed pixels red over a faded page);
+  (changed pixels red over a faded page); a screenshot the browser cannot
+  compare is the finding `compare-failed`;
 - an intended change is listed in `.gate/visual.yaml` of the app with its task:
 
   ```yaml
