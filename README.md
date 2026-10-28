@@ -389,8 +389,10 @@ as the app's CI user with the runner's isolation (`ci-mutation@<repo>` in
 5. As root, `deploy-hub mutation-import <repo>` reads the chunk's verdicts and
    run summary through `os.Root` (regular files of at most 16 MiB, no
    symlinks), validates them like an upload and merges them into the session,
-   the cache and the state. The chunk that completes the session records the
-   full run.
+   the cache and the state, then removes the chunk's `commit` marker, so a
+   chunk that ran nothing (plan `skip`, CI busy) imports nothing. The chunk that
+   completes the session records the full run; chunk uploads never request a
+   full run, only the deploy gate's uploads do.
 
 Disk: the stash is one copy, the work directory is emptied before every chunk
 and dropped when the CI disk is over 70 %, the gate's disk guard bounds the
