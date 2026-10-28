@@ -20,7 +20,7 @@ const localizedLine = "localized: [internal/texts/]"
 const dataLine = "data: [/data, /cache]"
 
 const (
-	uiBlock     = "    ui: {crawl: [npm, run, -s, crawl], seed: [seed], env: [DEV_LOGIN=1], chromium: /ms/chrome}\n"
+	uiBlock     = "    ui: {map: web/appmap.json, seed: [seed], env: [DEV_LOGIN=1], chromium: /ms/chrome}\n"
 	browserLine = "  browser: mcr.microsoft.com/playwright" + digest + "\n"
 )
 
@@ -97,7 +97,7 @@ apps:
     data: [/data, /cache]
     dast: {spider: 1m, max_time: 5m, openapi: /openapi.json}
     load: {rate: 20, duration: 30s, p95: 300ms, max_error_percent: 0, concurrency: 10, paths: [/health]}
-    ui: {crawl: [npm, run, -s, crawl], seed: [seed], env: [DEV_LOGIN=1], chromium: /ms/chrome}
+    ui: {map: web/appmap.json, seed: [seed], env: [DEV_LOGIN=1], chromium: /ms/chrome}
   bot:
     repo: Owner/bot
     shell_utilities: busybox
@@ -193,7 +193,10 @@ func TestParseRejects(t *testing.T) {
 		"unpinned zap":       {"zap: ghcr.io/zaproxy/zaproxy" + digest, "zap: ghcr.io/zaproxy/zaproxy:stable"},
 		"unpinned browser":   {"browser: mcr.microsoft.com/playwright" + digest, "browser: mcr.microsoft.com/playwright:v1"},
 		"no browser":         {browserLine, ""},
-		"ui crawl":           {"crawl: [npm, run, -s, crawl]", "crawl: []"},
+		"ui map":             {"map: web/appmap.json", "map: ''"},
+		"ui map outside":     {"map: web/appmap.json", "map: ../appmap.json"},
+		"ui map absolute":    {"map: web/appmap.json", "map: /web/appmap.json"},
+		"ui map unclean":     {"map: web/appmap.json", "map: web/../appmap.json"},
 		"ui chromium":        {"chromium: /ms/chrome", "chromium: ms/chrome"},
 		"app name":           {"  hub:\n", "  Hub!:\n"},
 		"repo":               {"repo: Owner/hub", "repo: hub"},
@@ -262,7 +265,7 @@ func TestOnlyAnAppWithAnInterfaceNeedsTheBrowserImage(t *testing.T) {
 	withUI, err := Parse([]byte(valid))
 	testutil.NoErr(t, err)
 	testutil.Equal(t, withUI.Apps["web"].UI.Chromium, "/ms/chrome")
-	testutil.Equal(t, withUI.Apps["web"].UI.Crawl, []string{"npm", "run", "-s", "crawl"})
+	testutil.Equal(t, withUI.Apps["web"].UI.Map, "web/appmap.json")
 }
 
 func TestIsLocalized(t *testing.T) {

@@ -354,7 +354,7 @@ apps:
     dast: {target: /, spider: 1m, max_time: 10m}
     load: {rate: 20, duration: 30s, p95: 300ms, max_error_percent: 0, concurrency: 10, paths: [/api/health, /]}
     ui:
-      crawl: [npm, run, -s, crawl]
+      map: internal/web/appmap.json
       seed: [seed, --db, /data/tasks.db, --no-token]
       env: [DEV_LOGIN=1]
       chromium: /ms-playwright/chromium-1248/chrome-linux64/chrome

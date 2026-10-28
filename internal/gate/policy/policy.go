@@ -113,7 +113,7 @@ type App struct {
 }
 
 type UI struct {
-	Crawl    []string `yaml:"crawl"`
+	Map      string   `yaml:"map"`
 	Seed     []string `yaml:"seed"`
 	Env      []string `yaml:"env"`
 	Chromium string   `yaml:"chromium"`
@@ -324,10 +324,10 @@ func (a App) validate(name string) error {
 }
 
 func (u *UI) validate(name string) error {
-	if u == nil || (len(u.Crawl) > 0 && path.IsAbs(u.Chromium)) {
+	if u == nil || (u.Map != "" && !path.IsAbs(u.Map) && path.Clean(u.Map) == u.Map && !strings.HasPrefix(u.Map, "..") && path.IsAbs(u.Chromium)) {
 		return nil
 	}
-	return fmt.Errorf("%w: %s: ui needs a crawl command and the absolute path of chromium in the browser image", ErrPolicy, name)
+	return fmt.Errorf("%w: %s: ui needs the repo path of its app map and the absolute path of chromium in the browser image", ErrPolicy, name)
 }
 
 func (a App) validateShell(name string) error {

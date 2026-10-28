@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/crawler"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
 )
 
@@ -19,6 +20,10 @@ const (
 	crawlOut        = "/out"
 	crawlReport     = "crawl.md"
 	crawlDir        = "ui-crawl"
+	crawlerDir      = "ui-crawler"
+	crawlerMount    = "/crawler"
+	crawlerMode     = 0o750
+	crawlerFileMode = 0o644
 	crawlCPUs       = "2"
 	crawlMemory     = "2g"
 	crawlShm        = "1g"
@@ -33,7 +38,9 @@ const (
 	tableHead       = "| kind |"
 	tableRule       = "| --- |"
 	readOnly        = ":ro"
-	crawlFixedArgs  = 30
+	crawlFixedArgs  = 40
+	nodeBinary      = "node"
+	nodeTest        = "--test"
 )
 
 func UI(ctx context.Context, ws gate.Workspace) gate.Outcome {
@@ -57,7 +64,11 @@ func (s *Stage) crawl(ctx context.Context) gate.Outcome {
 	name := s.Name + crawlSuffix
 	_, _ = s.ws.Run(ctx, DockerBinary, "rm", "-f", name)
 	defer func() { _, _ = s.ws.Run(context.WithoutCancel(ctx), DockerBinary, "rm", "-f", name) }()
-	res, runErr := s.ws.Run(ctx, DockerBinary, s.crawlArgs(name)...)
+	scripts, err := s.crawlerScripts()
+	if err != nil {
+		return gate.Fail(reasonNoCrawl, err.Error())
+	}
+	res, runErr := s.ws.Run(ctx, DockerBinary, s.crawlArgs(name, scripts)...)
 	dir := filepath.Join(s.ws.Out, crawlDir)
 	if err := s.docker(ctx, "cp", name+":"+crawlOut, dir); err != nil {
 		return gate.Fail(reasonNoCrawl, err.Error())
@@ -73,22 +84,29 @@ func (s *Stage) crawl(ctx context.Context) gate.Outcome {
 	return gate.Judge(len(findings) == 0, reasonUI, map[string]float64{ValueProblems: float64(len(findings))}, findings)
 }
 
-func (s *Stage) crawlArgs(name string) []string {
+func (s *Stage) crawlerScripts() (string, error) {
+	dir := filepath.Join(s.ws.Out, crawlerDir)
+	if err := os.MkdirAll(dir, crawlerMode); err != nil {
+		return "", err
+	}
+	return dir, os.WriteFile(filepath.Join(dir, crawler.File), crawler.Script, crawlerFileMode)
+}
+
+func (s *Stage) crawlArgs(name, scripts string) []string {
 	ui := s.ws.App.UI
 	mode := crawlQuick
 	if s.ws.Mutation.Full {
 		mode = crawlFull
 	}
-	args := make([]string, 0, crawlFixedArgs+len(ui.Crawl))
-	args = append(args,
+	args := make([]string, 0, crawlFixedArgs)
+	return append(args,
 		"run", "--name", name, flagNetwork, s.Network, "--cpus", crawlCPUs, "--memory", crawlMemory, "--memory-swap", crawlMemory,
 		"--shm-size", crawlShm, flagPids, crawlPids, flagSecurity, noPrivileges,
-		"-v", s.ws.Src+":"+crawlSrc+readOnly, "-w", crawlSrc,
+		"-v", s.ws.Src+":"+crawlSrc+readOnly, "-v", scripts+":"+crawlerMount+readOnly, "-w", crawlSrc,
 		flagEnv, "E2E_BASE="+strings.TrimSuffix(s.InternalURL(""), "/"), flagEnv, "E2E_OUT="+crawlOut,
-		flagEnv, "E2E_CHROMIUM="+ui.Chromium, flagEnv, "CRAWL_MODE="+mode,
-		s.ws.Policy.Images.Browser,
+		flagEnv, "E2E_CHROMIUM="+ui.Chromium, flagEnv, "CRAWL_MODE="+mode, flagEnv, "E2E_APPMAP="+crawlSrc+"/"+ui.Map,
+		s.ws.Policy.Images.Browser, nodeBinary, nodeTest, crawlerMount+"/"+crawler.File,
 	)
-	return append(args, ui.Crawl...)
 }
 
 func problemRows(report string) []string {

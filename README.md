@@ -458,7 +458,7 @@ apps:
     dast: {target: /api, spider: 1m, max_time: 10m}
     load: {rate: 20, duration: 30s, p95: 300ms, max_error_percent: 0, concurrency: 10, paths: [/health]}
     ui:                      # only for an app with an interface
-      crawl: [npm, run, -s, crawl]          # run from the repo in images.browser
+      map: web/appmap.json                  # the app map in the repo the crawler follows
       seed: [seed, --db, /data/app.db]      # image arguments that fill the stage's volumes first
       env: [DEV_LOGIN=1]                    # added to env for this stage only
       chromium: /ms-playwright/chromium-1248/chrome-linux64/chrome
@@ -469,13 +469,27 @@ apps:
 ```
 
 The `ui` stage seeds fresh volumes with `seed` in a container without a
-network, starts the app with `env` added, then runs `crawl` from the checkout
-(read-only) in `images.browser` on the stage's network with `E2E_BASE`, `E2E_OUT`,
-`E2E_CHROMIUM` and `CRAWL_MODE`: `quick` opens each screen once without clicks,
-`full` (in a full gate run) presses every safe button and checks five screen
-sizes and the dark theme. The rows of the report's problems table are the
-findings; the whole report and its screenshots stay in `ui-crawl` of the gate
-output.
+network, starts the app with `env` added, then runs the hub's own crawler
+(`internal/gate/crawler/crawl.mjs`, built into the binary) with node in
+`images.browser` on the stage's network, the checkout mounted read-only, and
+`E2E_BASE`, `E2E_OUT`, `E2E_CHROMIUM`, `E2E_APPMAP` and `CRAWL_MODE`: `quick`
+looks at each screen and the assistant chat at the default size and at 360 px
+without clicks, `full` (in a full gate run) presses every safe button and checks
+five screen sizes and the dark theme. The rows of the report's problems table are
+the findings; the whole report and its screenshots stay in `ui-crawl` of the gate
+output. An app needs no crawl code of its own, only to keep this contract:
+
+- `map` is a JSON app map: `screens` with `id`, `route` (`{id}` for values from
+  the data), `kind` (`screen`, `sheet` or `part`) and `elements` with `testid`;
+  an element whose `does` says `Destructive` or `never click` is never pressed;
+- every route opens as `/?open=<route>`, a screen root carries `data-screen` with
+  the screen id, controls carry `data-testid`, links between screens
+  `data-nav="<route>"` and sheets `data-sheet`;
+- `seed` fills the database so that every screen of the map has something to show.
+
+The checks themselves (overlaps, cut text, contrast, tap sizes, near-aligned
+edges, rows of uneven buttons, dead buttons, hangs, console errors and the rest)
+are in the crawler and are the same for every app.
 
 A `kind: binary` app other than the hub (router-ax23: tools for hosts the hub
 does not deploy to yet) has no image. Its caller stub passes `image: false`

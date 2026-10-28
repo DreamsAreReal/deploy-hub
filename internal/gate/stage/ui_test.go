@@ -1,6 +1,7 @@
 package stage
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/crawler"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/policy"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec/procexectest"
@@ -37,7 +39,7 @@ func uiApp(t *testing.T, sim *crawlSim) gate.Workspace {
 	ws, docker := app(t, okHandler())
 	ws.Out, ws.Src = t.TempDir(), "/repo"
 	ws.App.Data = []string{dataDir}
-	ws.App.UI = &policy.UI{Crawl: []string{"npm", npmRun, "-s", "crawl"}, Seed: []string{"seed", "--db", dataDir + "/app.db"}, Env: []string{"DEV_LOGIN=1"}, Chromium: "/ms/chrome"}
+	ws.App.UI = &policy.UI{Map: "web/appmap.json", Seed: []string{"seed", "--db", dataDir + "/app.db"}, Env: []string{"DEV_LOGIN=1"}, Chromium: "/ms/chrome"}
 	ws.Policy.Images.Browser = "browser@sha256:2"
 	ws.Exec = &procexectest.Fake{Handler: func(c procexec.Command) (procexec.Result, error) {
 		joined := strings.Join(c.Args, " ")
@@ -85,7 +87,8 @@ func TestUISeedsTheStandAndCrawlsItQuickly(t *testing.T) {
 		"docker run --rm --network none --security-opt no-new-privileges -e MODE=test -e DEV_LOGIN=1 --mount type=volume,src=deploy-hub-gate-web-ui-data-0,dst=/data web:gate seed --db /data/app.db",
 		"-e MODE=test -e DEV_LOGIN=1 --mount type=volume,src=deploy-hub-gate-web-ui-data-0,dst=/data web:gate\n",
 		"docker run --name "+crawlName+" --network deploy-hub-gate-web-ui-net --cpus 2 --memory 2g --memory-swap 2g --shm-size 1g --pids-limit 1024",
-		"-v /repo:/src:ro -w /src -e E2E_BASE=http://deploy-hub-gate-web-ui:8080 -e E2E_OUT=/out -e E2E_CHROMIUM=/ms/chrome -e CRAWL_MODE=quick browser@sha256:2 npm run -s crawl",
+		"-v /repo:/src:ro -v "+filepath.Join(ws.Out, crawlerDir)+":/crawler:ro -w /src -e E2E_BASE=http://deploy-hub-gate-web-ui:8080 -e E2E_OUT=/out "+
+			"-e E2E_CHROMIUM=/ms/chrome -e CRAWL_MODE=quick -e E2E_APPMAP=/src/web/appmap.json browser@sha256:2 node --test /crawler/crawl.mjs",
 		"docker cp "+crawlName+":/out "+filepath.Join(ws.Out, crawlDir))
 	testutil.Equal(t, strings.Count(all, "docker rm -f "+crawlName), 2)
 	seedAt, standAt := -1, -1
@@ -98,6 +101,19 @@ func TestUISeedsTheStandAndCrawlsItQuickly(t *testing.T) {
 		}
 	}
 	testutil.True(t, seedAt >= 0 && seedAt < standAt, "the seed runs before the stand starts")
+	written, err := os.ReadFile(filepath.Join(ws.Out, crawlerDir, crawler.File))
+	testutil.NoErr(t, err)
+	testutil.True(t, bytes.Equal(written, crawler.Script) && len(written) > 0, "the hub's own crawler is laid out for the browser container")
+}
+
+func TestUIFailsWhenItCannotLayOutItsCrawler(t *testing.T) {
+	ws := uiApp(t, &crawlSim{report: cleanReport})
+	blocked := filepath.Join(t.TempDir(), "file")
+	testutil.NoErr(t, os.WriteFile(blocked, nil, 0o600))
+	ws.Out = blocked
+	out := UI(context.Background(), ws)
+	testutil.Equal(t, out.Status, gate.StatusFail)
+	testutil.Equal(t, out.Reason, reasonNoCrawl)
 }
 
 func TestUIFailsOnTheProblemsOfTheReportAndCrawlsFullyInAFullGate(t *testing.T) {
