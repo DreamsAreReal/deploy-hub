@@ -543,6 +543,7 @@ commands:
 | `provision --app … ` | root (from `onboard`) | prepares `/opt/<app>/` and the allowlist line |
 | `facts <app>` | root (from `onboard`) | reports what already exists on the server |
 | `onboard <repo> …` | operator machine | connects a GitHub repo end-to-end |
+| `scaffold <app> --port N …` | operator machine or agent, in a clone of this repo | writes a new service from `templates/service` and prints its policy, catalog and scrape entries |
 | `mcp` | operator machine | MCP server for AI agents: `status`, `history`, `rollback` over the deploy channel |
 
 `make build` builds it for linux/amd64 into `$TMPDIR/deploy-hub-build/`, outside
@@ -769,6 +770,31 @@ installs one by tag the same way.
 
 The only manual install is the bootstrap (Bootstrap, step 5). Do not copy a
 binary to the server any other way.
+
+## A new service — from the template only
+
+A new service starts from [`templates/service`](templates/service), never from an
+empty repo: it already does every standard thing the one way the hub expects, so the
+first push passes the gate. Deploy goes through this hub, metrics are Prometheus text on
+`METRICS_PORT` scraped over the `shared` network, logs are JSON lines on stdout, errors go
+to Bugsink through the Sentry SDK, secrets come from the store as `.env`, alerts are
+vmalert rules (`TargetDown` already covers a dead service), every answer carries strict
+security headers, and the tests keep coverage, mutation score and a fuzz target above the
+gate's bars. The template is a project of this repository, so the hub's own gate checks
+it on every change and it cannot rot.
+
+```
+go run ./cmd/deploy-hub scaffold <app> --port <free 127.0.0.1 port of the VPS> [--repo OWNER/NAME] [--dir DIR]
+```
+
+writes the service into `./<app>` (an existing non-empty directory is refused) with the
+module, binary, container and published port renamed, adds the same caller stub
+`onboard` would commit, and prints, filled in for the app, the entry for
+`policy/gate.yaml` (with the template's security and business scenarios), the entry for
+`policy/architecture.yaml` and the scrape target file for the observability repo. A
+test feeds those entries to the hub's own policy and catalog parsers and checks the
+generated repository against its catalog entry, so they stay valid. Then push the repo,
+merge the entries, and connect it with `onboard` (below).
 
 ## Connecting a repo — one command
 

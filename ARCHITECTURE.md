@@ -276,6 +276,7 @@ internal/provision/ `provision` and `facts`: prepare /opt/<app>/ as root
 internal/hostsync/  `host-sync`: install an app's host files from its gated image as root
 internal/selfupdate/ `self-update` and `sudoers-sync`: install a gated release of the hub, write the sudoers rule
 internal/onboard/   `onboard` on the operator machine: stub, secrets, provision
+internal/scaffold/  `scaffold`: a new service from templates/service, its policy, catalog and scrape entries
 internal/mcp/       `mcp`: JSON-RPC over stdio, tool schemas, argument checks before SSH
 internal/prune/     keep running image + 2 previous per app
 internal/obs/       slog logger, metric names (names.go), pusher, journal-derived counters
@@ -288,6 +289,7 @@ internal/testutil/  assertions for tests
 internal/gate/      the quality gate (below)
 e2e/                end-to-end tests of the real binary with fake docker/caddy/sudo
 policy/             gate.yaml, tools.yaml, golangci.yml, workflow-audit.yml, per-language tool locks
+templates/service/  the one template of a new service: a Go module of its own, gated with this repo
 server/systemd/     timers: status every minute, prune daily, history-guard every 5 min
 server/vmalert/     alert rules for the hub's metrics
 .github/            ci.yml, deploy.yml (reusable), history-guard.yml, actions/hub

@@ -59,6 +59,7 @@ const (
 	CmdRunnerSync = "ci-runner-sync"
 	CmdBootstrap  = "bootstrap"
 	CmdPreempt    = "preempt"
+	CmdScaffold   = "scaffold"
 
 	binDocker    = "docker"
 	binSudo      = "sudo"
@@ -84,6 +85,7 @@ commands:
   provision --app NAME ...         prepare /opt/<app> on the VPS (root)
   facts <app>                      print server facts for onboarding
   onboard <repo> [options]         connect a GitHub repo (run on the operator machine)
+  scaffold <app> --port N [...]    write a new service from the template that passes the gate (run in a hub clone)
   gate --app NAME --repo O/N ...   run the deploy quality gate on a checkout (CI)
   tools --manifest FILE --dir DIR  install the pinned gate toolchain (CI)
   engine-version                   print the sha256 of the mutation engine sources (make passes it to the build)
@@ -128,6 +130,7 @@ var handlers = map[string]handler{
 	CmdProvision:  {run: runProvision, binaries: []string{binCaddy, binSystemctl}, onServer: true},
 	CmdFacts:      {run: runFacts, onServer: true},
 	CmdOnboard:    {run: runOnboard, binaries: []string{binGH, binGit, binSSH, onboard.SSHKeygen}},
+	CmdScaffold:   {run: runScaffold},
 	CmdGate:       {run: runGate, binaries: gateBinaries, verbose: true},
 	CmdTools:      {run: runTools, binaries: []string{tools.GoBinary, tools.TarBinary, tools.CmakeBinary, tools.CCBinary, tools.LemonBinary, tools.MakeBinary}, verbose: true},
 	CmdMCP:        {run: runMCP, binaries: []string{binSSH}},
