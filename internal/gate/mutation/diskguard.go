@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"math"
+	"os"
 	"path/filepath"
 	"syscall"
 	"time"
@@ -20,25 +21,40 @@ const (
 	maxBlockShift = 20
 	reasonDisk    = "%s holds %d MiB, the policy allows %d GiB (mutation_disk_gib)"
 	reasonFree    = "%s has %d MiB free, the policy keeps %d GiB free (mutation_free_gib)"
+	reasonYield   = "%s appeared: the CI runner took a job, this chunk gives the host up"
 )
 
-var ErrDisk = errors.New("mutation testing stopped to protect the disk")
+var (
+	ErrDisk  = errors.New("mutation testing stopped to protect the disk")
+	ErrYield = errors.New("mutation testing stopped to give the CI runner way")
+)
 
 type diskGuard struct {
 	dir     string
 	limit   int64
 	minFree int64
+	yield   string
 	size    func(string) (int64, error)
 	free    func(string) (int64, error)
 }
 
 func newDiskGuard(ws gate.Workspace) diskGuard {
 	l := ws.Policy.Limits
-	return diskGuard{dir: ws.Out, limit: l.MutationDisk * gib, minFree: l.MutationFree * gib, size: treeSize, free: freeBytes}
+	return diskGuard{dir: ws.Out, limit: l.MutationDisk * gib, minFree: l.MutationFree * gib, yield: ws.Mutation.Yield, size: treeSize, free: freeBytes}
 }
 
 func (g diskGuard) check() error {
-	return errors.Join(g.checkSize(), g.checkFree())
+	return errors.Join(g.checkYield(), g.checkSize(), g.checkFree())
+}
+
+func (g diskGuard) checkYield() error {
+	if g.yield == "" {
+		return nil
+	}
+	if _, err := os.Lstat(g.yield); err == nil {
+		return fmt.Errorf("%w: "+reasonYield, ErrYield, g.yield)
+	}
+	return nil
 }
 
 func (g diskGuard) checkSize() error {

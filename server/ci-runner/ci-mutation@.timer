@@ -1,0 +1,9 @@
+[Unit]
+Description=Full mutation run chunks of DreamsAreReal/%i
+
+[Timer]
+OnBootSec=15min
+OnUnitInactiveSec=10min
+
+[Install]
+WantedBy=timers.target

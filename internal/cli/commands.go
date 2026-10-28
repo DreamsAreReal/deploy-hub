@@ -58,9 +58,15 @@ func runRunner(ctx context.Context, a *App, ex procexec.Runner, args []string) i
 	if raw == "" {
 		raw = strings.Join(args, " ")
 	}
+	svc := a.runnerService(ex)
+	svc.Only = only
+	return svc.Dispatch(ctx, raw, a.IO.Stdin)
+}
+
+func (a *App) runnerService(ex procexec.Runner) *runner.Service {
 	d := docker.Client{Exec: ex}
 	prober := netprobe.NewProber()
-	svc := &runner.Service{
+	return &runner.Service{
 		Paths:       a.Config.Paths,
 		Apps:        a.apps(),
 		Journal:     a.journal(),
@@ -88,9 +94,7 @@ func runRunner(ctx context.Context, a *App, ex procexec.Runner, args []string) i
 		Host:        runner.SudoHost{Exec: ex, Binary: a.Config.Paths.Binary()},
 		Catalog:     a.catalog(),
 		HostApps:    a.hostApps(),
-		Only:        only,
 	}
-	return svc.Dispatch(ctx, raw, a.IO.Stdin)
 }
 
 func runRender(_ context.Context, a *App, _ procexec.Runner, args []string) int {

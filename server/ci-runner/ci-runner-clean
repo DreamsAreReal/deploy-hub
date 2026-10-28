@@ -60,11 +60,18 @@ after=$(used_percent)
 if [[ ${after} -ge ${DISK_MAX_PERCENT} ]]; then
 	log "disk over ${DISK_MAX_PERCENT}%: dropping every image, the build cache and the language caches"
 	docker system prune -af --volumes >/dev/null
-	for d in .cache go .npm .nuget; do
+	for d in .cache go .npm .nuget mutation/work; do
 		wipe "${HOME}/${d}"
 	done
 	after=$(used_percent)
 fi
+case "${DOCKER_HOST:-}" in
+unix://*/docker.sock)
+	flag=${DOCKER_HOST#unix://}
+	rm -f "${flag%/docker.sock}/job-running"
+	;;
+*) ;;
+esac
 total=$(usage)
 log "disk after: ${after}% (${total})"
 exit 0

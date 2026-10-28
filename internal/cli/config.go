@@ -101,6 +101,7 @@ type Config struct {
 	JWKSURL    string
 	JWKSCache  string
 	Secrets    SecretsConfig
+	SpoolRoot  string
 }
 
 type SecretsConfig struct {
@@ -135,6 +136,7 @@ func LoadConfig(env Env) (Config, error) {
 		JWKSURL:    env.get(envJWKSURL, oidc.JWKSURL),
 		JWKSCache:  env.get(envJWKSCache, filepath.Join(env.get(envHome, ""), defaultJWKSCache)),
 		Secrets:    SecretsConfig{File: env.get(envStoreFile, ""), Key: env.get(envStoreAge, defaultAgeKey), Age: env.get(envAge, defaultAge)},
+		SpoolRoot:  env.get(envSpoolRoot, defaultSpool),
 	}
 	if v, ok := env(envMetricsURL); ok {
 		c.MetricsURL = v

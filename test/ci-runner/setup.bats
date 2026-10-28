@@ -11,7 +11,7 @@ setup() {
   SETUP=$(patched ci-runner-setup \
     -e "s#^LIB=.*#LIB=${WORLD}/lib#" -e "s#^UNITS=.*#UNITS=${WORLD}/units#" -e "s#^CACHE=.*#CACHE=${WORLD}/cache#" \
     -e "s#^CI_ROOT=.*#CI_ROOT=${WORLD}/ci#" -e "s#^DISK_IMAGE=.*#DISK_IMAGE=${WORLD}/ci.img#" \
-    -e "s#^DEPLOY_LOCK=.*#DEPLOY_LOCK=${WORLD}/deploy.lock#" -e "s#^RUNNER_SHA256=.*#RUNNER_SHA256=${sha%% *}#" \
+    -e "s#^DEPLOY_LOCK=.*#DEPLOY_LOCK=${WORLD}/deploy.lock#" -e "s#^MUTATION_SPOOL=.*#MUTATION_SPOOL=${WORLD}/spool#" -e "s#^RUNNER_SHA256=.*#RUNNER_SHA256=${sha%% *}#" \
     -e "s#/etc/sub#${WORLD}/etc/sub#g" -e "s#/proc/#${WORLD}/proc/#" -e "s#/etc/apparmor.d/#${WORLD}/apparmor/#g" \
     -e "/^\t/s#/etc/netns/#${WORLD}/etc/netns/#g" -e "/^\t/s#/run/netns/#${WORLD}/run/netns/#g")
   printf 'deploy:100000:65536\n' >"${WORLD}/etc/subuid"
@@ -162,6 +162,10 @@ UNIT
 )" ]
   [ "$(cat "${WORLD}/units/ci-docker@tasks.service.d/50-ci-user.conf")" = "$(printf '[Unit]\nRequires=user@1001.service\nAfter=user@1001.service\n\n[Service]\nSlice=user-1001.slice\nEnvironment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus')" ]
   [ "$(cat "${WORLD}/units/ci-runner@tasks.service.d/50-ci-user.conf")" = "$(printf '[Service]\nSlice=user-1001.slice')" ]
+  [ "$(cat "${WORLD}/units/ci-mutation@tasks.service.d/50-ci-user.conf")" = "$(printf '[Service]\nSlice=user-1001.slice')" ]
+  [ -d "${WORLD}/spool" ]
+  called "systemctl enable --now ci-mutation@tasks.timer"
+  called "systemctl enable --now ci-mutation@observability.timer"
   called "find ${WORLD}/ci/tasks -xdev -type d -exec chattr +P -p 1001 {} +"
   called "find ${WORLD}/ci/tasks -xdev -type f -exec chattr -p 1001 {} +"
   called "setquota -P 1001 0 146800640 0 0 ${WORLD}/ci"
@@ -411,8 +415,38 @@ CALLS
 @test "a wrong command prints the usage" {
   run bash "$SETUP"
   [ "$status" -eq 2 ]
-  [ "$output" = "usage: $SETUP host | quota-enable | register <repo> < registration-token" ]
+  [ "$output" = "usage: $SETUP host | quota-enable | register <repo> < registration-token | units | timers <repo>" ]
   run bash "$SETUP" register
+  [ "$status" -ne 0 ]
+  [[ "$output" == *repository* ]]
+}
+
+@test "units installs every service and timer of the directory and reloads systemd" {
+  run bash "$SETUP" units
+  [ "$status" -eq 0 ]
+  for unit in "${CI_RUNNER_DIR}"/*.service "${CI_RUNNER_DIR}"/*.timer; do
+    cmp "${WORLD}/units/${unit##*/}" "$unit"
+  done
+  [ -e "${WORLD}/units/ci-mutation@.service" ]
+  [ -e "${WORLD}/units/ci-mutation@.timer" ]
+  [ ! -e "${WORLD}/units/var-lib-ci.mount" ]
+  [ "$(grep '^systemctl ' "$CALLS")" = "systemctl daemon-reload" ]
+}
+
+@test "units drops the shared drop-ins of the templates" {
+  mkdir -p "${WORLD}/units/ci-docker@.service.d" "${WORLD}/units/ci-runner@.service.d"
+  touch "${WORLD}/units/ci-docker@.service.d/50-ci-user.conf" "${WORLD}/units/ci-runner@.service.d/50-ci-user.conf"
+  run bash "$SETUP" units
+  [ "$status" -eq 0 ]
+  [ ! -e "${WORLD}/units/ci-docker@.service.d/50-ci-user.conf" ]
+  [ ! -e "${WORLD}/units/ci-runner@.service.d/50-ci-user.conf" ]
+}
+
+@test "timers enables the timer of every template for one repository" {
+  run bash "$SETUP" timers tasks
+  [ "$status" -eq 0 ]
+  [ "$(calls)" = "systemctl enable --now ci-mutation@tasks.timer" ]
+  run bash "$SETUP" timers
   [ "$status" -ne 0 ]
   [[ "$output" == *repository* ]]
 }
