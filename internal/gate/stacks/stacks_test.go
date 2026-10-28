@@ -57,3 +57,20 @@ func TestGoPassedTests(t *testing.T) {
 	_, err = goPack().Passed(context.Background(), workspace(t, errors.New("no go.mod")))
 	testutil.Fails(t, err)
 }
+
+func TestOnlyGoMutatesInAFullRun(t *testing.T) {
+	ran := false
+	run := notInFullRuns(func(context.Context, gate.Workspace) gate.Outcome { ran = true; return gate.Pass(nil) })
+	ws := workspace(t, nil)
+	testutil.Equal(t, run(context.Background(), ws).Status, gate.StatusPass)
+	testutil.True(t, ran, "a deploy gate mutates every pack")
+	ran = false
+	ws.Mutation.Full = true
+	out := run(context.Background(), ws)
+	testutil.Equal(t, out.Status, gate.StatusNA)
+	testutil.Contains(t, out.Reason, "Go verdict cache only")
+	testutil.True(t, !ran, "a full run skips packs without a verdict cache")
+	for _, p := range All()[1:] {
+		testutil.Equal(t, p.Checks[pack.CheckMutation](context.Background(), ws).Status, gate.StatusNA)
+	}
+}

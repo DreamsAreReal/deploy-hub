@@ -17,6 +17,8 @@ const (
 	flagFull   = "--mutation-full"
 	flagBudget = "--mutation-budget"
 	flagLast   = "--mutation-last"
+	flagYield  = "--mutation-yield"
+	yieldFlag  = "/run/flag"
 	cachePath  = "/c.json"
 )
 
@@ -31,6 +33,8 @@ func TestParseGateArgsFullRun(t *testing.T) {
 		{flagBudget, "-1m"},
 		{flagLast, "relative-last.json"},
 		{flagLast, filepath.Join(src, "planted.json")},
+		{flagYield, "job-running"},
+		{flagYield, filepath.Join(src, "job-running")},
 	} {
 		_, err := parseGateArgs(append(append([]string{}, base...), extra...))
 		testutil.Fails(t, err)
@@ -40,11 +44,11 @@ func TestParseGateArgsFullRun(t *testing.T) {
 func TestMutationPlanReadsTheLastFullRun(t *testing.T) {
 	last := filepath.Join(t.TempDir(), "last.json")
 	testutil.Write(t, last, `{"commit":"abc","bases":["b"],"passed":true}`)
-	g := gateArgs{last: last, full: true, budget: time.Minute, cache: cachePath, cacheSum: cacheSum}
+	g := gateArgs{last: last, full: true, budget: time.Minute, cache: cachePath, cacheSum: cacheSum, yield: yieldFlag}
 	plan, err := g.mutationPlan()
 	testutil.NoErr(t, err)
 	testutil.Equal(t, *plan.Last, gate.FullRun{Commit: "abc", Bases: []string{"b"}, Passed: true})
-	testutil.True(t, plan.Full && plan.Budget == time.Minute && plan.Cache == cachePath && plan.CacheSHA256 == cacheSum[len(digestPrefix):], "plan carries the flags")
+	testutil.True(t, plan.Full && plan.Yield == yieldFlag && plan.Budget == time.Minute && plan.Cache == cachePath && plan.CacheSHA256 == cacheSum[len(digestPrefix):], "plan carries the flags")
 	testutil.Write(t, last, "{")
 	_, err = g.mutationPlan()
 	testutil.Fails(t, err)
@@ -53,14 +57,14 @@ func TestMutationPlanReadsTheLastFullRun(t *testing.T) {
 	testutil.Fails(t, err)
 }
 
-func TestFullRunKeepsOnlyTestsAndMutation(t *testing.T) {
+func TestFullRunKeepsOnlyMutation(t *testing.T) {
 	all := []gate.Check{{Name: "lint"}, {Name: pack.CheckTests}, {Name: pack.CheckMutation}, {Name: "secrets"}}
 	testutil.Equal(t, len(gateChecks(all, false)), 4)
 	names := make([]string, 0, len(all))
 	for _, c := range gateChecks(all, true) {
 		names = append(names, c.Name)
 	}
-	testutil.Equal(t, names, []string{pack.CheckTests, pack.CheckMutation})
+	testutil.Equal(t, names, []string{pack.CheckMutation})
 	testutil.Equal(t, len(all), 4)
 }
 

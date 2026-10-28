@@ -90,7 +90,7 @@ func shellPack() pack.Pack {
 			pack.CheckLineCoverage: linecov.LineCoverage,
 			pack.CheckBranches:     linecov.Branches,
 			pack.CheckFuzz:         shell.Fuzz,
-			pack.CheckMutation:     shell.Mutation,
+			pack.CheckMutation:     notInFullRuns(shell.Mutation),
 			pack.CheckVulns:        shell.Dependencies,
 		},
 		Passed: shell.Passed,
@@ -113,7 +113,7 @@ func dotnetPack() pack.Pack {
 			pack.CheckLineCoverage: linecov.LineCoverage,
 			pack.CheckBranches:     linecov.Branches,
 			pack.CheckFuzz:         dotnet.Fuzz,
-			pack.CheckMutation:     dotnet.Mutation,
+			pack.CheckMutation:     notInFullRuns(dotnet.Mutation),
 			pack.CheckVulns:        scan.DependencyVulnerabilities,
 		},
 		Passed: dotnet.Passed,
@@ -135,7 +135,7 @@ func nodePack() pack.Pack {
 			pack.CheckLineCoverage: linecov.LineCoverage,
 			pack.CheckBranches:     linecov.Branches,
 			pack.CheckFuzz:         node.Fuzz,
-			pack.CheckMutation:     node.Mutation,
+			pack.CheckMutation:     notInFullRuns(node.Mutation),
 			pack.CheckVulns:        scan.DependencyVulnerabilities,
 		},
 		Passed: node.Passed,
@@ -158,7 +158,7 @@ func pythonPack() pack.Pack {
 			pack.CheckLineCoverage: python.LineCoverage,
 			pack.CheckBranches:     python.Branches,
 			pack.CheckFuzz:         python.Fuzz,
-			pack.CheckMutation:     python.Mutation,
+			pack.CheckMutation:     notInFullRuns(python.Mutation),
 			pack.CheckVulns:        scan.DependencyVulnerabilities,
 		},
 		Passed: python.Passed,
@@ -201,6 +201,17 @@ func withModule(run pack.Run) pack.Run {
 			return gate.Fail(err.Error())
 		}
 		ws.Module = module
+		return run(ctx, ws)
+	}
+}
+
+const reasonNoCache = "a full mutation run covers the Go verdict cache only; this pack mutates in full in every gate"
+
+func notInFullRuns(run pack.Run) pack.Run {
+	return func(ctx context.Context, ws gate.Workspace) gate.Outcome {
+		if ws.Mutation.Full {
+			return gate.NotApplicable(reasonNoCache)(ctx, ws)
+		}
 		return run(ctx, ws)
 	}
 }

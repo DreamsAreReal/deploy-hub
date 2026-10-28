@@ -87,8 +87,8 @@ func TestGateCommandBlocksAndWritesVerdict(t *testing.T) {
 	src := t.TempDir()
 	testutil.Write(t, filepath.Join(src, "go.mod"), "module example.com/web\n")
 	h.exec.Handler = func(c procexec.Command) (procexec.Result, error) {
-		if c.Name == "go" && len(c.Args) > 1 && c.Args[0] == "list" && c.Args[1] == "-m" {
-			return procexec.Result{Stdout: "example.com/web\n"}, nil
+		if c.Name == goBin && len(c.Args) > 1 && c.Args[0] == "list" && c.Args[1] == "-m" {
+			return procexec.Result{Stdout: webModule}, nil
 		}
 		return procexec.Result{}, nil
 	}

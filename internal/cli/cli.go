@@ -55,6 +55,9 @@ const (
 	CmdSudoers    = "sudoers-sync"
 	CmdVersion    = "version"
 	CmdEngine     = "engine-version"
+	CmdDispatch   = "mutation-dispatch"
+	CmdImport     = "mutation-import"
+	CmdChunk      = "mutation-run"
 	CmdRunnerSync = "ci-runner-sync"
 	CmdBootstrap  = "bootstrap"
 	CmdPreempt    = "preempt"
@@ -87,6 +90,9 @@ commands:
   precheck <gate flags>            run only the fast gate checks, no mutation, dast or load (agents, before a push)
   tools --manifest FILE --dir DIR  install the pinned gate toolchain (CI)
   engine-version                   print the sha256 of the mutation engine sources (make passes it to the build)
+  mutation-dispatch <app>          plan the next full mutation chunk of an app for its CI user (root)
+  mutation-import <app>            take the verdicts of the last full mutation chunk into the hub (root)
+  mutation-run --spool DIR ...     run one full mutation chunk as the app's CI user
   mcp                              MCP server for AI agents on stdio (run on the operator machine)`
 )
 
@@ -105,6 +111,7 @@ type App struct {
 	Now          func() time.Time
 	Log          *slog.Logger
 	Owner        func(username string) func(path string) error
+	Group        func(group string) func(path string) error
 	Checks       func() []gate.Check
 	Sudoers      string
 	Token        string
@@ -139,6 +146,9 @@ var handlers = map[string]handler{
 	CmdPreempt:    {run: runPreempt, onServer: true},
 	CmdHostSync:   {run: runHostSync, binaries: []string{hostsync.DockerBinary, hostsync.SystemctlBinary, hostsync.AnalyzeBinary, hostsync.CaddyBinary}, onServer: true},
 	CmdEngine:     {run: runEngineVersion, binaries: []string{tools.GoBinary}},
+	CmdDispatch:   {run: runMutationDispatch, onServer: true},
+	CmdImport:     {run: runMutationImport, onServer: true},
+	CmdChunk:      {run: runMutationRun, binaries: chunkBinaries, verbose: true},
 }
 
 var gateBinaries = []string{
@@ -151,6 +161,7 @@ var gateBinaries = []string{
 type Deps struct {
 	Exec         func(names ...string) procexec.Runner
 	Owner        func(username string) func(path string) error
+	Group        func(group string) func(path string) error
 	Now          func() time.Time
 	Checks       func() []gate.Check
 	Sudoers      string
@@ -160,7 +171,7 @@ type Deps struct {
 }
 
 func OSDeps() Deps {
-	return Deps{Exec: func(names ...string) procexec.Runner { return procexec.NewOS(names...) }, Owner: ChownTo, Now: time.Now, Checks: catalog.Checks,
+	return Deps{Exec: func(names ...string) procexec.Runner { return procexec.NewOS(names...) }, Owner: ChownTo, Group: GroupTo, Now: time.Now, Checks: catalog.Checks,
 		Sudoers: selfupdate.DefaultSudoers, Token: selfupdate.DefaultPATFile,
 		CIRoot: preempt.DefaultCIRoot, PreemptState: preempt.DefaultState}
 }
@@ -188,7 +199,7 @@ func Run(ctx context.Context, args []string, env Env, stdio IO, deps Deps) int {
 	counts := &obs.LevelCounts{}
 	log, closeLog := openLogger(cfg, args[0], h, stdio.Stderr, counts)
 	defer closeLog()
-	a := &App{Config: cfg, IO: stdio, Out: stdout, Err: stderr, Now: deps.Now, Log: log, Owner: deps.Owner, Exec: deps.Exec, Checks: deps.Checks, Sudoers: deps.Sudoers, Token: deps.Token, CIRoot: deps.CIRoot, PreemptState: deps.PreemptState}
+	a := &App{Config: cfg, IO: stdio, Out: stdout, Err: stderr, Now: deps.Now, Log: log, Owner: deps.Owner, Group: deps.Group, Exec: deps.Exec, Checks: deps.Checks, Sudoers: deps.Sudoers, Token: deps.Token, CIRoot: deps.CIRoot, PreemptState: deps.PreemptState}
 	started := time.Now()
 	log.Info("command started", "args", len(args)-1)
 	code, panicked := a.invoke(ctx, h, args[1:])
@@ -264,5 +275,19 @@ func ChownTo(username string) func(path string) error {
 			return err
 		}
 		return os.Chown(path, uid, gid)
+	}
+}
+
+func GroupTo(group string) func(path string) error {
+	return func(path string) error {
+		g, err := user.LookupGroup(group)
+		if err != nil {
+			return err
+		}
+		gid, err := strconv.Atoi(g.Gid)
+		if err != nil {
+			return err
+		}
+		return os.Chown(path, 0, gid)
 	}
 }

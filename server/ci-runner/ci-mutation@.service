@@ -1,0 +1,47 @@
+[Unit]
+Description=Full mutation run chunk of DreamsAreReal/%i (isolated, user ci-%i)
+Requires=ci-netns@%i.service var-lib-ci.mount
+After=ci-netns@%i.service var-lib-ci.mount ci-docker@%i.service
+ConditionPathExists=/var/lib/ci/%i/mutation/stash/deploy-hub
+ConditionPathExists=!/run/ci/%i/job-running
+
+[Service]
+Type=oneshot
+User=ci-%i
+Group=ci-%i
+WorkingDirectory=/var/lib/ci/%i
+ExecStartPre=+/opt/deploy-hub/bin/deploy-hub mutation-dispatch %i
+ExecStart=/var/lib/ci/%i/mutation/stash/deploy-hub mutation-run --spool /var/lib/ci-mutation/%i --stash /var/lib/ci/%i/mutation/stash --work /var/lib/ci/%i/mutation/work --yield /run/ci/%i/job-running --budget 3h
+ExecStopPost=+/opt/deploy-hub/bin/deploy-hub mutation-import %i
+Environment=HOME=/var/lib/ci/%i
+Environment=TMPDIR=/var/lib/ci/%i/tmp
+Environment=DOCKER_HOST=unix:///run/ci/%i/docker.sock
+Environment=PATH=/var/lib/ci/%i/mutation/stash/go/bin:/usr/local/bin:/usr/bin:/bin
+NetworkNamespacePath=/run/netns/ci-%i
+BindReadOnlyPaths=/etc/netns/ci-%i/resolv.conf:/etc/resolv.conf
+CPUWeight=1
+IOWeight=1
+TimeoutStartSec=200min
+KillMode=control-group
+
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/ci/%i
+ProtectHome=yes
+InaccessiblePaths=/opt /root /etc/srv-backup /etc/wireguard /etc/deploy-hub /var/backups /var/lib/docker /var/lib/containerd -/var/lib/app-backup
+InaccessiblePaths=-/run/docker.sock -/var/run/docker.sock -/run/containerd /run/user
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
