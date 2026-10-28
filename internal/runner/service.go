@@ -163,11 +163,7 @@ func (s *Service) pushDeliveries(ctx context.Context) {
 	if s.Delivery == nil || len(s.steps) == 0 {
 		return
 	}
-	err := s.Delivery.Notify(context.WithoutCancel(ctx), s.steps)
-	if errors.Is(err, delivery.ErrDisabled) {
-		return
-	}
-	s.samples = append(s.samples, obs.Sample{Name: obs.MetricDeliverySuccess, Labels: obs.Labels{}, Value: obs.Bool(err == nil)})
+	s.Delivery.Notify(context.WithoutCancel(ctx), s.steps)
 }
 
 func (s *Service) pushMetrics(ctx context.Context) {

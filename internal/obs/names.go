@@ -31,7 +31,6 @@ const (
 	MetricCommandLogRecords    = "deploy_hub_command_log_records"
 	MetricRequest              = "deploy_hub_request"
 	MetricRequestRefused       = "deploy_hub_request_refused"
-	MetricDeliverySuccess      = "deploy_hub_delivery_success"
 	MetricJournalReadable      = "deploy_hub_journal_readable"
 	MetricCIRunnerUp           = "deploy_hub_ci_runner_up"
 	MetricCIDiskUsedRatio      = "deploy_hub_ci_disk_used_ratio"

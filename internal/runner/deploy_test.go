@@ -541,12 +541,10 @@ func TestSmokeSuffixRecordsConfiguredPorts(t *testing.T) {
 
 type captureNotifier struct {
 	steps []delivery.Step
-	err   error
 }
 
-func (c *captureNotifier) Notify(_ context.Context, steps []delivery.Step) error {
+func (c *captureNotifier) Notify(_ context.Context, steps []delivery.Step) {
 	c.steps = append(c.steps, steps...)
-	return c.err
 }
 
 func TestDeployReportsDeliverySteps(t *testing.T) {

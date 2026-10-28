@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/DreamsAreReal/deploy-hub/internal/delivery"
 	"github.com/DreamsAreReal/deploy-hub/internal/journal"
 	"github.com/DreamsAreReal/deploy-hub/internal/obs"
 	"github.com/DreamsAreReal/deploy-hub/internal/registry"
@@ -57,27 +56,11 @@ func TestRefusalReasonCoversEveryMessage(t *testing.T) {
 	testutil.Equal(t, verbOf("status now"), VerbStatus)
 }
 
-func TestDeliveryOutcomeIsMeasured(t *testing.T) {
-	e := newEnv(t)
-	e.svc.Delivery = &captureNotifier{}
-	testutil.Equal(t, e.dispatch("deploy "+appName+" "+goodTag, meta()), ExitOK)
-	testutil.Equal(t, e.sample(obs.MetricDeliverySuccess, obs.Labels{}), 1.0)
-
-	failed := newEnv(t)
-	failed.svc.Delivery = &captureNotifier{err: delivery.ErrRejected}
-	testutil.Equal(t, failed.dispatch("deploy "+appName+" "+goodTag, meta()), ExitOK)
-	testutil.Equal(t, failed.sample(obs.MetricDeliverySuccess, obs.Labels{}), 0.0)
-
-	disabled := newEnv(t)
-	disabled.svc.Delivery = delivery.Discard{}
-	testutil.Equal(t, disabled.dispatch("deploy "+appName+" "+goodTag, meta()), ExitOK)
-	testutil.True(t, !disabled.metrics.has(obs.MetricDeliverySuccess, obs.Labels{}), "disabled delivery is not a failure")
-
+func TestReadOnlyCommandsDeliverNothing(t *testing.T) {
 	quiet := newEnv(t)
 	notes := &captureNotifier{}
 	quiet.svc.Delivery = notes
 	testutil.Equal(t, quiet.dispatch("status", ""), ExitOK)
-	testutil.True(t, !quiet.metrics.has(obs.MetricDeliverySuccess, obs.Labels{}), "nothing to deliver")
 	testutil.Equal(t, len(notes.steps), 0)
 }
 

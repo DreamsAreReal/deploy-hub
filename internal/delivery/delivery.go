@@ -2,7 +2,6 @@ package delivery
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"strings"
 
@@ -23,11 +22,6 @@ const (
 	detailRestore = "rollback"
 )
 
-var (
-	ErrRejected = errors.New("delivery step rejected")
-	ErrDisabled = errors.New("delivery disabled")
-)
-
 type Step struct {
 	Repo   string `json:"repo"`
 	Target string `json:"target"`
@@ -38,7 +32,7 @@ type Step struct {
 }
 
 type Notifier interface {
-	Notify(ctx context.Context, steps []Step) error
+	Notify(ctx context.Context, steps []Step)
 }
 
 func RepoLabel(repo string) string {
@@ -93,14 +87,9 @@ type LogNotifier struct {
 	Log *slog.Logger
 }
 
-func (n LogNotifier) Notify(ctx context.Context, steps []Step) error {
+func (n LogNotifier) Notify(ctx context.Context, steps []Step) {
 	for _, step := range steps {
 		n.Log.InfoContext(ctx, msgStep, "event", EventStep, "repo", step.Repo, "target", step.Target, "sha", step.SHA,
 			"step", step.Step, "state", step.State, "detail", step.Detail)
 	}
-	return nil
 }
-
-type Discard struct{}
-
-func (Discard) Notify(context.Context, []Step) error { return ErrDisabled }

@@ -102,7 +102,7 @@ func TestEveryProblemSignalHasAnAlert(t *testing.T) {
 		MetricCommandExitCode, MetricCommandPanicked, MetricCommandLogRecords,
 		MetricOperationsTotal, MetricGateCheckVerdict, MetricGateCheckValue,
 		MetricRequestRefused, MetricAppHealthy, MetricCaddySyncSuccess,
-		MetricLockWait, MetricDeliverySuccess, MetricJournalReadable,
+		MetricLockWait, MetricJournalReadable,
 		MetricCIRunnerUp, MetricCIDiskUsedRatio, MetricCIIsolationOK, MetricHostSyncSuccess, MetricSelfUpdateSuccess,
 		MetricCIQuotaOn, MetricCIQuotaUsedRatio,
 		MetricPreemptSuccess, MetricPreemptRerunsMax,

@@ -59,7 +59,7 @@ func TestFromEntryMapsJournalActions(t *testing.T) {
 func TestLogNotifierWritesOneStructuredLinePerStep(t *testing.T) {
 	var logs strings.Builder
 	n := delivery.LogNotifier{Log: slog.New(slog.NewJSONHandler(&logs, nil))}
-	testutil.NoErr(t, n.Notify(t.Context(), delivery.FromEntry(entry(journal.ActionDeploy, journal.ResultOK), "Owner/web")))
+	n.Notify(t.Context(), delivery.FromEntry(entry(journal.ActionDeploy, journal.ResultOK), "Owner/web"))
 	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
 	testutil.Equal(t, len(lines), 2)
 	var live map[string]any
@@ -68,11 +68,6 @@ func TestLogNotifierWritesOneStructuredLinePerStep(t *testing.T) {
 	testutil.Equal(t, live["repo"], label)
 	testutil.Equal(t, live["step"], delivery.StepLive)
 	testutil.Equal(t, live["sha"], sha7)
-	testutil.NoErr(t, n.Notify(t.Context(), nil))
+	n.Notify(t.Context(), nil)
 	testutil.Equal(t, len(strings.Split(strings.TrimSpace(logs.String()), "\n")), 2)
-}
-
-func TestDiscardSaysDeliveryIsOff(t *testing.T) {
-	steps := delivery.FromEntry(entry(journal.ActionDeploy, journal.ResultOK), "Owner/web")
-	testutil.Is(t, delivery.Discard{}.Notify(t.Context(), steps), delivery.ErrDisabled)
 }
