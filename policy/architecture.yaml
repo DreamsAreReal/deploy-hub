@@ -48,7 +48,7 @@ services:
       - to: anthropic
         why: Claude Code runs the agents and the assistant on the owner's subscription
       - to: router-bot
-        why: collects the router source of the assistant through the read-only API
+        why: collects the router source of the assistant and runs the router commands the owner approved
     secrets: [TASKS_AGENT_TOKEN, TASKS_ASSISTANT_TOKEN, CLAUDE_CREDENTIALS]
   router-bot:
     owner: DreamsAreReal
@@ -68,7 +68,7 @@ services:
         why: posts its own alerts to the tracker instead of vmalert
         until: "2026-12-31"
         task: "#785"
-    secrets: [ROUTER_TOKEN, READ_TOKEN, TELEGRAM_BOT_TOKEN, SENTRY_DSN, ROUTER_SENTRY_DSN, TASKS_ALERTS_URL]
+    secrets: [ROUTER_TOKEN, READ_TOKEN, ACTION_TOKEN, TELEGRAM_BOT_TOKEN, SENTRY_DSN, ROUTER_SENTRY_DSN, TASKS_ALERTS_URL]
     config: [OWNER_CHAT_ID, PUBLIC_URL]
     data: [/data]
   observability:
