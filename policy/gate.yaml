@@ -776,12 +776,31 @@ apps:
         tests:
           - internal/trim.TestTmpRemovesOnlyOldLeftovers
           - internal/trim.TestCacheTrimsOnlyPastTheLimit
+      - id: preview-stays-isolated-and-behind-a-password
+        category: security
+        tests:
+          - internal/preview.TestUpBuildsRunsAndPublishesAPreview
+          - internal/preview.TestUpBuildsTheProxyImageWhenItIsMissing
+          - internal/preview.TestUpRefusesBadInputBeforeTouchingAnything
+          - internal/preview.TestCredentialHelperHandsTheTokenToGitOnly
+      - id: preview-expires-and-leaves-nothing-behind
+        category: business
+        tests:
+          - internal/preview.TestUpNeverUsesAMonotonicExpiry
+          - internal/preview.TestSweepRemovesOnlyExpiredSlots
+          - internal/preview.TestSweepRemovesLeftoversOfUnlabelledSlots
+          - internal/preview.TestEveryFailedStepRemovesThePartialPreview
+          - internal/preview.TestDownRemovesEverythingOfOneSlot
     host:
       files:
         - {src: server-ops, dst: /usr/local/sbin/server-ops, owner: root, group: root, mode: "0755"}
         - {src: kernel-autoreboot, dst: /usr/local/sbin/kernel-autoreboot, owner: root, group: root, mode: "0755"}
         - {src: runner-netns, dst: /usr/local/sbin/runner-netns, owner: root, group: root, mode: "0755"}
         - {src: runner-claude, dst: /usr/local/sbin/runner-claude, owner: root, group: root, mode: "0755"}
+        - {src: preview, dst: /usr/local/sbin/preview, owner: root, group: root, mode: "0755"}
+        - {src: preview-proxy, dst: /usr/local/sbin/preview-proxy, owner: root, group: root, mode: "0755"}
+        - {src: preview-sweep.service, dst: /etc/systemd/system/preview-sweep.service, owner: root, group: root, mode: "0644"}
+        - {src: preview-sweep.timer, dst: /etc/systemd/system/preview-sweep.timer, owner: root, group: root, mode: "0644"}
         - {src: kernel-autoreboot.service, dst: /etc/systemd/system/kernel-autoreboot.service, owner: root, group: root, mode: "0644"}
         - {src: kernel-autoreboot.timer, dst: /etc/systemd/system/kernel-autoreboot.timer, owner: root, group: root, mode: "0644"}
         - {src: vuln-selfcheck.service, dst: /etc/systemd/system/vuln-selfcheck.service, owner: root, group: root, mode: "0644"}
@@ -797,7 +816,7 @@ apps:
         - {src: runner-cache-trim.timer, dst: /etc/systemd/system/runner-cache-trim.timer, owner: root, group: root, mode: "0644"}
         - {src: router-backup.service, dst: /etc/systemd/system/router-backup.service, owner: root, group: root, mode: "0644"}
         - {src: router-backup.timer, dst: /etc/systemd/system/router-backup.timer, owner: root, group: root, mode: "0644"}
-      timers: [kernel-autoreboot.timer, vuln-selfcheck.timer, runner-obs-ship.timer, runner-tmp-trim.timer, runner-cache-trim.timer, router-backup.timer]
+      timers: [kernel-autoreboot.timer, vuln-selfcheck.timer, runner-obs-ship.timer, runner-tmp-trim.timer, runner-cache-trim.timer, router-backup.timer, preview-sweep.timer]
       checks: [server-ops-autoupdate.service]
 
 hub:
