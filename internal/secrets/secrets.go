@@ -17,7 +17,6 @@ import (
 
 const (
 	EnvFile    = ".env"
-	keyFileEnv = "SOPS_AGE_KEY_FILE"
 	fileMode   = 0o600
 	tempSuffix = ".laying-*"
 	exportWord = "export "
@@ -36,7 +35,7 @@ var (
 type Store struct {
 	File    string
 	KeyFile string
-	Sops    string
+	Age     string
 	Exec    procexec.Runner
 }
 
@@ -78,8 +77,7 @@ func layFile(path string, values map[string]string) error {
 }
 
 func (s Store) values(ctx context.Context) (map[string]appValues, error) {
-	res, err := s.Exec.Run(ctx, procexec.Command{Name: s.Sops, Args: []string{"--decrypt", "--output-type", "json", s.File},
-		Env: []string{keyFileEnv + "=" + s.KeyFile}})
+	res, err := s.Exec.Run(ctx, procexec.Command{Name: s.Age, Args: []string{"--decrypt", "--identity", s.KeyFile, s.File}})
 	if err != nil {
 		return nil, fmt.Errorf("%w %s (exit %d)", errDecrypt, s.File, procexec.ExitCode(errors.Unwrap(err)))
 	}

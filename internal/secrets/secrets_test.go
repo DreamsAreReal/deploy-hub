@@ -23,7 +23,7 @@ func store(t *testing.T, reply procexec.Result, fail error) (Store, *procexectes
 	key := filepath.Join(t.TempDir(), "age.key")
 	testutil.Write(t, key, "AGE-SECRET-KEY-1TEST")
 	fake := &procexectest.Fake{Handler: func(procexec.Command) (procexec.Result, error) { return reply, fail }}
-	return Store{File: "/srv/server-ops/secrets/values.sops.yaml", KeyFile: key, Sops: "/usr/local/bin/sops", Exec: fake}, fake
+	return Store{File: "/srv/server-ops/secrets/values.json.age", KeyFile: key, Age: "/usr/bin/age", Exec: fake}, fake
 }
 
 func TestLayWritesOnlyTheAppSecretsAndKeepsTheRest(t *testing.T) {
@@ -39,8 +39,7 @@ func TestLayWritesOnlyTheAppSecretsAndKeepsTheRest(t *testing.T) {
 	testutil.NoErr(t, err)
 	testutil.Equal(t, info.Mode().Perm(), os.FileMode(0o600))
 	call := fake.Calls()[0]
-	testutil.Equal(t, strings.Join(call.Args, " "), "--decrypt --output-type json "+s.File)
-	testutil.Equal(t, call.Env, []string{"SOPS_AGE_KEY_FILE=" + s.KeyFile})
+	testutil.Equal(t, call.Name+" "+strings.Join(call.Args, " "), "/usr/bin/age --decrypt --identity "+s.KeyFile+" "+s.File)
 	left, _ := filepath.Glob(filepath.Join(dir, EnvFile+".laying-*"))
 	testutil.Equal(t, len(left), 0)
 }
@@ -66,9 +65,9 @@ func TestLayRefusesWithoutKeyOrWithABrokenStore(t *testing.T) {
 	_, err := locked.Lay(t.Context(), appName, t.TempDir())
 	testutil.True(t, errors.Is(err, ErrLocked), "locked without a key")
 	testutil.Equal(t, len(fake.Calls()), 0)
-	failing, _ := store(t, procexec.Result{Stderr: "Failed to get the data key"}, errors.New("exit status 128"))
+	failing, _ := store(t, procexec.Result{Stderr: "age: error: no identity matched any of the recipients"}, errors.New("exit status 1"))
 	_, err = failing.Lay(t.Context(), appName, t.TempDir())
-	testutil.True(t, errors.Is(err, errDecrypt) && !strings.Contains(err.Error(), "data key"), "decrypt failure without output: "+err.Error())
+	testutil.True(t, errors.Is(err, errDecrypt) && !strings.Contains(err.Error(), "identity"), "decrypt failure without output: "+err.Error())
 	for _, body := range []string{"not json", `{"web": {".env": {"PORT": 8080}}}`, `{"web": {"PORT": "8080"}}`} {
 		broken, _ := store(t, procexec.Result{Stdout: body}, nil)
 		_, err = broken.Lay(t.Context(), appName, t.TempDir())

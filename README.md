@@ -1217,15 +1217,13 @@ Runner settings: `DEPLOY_HUB_OIDC_AUDIENCE` (default `deploy-hub`),
 ### Secrets store
 
 With `DEPLOY_HUB_SECRETS_FILE` set, every deploy first lays the app's secrets
-from one SOPS file encrypted with age (the store lives in the private
-`server-ops` repository, `secrets/values.sops.yaml`; see its README):
+from one JSON file encrypted with age (the store lives in the private
+`server-ops` repository, `secrets/values.json.age`; see its README):
 
-    <app>:
-      .env:           {KEY: value, ...}
-      ingest.env:     {KEY: value, ...}
+    {"<app>": {".env": {"KEY": "value"}, "ingest.env": {"KEY": "value"}}}
 
-The hub decrypts the file with `sops` (`DEPLOY_HUB_SOPS`, default
-`/usr/local/bin/sops`) and the age key at `DEPLOY_HUB_SECRETS_KEY` (default
+The hub decrypts the file with `age` (`DEPLOY_HUB_AGE`, default `/usr/bin/age`
+from the Ubuntu package) and the key at `DEPLOY_HUB_SECRETS_KEY` (default
 `/run/deploy-hub/age.key`: tmpfs, fetched from the home router at boot, never
 on disk), and writes only that app's keys into those files of the app folder:
 a stored key replaces its line, a new one is appended, every other line (plain

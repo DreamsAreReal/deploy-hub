@@ -249,7 +249,7 @@ func (a *App) secrets(ex procexec.Runner) runner.SecretLayer {
 	if c.File == "" {
 		return nil
 	}
-	return secrets.Store{File: c.File, KeyFile: c.Key, Sops: c.Sops, Exec: ex}
+	return secrets.Store{File: c.File, KeyFile: c.Key, Age: c.Age, Exec: ex}
 }
 
 func ChownTo(username string) func(path string) error {
