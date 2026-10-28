@@ -142,6 +142,7 @@ versions and checksums: [`policy/tools.yaml`](policy/tools.yaml).
 | `image` | any vulnerability, secret or misconfiguration in the built image | trivy |
 | `dast` | any ZAP alert of Low risk or above on the running app | OWASP ZAP full scan |
 | `load` | p95 above the profile, errors above the profile, crash, restart or OOM under load | built in |
+| `ui` | a problem the app's crawl finds in the seeded stage: page or console error, 5xx, hang, dead or covered button, duplicate or ambiguous button, delete without confirmation, cut text, page wider than the screen, unreadable contrast | the app's crawl in the pinned browser image |
 
 What this table covers and what it misses, seen from what an agent could break:
 [docs/gate-map.md](docs/gate-map.md).
@@ -259,7 +260,7 @@ reported as `n/a`. Checks that need an image or an HTTP surface are `n/a` for
 app kinds without one (`binary`, `worker`). Nothing else is ever skipped, and a
 check that cannot finish (tool crash, timeout) fails. Each check gets
 `check_timeout`; mutation testing gets `long_check_timeout`. The checks run one
-after another, and the isolated stage (`dast`, `load`) runs before mutation
+after another, and the isolated stage (`dast`, `load`, `ui`) runs before mutation
 testing, so a stage that does not come up is reported within minutes of the
 start rather than hours; the order changes no verdict, every check still runs.
 
@@ -456,11 +457,25 @@ apps:
     allowed_files: [docs/STATE.md]             # tracked although forbidden_files matches it
     dast: {target: /api, spider: 1m, max_time: 10m}
     load: {rate: 20, duration: 30s, p95: 300ms, max_error_percent: 0, concurrency: 10, paths: [/health]}
+    ui:                      # only for an app with an interface
+      crawl: [npm, run, -s, crawl]          # run from the repo in images.browser
+      seed: [seed, --db, /data/app.db]      # image arguments that fill the stage's volumes first
+      env: [DEV_LOGIN=1]                    # added to env for this stage only
+      chromium: /ms-playwright/chromium-1248/chrome-linux64/chrome
     scenarios:
       - id: invalid-token-is-refused
         category: security
         tests: [internal/auth.TestInvalidToken]
 ```
+
+The `ui` stage seeds fresh volumes with `seed` in a container without a
+network, starts the app with `env` added, then runs `crawl` from the checkout
+(read-only) in `images.browser` on the stage's network with `E2E_BASE`, `E2E_OUT`,
+`E2E_CHROMIUM` and `CRAWL_MODE`: `quick` opens each screen once without clicks,
+`full` (in a full gate run) presses every safe button and checks five screen
+sizes and the dark theme. The rows of the report's problems table are the
+findings; the whole report and its screenshots stay in `ui-crawl` of the gate
+output.
 
 A `kind: binary` app other than the hub (router-ax23: tools for hosts the hub
 does not deploy to yet) has no image. Its caller stub passes `image: false`

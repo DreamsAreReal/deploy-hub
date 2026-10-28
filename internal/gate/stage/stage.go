@@ -36,6 +36,12 @@ const (
 	publishFormat  = "%s::%d"
 	mountFormat    = "type=volume,src=%s,dst=%s"
 	volumeFormat   = "%s-data-%d"
+	reasonNoImage  = "no image was provided for an app with an HTTP surface"
+	isolated       = "none"
+	flagEnv        = "-e"
+	flagPids       = "--pids-limit"
+	flagSecurity   = "--security-opt"
+	noPrivileges   = "no-new-privileges"
 )
 
 var (
@@ -58,10 +64,18 @@ type State struct {
 }
 
 func Start(ctx context.Context, ws gate.Workspace, purpose string) (*Stage, error) {
+	return StartSeeded(ctx, ws, purpose, nil)
+}
+
+func StartSeeded(ctx context.Context, ws gate.Workspace, purpose string, seed []string) (*Stage, error) {
 	s := &Stage{ws: ws, Name: namePrefix + ws.AppName + "-" + purpose}
 	s.Network = s.Name + networkSuffix
 	s.remove(ctx)
 	if err := s.docker(ctx, "network", "create", s.Network); err != nil {
+		return nil, err
+	}
+	if err := s.seed(ctx, seed); err != nil {
+		s.Stop(ctx)
 		return nil, err
 	}
 	if err := s.docker(ctx, s.runArgs()...); err != nil {
@@ -82,16 +96,30 @@ func (s *Stage) runArgs() []string {
 	lim := s.ws.App
 	args := []string{
 		"run", "-d", "--name", s.Name, flagNetwork, s.Network, "--network-alias", s.Name,
-		"--cpus", lim.CPUs, "--memory", lim.Memory, "--memory-swap", lim.Memory, "--pids-limit", pidsLimit,
-		"--security-opt", "no-new-privileges", "-p", fmt.Sprintf(publishFormat, loopback, s.ws.App.Port),
+		"--cpus", lim.CPUs, "--memory", lim.Memory, "--memory-swap", lim.Memory, flagPids, pidsLimit,
+		flagSecurity, noPrivileges, "-p", fmt.Sprintf(publishFormat, loopback, s.ws.App.Port),
 	}
 	for _, e := range s.ws.App.Env {
-		args = append(args, "-e", e)
+		args = append(args, flagEnv, e)
 	}
 	for i, dst := range s.ws.App.Data {
 		args = append(args, "--mount", fmt.Sprintf(mountFormat, s.volume(i), dst))
 	}
 	return append(args, s.ws.Image)
+}
+
+func (s *Stage) seed(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	run := []string{"run", "--rm", flagNetwork, isolated, flagSecurity, noPrivileges}
+	for _, e := range s.ws.App.Env {
+		run = append(run, flagEnv, e)
+	}
+	for i, dst := range s.ws.App.Data {
+		run = append(run, "--mount", fmt.Sprintf(mountFormat, s.volume(i), dst))
+	}
+	return s.docker(ctx, append(append(run, s.ws.Image), args...)...)
 }
 
 func (s *Stage) docker(ctx context.Context, args ...string) error {

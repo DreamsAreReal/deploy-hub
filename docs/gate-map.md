@@ -21,7 +21,9 @@ none of them is weakened to make a release pass.
 | make an app call tasks directly | `architecture` (`tasks_callers`, dated exceptions) | yes |
 | put a secret outside the store | `architecture` (an env variable must be a declared secret or config) + deploy-hub lays only stored keys | partly: a declared secret may still be set by hand on the server until the app moves to the store (#743) |
 | weaken the gate | thresholds and exceptions live only in this repository's `policy/`; app repositories cannot change them | yes, as long as this repository needs the owner's review (#812) |
-| change UI markup or look by accident | tasks' own screen snapshots and design rules | partly: per app, not in the gate (#808, #809) |
+| ship a broken screen or button | `ui` (the app's crawl of the seeded stage: errors, dead or covered buttons, delete without confirmation) | yes for apps with `ui` in the policy; a full gate run presses every button |
+| make the interface unreadable, cramped or confusing | `ui` (cut text, page wider than the screen, contrast, duplicate or ambiguous buttons; five sizes and the dark theme in a full run) | yes for apps with `ui`; text quality and taste are not checked |
+| change UI markup or look by accident | tasks' own screen snapshots and design rules | partly: per app (#808); no screenshot comparison yet (#809) |
 | add a cron job, timer or a new public site | — | **no** (#822: catalog check for timers and sites) |
 | grow code without removing any (month: +76.7k / −4.7k lines) | — | **no** (#822: growth report and threshold per service) |
 | break API or database compatibility so a rollback fails | — | **no** (#822: migration and API compatibility check) |

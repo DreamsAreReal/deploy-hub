@@ -50,7 +50,7 @@ type zapReportDoc struct {
 
 func DAST(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	if ws.Image == "" {
-		return gate.Fail("no image was provided for an app with an HTTP surface")
+		return gate.Fail(reasonNoImage)
 	}
 	st, err := Start(ctx, ws, purposeDAST)
 	if err != nil {

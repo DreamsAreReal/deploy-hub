@@ -152,6 +152,7 @@ sast_rulesets:
 images:
   semgrep: semgrep/semgrep@sha256:529ee8a277ec8adc5b534d7c74eea0a47e9de21d62852b6ba7ac6ba9566845c3
   zap: ghcr.io/zaproxy/zaproxy@sha256:5ccfff9a411743ab2615136a2edd7416bec9ce41572fa94e935df38c14adb2b6
+  browser: mcr.microsoft.com/playwright@sha256:47b510dd9230bf0b9bfc9b20102241e577ea7a99334ab4c3ca19f19770e9b8ea
 apps:
   deploy-hub:
     repo: DreamsAreReal/deploy-hub
@@ -352,6 +353,11 @@ apps:
     data: [/data]
     dast: {target: /, spider: 1m, max_time: 10m}
     load: {rate: 20, duration: 30s, p95: 300ms, max_error_percent: 0, concurrency: 10, paths: [/api/health, /]}
+    ui:
+      crawl: [npm, run, -s, crawl]
+      seed: [seed, --db, /data/tasks.db, --no-token]
+      env: [DEV_LOGIN=1]
+      chromium: /ms-playwright/chromium-1248/chrome-linux64/chrome
     localized:
       - internal/texts/
       - internal/web/static/

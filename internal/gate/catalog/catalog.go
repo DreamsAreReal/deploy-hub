@@ -45,6 +45,7 @@ func Checks() []gate.Check {
 		byPack(pack.CheckFuzz),
 		{Name: "dast", Kind: gate.KindSecurity, Needs: gate.NeedHTTP, Run: stage.DAST},
 		{Name: "load", Kind: gate.KindQuality, Needs: gate.NeedHTTP, Run: stage.Load},
+		{Name: "ui", Kind: gate.KindQuality, Needs: gate.NeedHTTP, Run: stage.UI},
 		byPack(pack.CheckMutation),
 		{Name: "secrets-gitleaks", Kind: gate.KindSecurity, Run: scan.Gitleaks},
 		{Name: "secrets-trufflehog", Kind: gate.KindSecurity, Run: scan.Trufflehog},

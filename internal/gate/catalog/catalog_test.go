@@ -23,12 +23,12 @@ func TestChecksAreUniqueAndOrdered(t *testing.T) {
 		index[n] = i
 	}
 	testutil.True(t, index["tests"] < index["line-coverage"] && index["line-coverage"] < index["mutation"] && index["tests"] < index["scenarios"], "report producers run first")
-	testutil.True(t, index["dast"] < index["mutation"] && index["load"] < index["mutation"], "the stage runs before the long mutation check")
+	testutil.True(t, index["dast"] < index["mutation"] && index["load"] < index["mutation"] && index["ui"] < index["mutation"], "the stage runs before the long mutation check")
 	for _, c := range Checks() {
 		testutil.Equal(t, c.Long, c.Name == "mutation")
 	}
 	for _, required := range []string{"comments", "markers", "language", "hygiene", "lint", "cognitive-complexity", "duplication", "dead-code", "branch-coverage", "fuzz",
-		"secrets-gitleaks", "secrets-trufflehog", "sast", "vulnerabilities", "sca", "sbom-licenses", "workflows", "dockerfile", "iac", "image", "dast", "load"} {
+		"secrets-gitleaks", "secrets-trufflehog", "sast", "vulnerabilities", "sca", "sbom-licenses", "workflows", "dockerfile", "iac", "image", "dast", "load", "ui"} {
 		testutil.True(t, seen[required], "missing check "+required)
 	}
 }
