@@ -1290,6 +1290,9 @@ GitHub), `deploy_hub_ci_disk_used_ratio`, `deploy_hub_ci_quota_used_ratio{runner
 and `deploy_hub_ci_quota_on{runner}` every minute; the alerts
 `DeployHubCIRunnerOffline`, `DeployHubCIRunnerSilent`, `DeployHubCIDiskFull`,
 `DeployHubCIQuotaHigh` (over 85% of a quota) and `DeployHubCIQuotaOff` watch them, `DeployHubCIIsolationBroken` the fail-safe above.
+With `DEPLOY_HUB_TEXTFILE_DIR` in the unit's environment the script also writes
+the same lines, labelled `source="ci-runner"`, to `deploy-hub-ci-runner.prom` in
+that folder for node-exporter (see «Metrics», tasks #792).
 
 ## Server layout
 
