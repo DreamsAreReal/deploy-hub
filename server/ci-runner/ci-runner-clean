@@ -70,6 +70,7 @@ unix://*/docker.sock)
 	flag=${DOCKER_HOST#unix://}
 	rm -f "${flag%/docker.sock}/job-running"
 	;;
+*) ;;
 esac
 total=$(usage)
 log "disk after: ${after}% (${total})"

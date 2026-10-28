@@ -47,5 +47,6 @@ unix://*/docker.sock)
 	flag=${DOCKER_HOST#unix://}
 	: >"${flag%/docker.sock}/job-running"
 	;;
+*) ;;
 esac
 exit 0
