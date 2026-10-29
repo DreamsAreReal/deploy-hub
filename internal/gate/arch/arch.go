@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -17,6 +18,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/policy"
 )
 
 const (
@@ -28,6 +30,8 @@ const (
 	reasonCatalog        = "policy/architecture.yaml cannot be read"
 	dateLayout           = "2006-01-02"
 	envExampleGlob       = "*.env.example"
+	workflowDir          = ".github/workflows"
+	caddySuffix          = ".caddy"
 	portSeparator        = ":"
 	protoSeparator       = "/"
 	wholeDay             = 24 * time.Hour
@@ -37,6 +41,7 @@ var (
 	criticalities = []string{"high", "normal", "low"}
 	gives         = []string{"logs", "metrics", "errors", "textfile", "events"}
 	composeFiles  = []string{"docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"}
+	workflowGlobs = []string{"*.yml", "*.yaml"}
 	envKey        = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)=`)
 	errCatalog    = errors.New("invalid architecture catalog")
 )
@@ -54,6 +59,7 @@ type Service struct {
 	Gives    []string `yaml:"gives"`
 	Exposes  []Expose `yaml:"exposes"`
 	Calls    []Call   `yaml:"calls"`
+	Timers   []Timer  `yaml:"timers"`
 	Secrets  []string `yaml:"secrets"`
 	Config   []string `yaml:"config"`
 	Data     []string `yaml:"data"`
@@ -71,9 +77,16 @@ type Call struct {
 	Task  string `yaml:"task"`
 }
 
+type Timer struct {
+	Name string `yaml:"name"`
+	Why  string `yaml:"why"`
+}
+
 type Facts struct {
-	Env   []string
-	Ports []int
+	Env    []string
+	Ports  []int
+	Timers []string
+	Sites  []string
 }
 
 func Load(dir string) (Catalog, error) {
@@ -109,7 +122,9 @@ func Check(_ context.Context, ws gate.Workspace) gate.Outcome {
 	if err != nil {
 		return gate.Fail(reasonDrift, err.Error())
 	}
-	repo := catalog.Merged(siblings(ws))
+	names := siblings(ws)
+	HostFacts(ws.Policy.Apps, names, &facts)
+	repo := catalog.Merged(names)
 	findings := append(catalog.Problems(ws.AppName, time.Now()), repo.Drift(facts)...)
 	outcome := gate.Findings(reasonDrift, findings)
 	outcome.Findings = append(outcome.Findings, catalog.budgetFindings()...)
@@ -133,6 +148,7 @@ func (c Catalog) Merged(names []string) Service {
 		merged.Secrets = append(merged.Secrets, service.Secrets...)
 		merged.Config = append(merged.Config, service.Config...)
 		merged.Exposes = append(merged.Exposes, service.Exposes...)
+		merged.Timers = append(merged.Timers, service.Timers...)
 	}
 	return merged
 }
@@ -150,6 +166,11 @@ func (c Catalog) Problems(name string, now time.Time) []string {
 	}
 	for _, call := range service.Calls {
 		problems = append(problems, c.callProblems(name, call, now)...)
+	}
+	for _, timer := range service.Timers {
+		if strings.TrimSpace(timer.Why) == "" {
+			problems = append(problems, fmt.Sprintf("%s: timer %q without a why: a schedule needs a reason it cannot wait for an event", name, timer.Name))
+		}
 	}
 	return problems
 }
@@ -187,30 +208,58 @@ const (
 	portInRepo    = "port %d is published by compose but not in exposes"
 	envRunning    = "environment variable %s is set in the running container but not in secrets or config"
 	portRunning   = "port %d is published by the running container but not in exposes"
+	timerInRepo   = "%s runs on a schedule but is not in timers"
+	siteInRepo    = "public site %s comes from a host caddy file but is not in exposes"
+	siteRunning   = "public site %s is served by the hub (app.conf has no site=off) but is not in exposes"
 )
 
 func (s Service) Drift(facts Facts) []string {
-	return s.drift(facts, envInRepo, portInRepo)
+	drift := s.drift(facts, envInRepo, portInRepo)
+	drift = append(drift, undeclared(facts.Timers, s.timerNames(), timerInRepo)...)
+	return append(drift, undeclared(facts.Sites, s.siteNames(), siteInRepo)...)
 }
 
 func (s Service) LiveDrift(facts Facts) []string {
-	return s.drift(facts, envRunning, portRunning)
+	drift := s.drift(facts, envRunning, portRunning)
+	return append(drift, undeclared(facts.Sites, s.siteNames(), siteRunning)...)
 }
 
 func (s Service) drift(facts Facts, envLayout, portLayout string) []string {
-	declared := append(slices.Clone(s.Secrets), s.Config...)
-	var drift []string
-	for _, key := range facts.Env {
-		if !slices.Contains(declared, key) {
-			drift = append(drift, fmt.Sprintf(envLayout, key))
-		}
-	}
+	drift := undeclared(facts.Env, append(slices.Clone(s.Secrets), s.Config...), envLayout)
 	for _, port := range facts.Ports {
 		if !s.exposes(port) {
 			drift = append(drift, fmt.Sprintf(portLayout, port))
 		}
 	}
 	return drift
+}
+
+func undeclared(found, declared []string, layout string) []string {
+	var out []string
+	for _, name := range found {
+		if !slices.Contains(declared, name) {
+			out = append(out, fmt.Sprintf(layout, name))
+		}
+	}
+	return out
+}
+
+func (s Service) timerNames() []string {
+	names := make([]string, 0, len(s.Timers))
+	for _, timer := range s.Timers {
+		names = append(names, timer.Name)
+	}
+	return names
+}
+
+func (s Service) siteNames() []string {
+	var names []string
+	for _, expose := range s.Exposes {
+		if expose.Site != "" {
+			names = append(names, expose.Site)
+		}
+	}
+	return names
 }
 
 func (c Catalog) Linked(a, b string) bool {
@@ -276,7 +325,67 @@ func Gather(src string) (Facts, error) {
 		}
 		facts.Env = appendNew(facts.Env, keys...)
 	}
-	return facts, composeFacts(src, &facts)
+	if err := composeFacts(src, &facts); err != nil {
+		return facts, err
+	}
+	return facts, workflowFacts(src, &facts)
+}
+
+func HostFacts(apps map[string]policy.App, names []string, facts *Facts) {
+	for _, name := range names {
+		host := apps[name].Host
+		if host == nil {
+			continue
+		}
+		facts.Timers = appendNew(facts.Timers, host.Timers...)
+		for _, file := range host.Files {
+			if path.Dir(file.Dst)+"/" == policy.CaddySiteDir {
+				facts.Sites = appendNew(facts.Sites, strings.TrimSuffix(path.Base(file.Dst), caddySuffix))
+			}
+		}
+	}
+}
+
+type workflow struct {
+	On any `yaml:"on"`
+}
+
+func workflowFacts(src string, facts *Facts) error {
+	var files []string
+	for _, glob := range workflowGlobs {
+		found, err := filepath.Glob(filepath.Join(src, workflowDir, glob))
+		if err != nil {
+			return err
+		}
+		files = append(files, found...)
+	}
+	for _, file := range files {
+		scheduled, err := isScheduled(file)
+		if err != nil {
+			return err
+		}
+		if scheduled {
+			facts.Timers = appendNew(facts.Timers, path.Join(workflowDir, filepath.Base(file)))
+		}
+	}
+	return nil
+}
+
+func isScheduled(file string) (bool, error) {
+	body, err := os.ReadFile(filepath.Clean(file))
+	if err != nil {
+		return false, err
+	}
+	var parsed workflow
+	if err := yaml.Unmarshal(body, &parsed); err != nil {
+		return false, fmt.Errorf("%s: %w", filepath.Base(file), err)
+	}
+	triggers, ok := parsed.On.(map[string]any)
+	if !ok {
+		return false, nil
+	}
+	_, scheduled := triggers["schedule"]
+	return scheduled, nil
 }
 
 func envKeys(path string) ([]string, error) {

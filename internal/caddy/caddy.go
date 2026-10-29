@@ -107,11 +107,15 @@ func appRoutes(apps []registry.Entry, busy func(int) bool) ([]Route, portPool) {
 		if err != nil || validate.Port(conf.Port) != nil {
 			continue
 		}
-		out = append(out, Route{App: a.Name, Port: conf.Port, Private: conf.Site == registry.SiteOff})
+		out = append(out, Route{App: a.Name, Port: conf.Port, Private: !Public(conf)})
 		port, _ := strconv.Atoi(conf.Port)
 		pool.taken[port] = true
 	}
 	return out, pool
+}
+
+func Public(conf registry.AppConf) bool {
+	return validate.Port(conf.Port) == nil && conf.Site != registry.SiteOff
 }
 
 func (p portPool) free(port int) bool {

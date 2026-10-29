@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/DreamsAreReal/deploy-hub/internal/caddy"
 	"github.com/DreamsAreReal/deploy-hub/internal/docker"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/arch"
 	"github.com/DreamsAreReal/deploy-hub/internal/health"
@@ -23,6 +24,7 @@ type appStatus struct {
 	health    string
 	last      string
 	container string
+	public    bool
 }
 
 func (s appStatus) line() string {
@@ -73,6 +75,7 @@ func (s *Service) appStatus(ctx context.Context, a registry.Entry, entries []jou
 		st.last = op.Stamp()
 	}
 	conf, confErr := registry.LoadAppConf(a.Dir)
+	st.public = confErr == nil && caddy.Public(conf)
 	cname := s.container(ctx, a.Name, a.Dir, conf)
 	if cname == "" {
 		return st
@@ -128,8 +131,12 @@ func (s *Service) liveDrift(ctx context.Context, st appStatus, shared []string) 
 		s.Log.Warn("live facts unreadable", "app", st.name, "error", err.Error())
 		return
 	}
+	facts := arch.Facts{Env: env, Ports: ports}
+	if st.public {
+		facts.Sites = []string{st.name}
+	}
 	service, known := s.Catalog.Services[st.name]
-	drift := append(service.LiveDrift(arch.Facts{Env: env, Ports: ports}), shared...)
+	drift := append(service.LiveDrift(facts), shared...)
 	drift = append(drift, secretsDrift(st.dir)...)
 	if !known {
 		drift = append(drift, msgNotInCatalog)

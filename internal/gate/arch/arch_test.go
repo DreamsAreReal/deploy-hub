@@ -9,6 +9,7 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/policy"
 	"github.com/DreamsAreReal/deploy-hub/internal/testutil"
+	embedded "github.com/DreamsAreReal/deploy-hub/policy"
 )
 
 const (
@@ -20,7 +21,17 @@ const (
 	envExampleA = "PORT=8080\nAPI_TOKEN=\n# a note\nnot a pair\n"
 	composeBody = "services:\n  web:\n    ports: [\"127.0.0.1:9000:8080\", \"9100/tcp\", \"x:y\"]\n    environment:\n      MODE: prod\n  worker:\n    environment: [\"QUEUE=jobs\", \"DEBUG\"]\n"
 	cleanEntry  = "services:\n  app:\n    critical: normal\n    gives: [logs]\n    exposes: [{port: 8080}, {port: 9100}]\n    secrets: [API_TOKEN]\n    config: [PORT, MODE, QUEUE, DEBUG, EXTRA]\n"
+	nightly     = ".github/workflows/nightly.yml"
+	nightlyBody = "name: nightly\non:\n  schedule:\n    - cron: \"0 3 * * *\"\n  workflow_dispatch:\njobs: {}\n"
+	hostTimer   = "app-sweep.timer"
+	hostSite    = "app-ingest"
 )
+
+var appHost = &policy.Host{Timers: []string{hostTimer}, Files: []policy.HostFile{
+	{Src: hostTimer, Dst: policy.UnitDir + hostTimer},
+	{Src: "ingest.caddy", Dst: policy.CaddySiteDir + hostSite + ".caddy"},
+	{Src: "sweep", Dst: "/usr/local/sbin/sweep"},
+}}
 
 var day = time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
 
@@ -48,6 +59,20 @@ func workspace(t *testing.T, catalog, src string) gate.Workspace {
 	}
 	return gate.Workspace{Src: src, PolicyDir: dir, AppName: appName, Repo: appRepo,
 		Policy: policy.Policy{Apps: map[string]policy.App{appName: {Repo: appRepo}, siblingName: {Repo: appRepo}, "other": {Repo: "owner/other"}}}}
+}
+
+func TestTheShippedCatalogDeclaresTheShippedTimersAndSites(t *testing.T) {
+	catalog, err := Parse(embedded.Architecture())
+	testutil.NoErr(t, err)
+	gates, err := policy.Parse(embedded.Gate())
+	testutil.NoErr(t, err)
+	for name := range gates.Apps {
+		var facts Facts
+		HostFacts(gates.Apps, []string{name}, &facts)
+		if drift := catalog.Services[name].Drift(facts); len(drift) != 0 {
+			t.Errorf("%s: %v", name, drift)
+		}
+	}
 }
 
 func TestTheShippedCatalogIsValid(t *testing.T) {
@@ -79,6 +104,7 @@ func TestProblemsOfAnEntry(t *testing.T) {
 		`gives "noise" is not one of`:     head + "    gives: [noise]\n",
 		`calls "ghost", which is not`:     head + "    calls: [{to: ghost, why: x}]\n",
 		"without a why":                   head + "    calls: [{to: app}]\n",
+		`timer "x.timer" without a why`:   head + "    timers: [{name: x.timer}]\n",
 		"only tasks_callers may":          head + "    calls: [{to: tasks, why: x}]\n",
 		`until "soon" is not a date`:      head + "    calls: [{to: tasks, why: x, until: soon, task: \"#1\"}]\n",
 		"ended on 2026-10-26 (#7)":        head + "    calls: [{to: tasks, why: x, until: \"2026-10-26\", task: \"#7\"}]\n",
@@ -107,6 +133,38 @@ func TestGatherReadsEnvExamplesAndCompose(t *testing.T) {
 	empty, err := Gather(t.TempDir())
 	testutil.NoErr(t, err)
 	testutil.Equal(t, len(empty.Env)+len(empty.Ports), 0)
+}
+
+func TestGatherFindsScheduledWorkflows(t *testing.T) {
+	src := t.TempDir()
+	testutil.Write(t, filepath.Join(src, nightly), nightlyBody)
+	testutil.Write(t, filepath.Join(src, ".github", "workflows", "push.yaml"), "on: push\njobs: {}\n")
+	testutil.Write(t, filepath.Join(src, ".github", "workflows", "pr.yml"), "on:\n  pull_request:\njobs: {}\n")
+	testutil.Write(t, filepath.Join(src, ".github", "workflows", "notes.txt"), "on:\n  schedule: []\n")
+	facts, err := Gather(src)
+	testutil.NoErr(t, err)
+	testutil.Equal(t, facts.Timers, []string{nightly})
+	broken := t.TempDir()
+	testutil.Write(t, filepath.Join(broken, ".github", "workflows", "bad.yml"), "on: [")
+	if _, err := Gather(broken); err == nil || !strings.Contains(err.Error(), "bad.yml") {
+		t.Fatalf("broken workflow: %v", err)
+	}
+	folder := t.TempDir()
+	testutil.Mkdir(t, filepath.Join(folder, ".github", "workflows", "dir.yaml"))
+	if _, err := Gather(folder); err == nil {
+		t.Fatal("a folder named like a workflow was read")
+	}
+	if err := workflowFacts("[", &facts); err == nil {
+		t.Fatal("bad glob accepted")
+	}
+}
+
+func TestHostFactsNameTimersAndCaddySites(t *testing.T) {
+	apps := map[string]policy.App{appName: {Host: appHost}, siblingName: {Host: &policy.Host{Timers: []string{hostTimer}}}, "other": {}}
+	var facts Facts
+	HostFacts(apps, []string{appName, siblingName, "other", "ghost"}, &facts)
+	testutil.Equal(t, facts.Timers, []string{hostTimer})
+	testutil.Equal(t, facts.Sites, []string{hostSite})
 }
 
 func TestGatherReportsBrokenCompose(t *testing.T) {
@@ -141,6 +199,25 @@ func TestCheckComparesTheRepoWithItsEntry(t *testing.T) {
 	testutil.Contains(t, strings.Join(outcome.Findings, "; "), "environment variable API_TOKEN", "port 9100 is published")
 	split := "services:\n  app:\n    critical: normal\n    exposes: [{port: 8080}, {port: 9100}]\n    config: [PORT, MODE, QUEUE, DEBUG, EXTRA]\n  sibling:\n    critical: low\n    secrets: [API_TOKEN]\n"
 	testutil.Equal(t, Check(t.Context(), workspace(t, split, src)).Status, gate.StatusPass)
+}
+
+func TestCheckWantsEveryTimerAndSiteInTheCatalog(t *testing.T) {
+	src := repoWith(t)
+	testutil.Write(t, filepath.Join(src, nightly), nightlyBody)
+	ws := workspace(t, cleanEntry, src)
+	ws.Policy.Apps[appName] = policy.App{Repo: appRepo, Host: appHost}
+	outcome := Check(t.Context(), ws)
+	testutil.Equal(t, outcome.Status, gate.StatusFail)
+	testutil.Equal(t, outcome.Findings, []string{
+		nightly + " runs on a schedule but is not in timers",
+		hostTimer + " runs on a schedule but is not in timers",
+		"public site " + hostSite + " comes from a host caddy file but is not in exposes",
+	})
+	declared := strings.Replace(cleanEntry, "{port: 9100}]", "{port: 9100}, {site: "+hostSite+"}]", 1) +
+		"    timers: [{name: " + hostTimer + ", why: sweeps}]\n  sibling:\n    critical: low\n    timers: [{name: " + nightly + ", why: nightly}]\n"
+	ws = workspace(t, declared, src)
+	ws.Policy.Apps[appName] = policy.App{Repo: appRepo, Host: appHost}
+	testutil.Equal(t, Check(t.Context(), ws).Status, gate.StatusPass)
 }
 
 func TestCheckFailsWithoutCatalogOrEntry(t *testing.T) {

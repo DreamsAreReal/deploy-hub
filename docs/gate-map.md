@@ -24,7 +24,7 @@ none of them is weakened to make a release pass.
 | ship a broken screen or button | `ui` (the hub's crawler on the seeded stage, driven by the app map: errors, dead or covered buttons, delete without confirmation) | yes for apps with `ui` in the policy; a full gate run presses every button |
 | make the interface unreadable, cramped or confusing | `ui` (cut text or text out of its box, page wider than the screen, contrast, duplicate or ambiguous buttons, near-aligned edges, cramped controls; every screen at 360 px too, five sizes and the dark theme in a full run) | yes for apps with `ui`; text quality and taste are not checked |
 | change UI markup or look by accident | tasks' own screen snapshots and design rules | partly: per app (#808); no screenshot comparison yet (#809) |
-| add a cron job, timer or a new public site | — | **no** (#822: catalog check for timers and sites) |
+| add a cron job, timer or a new public site | `architecture`: a scheduled workflow or a host timer must be in the entry's `timers` with a `why`, a host caddy file must be a `site` in `exposes`; `deploy_hub_arch_live_drift`: the public site the hub serves for an app | yes; a loop inside the app's own process is its code, covered by tests, not by the catalog |
 | grow code without removing any (month: +76.7k / −4.7k lines) | — | **no** (#822: growth report and threshold per service) |
 | break API or database compatibility so a rollback fails | — | **no** (#822: migration and API compatibility check) |
 | change behaviour without updating the docs | — | **no** (#822: touched modules vs touched docs) |

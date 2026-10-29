@@ -28,20 +28,34 @@ func driftEnv(t *testing.T, runEnv string, catalog *arch.Catalog) *env {
 }
 
 func TestStatusCountsWhatTheRunningAppDoesNotDeclare(t *testing.T) {
-	declared := &arch.Catalog{Services: map[string]arch.Service{appName: {Secrets: []string{"SENTRY_DSN"}, Config: []string{portVar}, Exposes: []arch.Expose{{Port: 8000}}}}}
+	declared := &arch.Catalog{Services: map[string]arch.Service{appName: {Secrets: []string{"SENTRY_DSN"}, Config: []string{portVar}, Exposes: []arch.Expose{{Port: 8000}, {Site: appName}}}}}
 	e := driftEnv(t, `["PATH=/bin","PORT=8080","SENTRY_DSN=x","LEFTOVER_TOKEN=1"]`, declared)
 	testutil.Equal(t, metricFor(e, obs.MetricArchLiveDrift, appName), 2.0)
 	testutil.Contains(t, e.logs.String(), `"msg":"live drift"`, "environment variable LEFTOVER_TOKEN is set in the running container but not in secrets or config",
 		"port 8080 is published by the running container but not in exposes")
-	clean := driftEnv(t, `["PATH=/bin","PORT=8080"]`, &arch.Catalog{Services: map[string]arch.Service{appName: {Config: []string{portVar}, Exposes: []arch.Expose{{Port: 8080}}}}})
+	clean := driftEnv(t, `["PATH=/bin","PORT=8080"]`, &arch.Catalog{Services: map[string]arch.Service{appName: {Config: []string{portVar}, Exposes: []arch.Expose{{Port: 8080}, {Site: appName}}}}})
 	testutil.Equal(t, metricFor(clean, obs.MetricArchLiveDrift, appName), 0.0)
 	unknown := driftEnv(t, `["PATH=/bin"]`, &arch.Catalog{Services: map[string]arch.Service{}})
-	testutil.Equal(t, metricFor(unknown, obs.MetricArchLiveDrift, appName), 2.0)
+	testutil.Equal(t, metricFor(unknown, obs.MetricArchLiveDrift, appName), 3.0)
 	testutil.Contains(t, unknown.logs.String(), msgNotInCatalog)
 }
 
+func TestStatusCountsAPublicSiteTheCatalogDoesNotDeclare(t *testing.T) {
+	internal := &arch.Catalog{Services: map[string]arch.Service{appName: {Config: []string{portVar}, Exposes: []arch.Expose{{Port: 8080}}}}}
+	public := driftEnv(t, `["PATH=/bin","PORT=8080"]`, internal)
+	testutil.Equal(t, metricFor(public, obs.MetricArchLiveDrift, appName), 1.0)
+	testutil.Contains(t, public.logs.String(), "public site "+appName+" is served by the hub (app.conf has no site=off) but is not in exposes")
+	off := newEnv(t)
+	off.conf(registry.AppConf{Profile: registry.ProfileService, Port: appPort, HealthPath: healthPath, Image: image, Site: registry.SiteOff})
+	off.sim.startOld(goodTag)
+	off.sim.runEnv, off.sim.bakedEnv = `["PATH=/bin","PORT=8080"]`, `["PATH=/bin"]`
+	off.svc.Catalog = internal
+	testutil.Equal(t, off.dispatch("status", ""), ExitOK)
+	testutil.Equal(t, metricFor(off, obs.MetricArchLiveDrift, appName), 0.0)
+}
+
 func TestStatusCountsNeighboursWithoutACallAndAReadableEnvFile(t *testing.T) {
-	published := []arch.Expose{{Port: 8080}}
+	published := []arch.Expose{{Port: 8080}, {Site: appName}}
 	e := newEnv(t)
 	e.sim.startOld(goodTag)
 	e.sim.runEnv, e.sim.bakedEnv = `["PATH=/bin"]`, `["PATH=/bin"]`

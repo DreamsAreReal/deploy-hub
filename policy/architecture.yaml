@@ -10,6 +10,9 @@ services:
     calls:
       - to: github
         why: releases, CI status and the self-update check need the GitHub API
+    timers:
+      - name: .github/workflows/history-guard.yml
+        why: every 5 minutes, deletes branches and tags that bring back the history from before the repository was recreated, also when a push was missed
     secrets: [GH_TOKEN, GH_OWNER, RELEASE_TOKEN, VPS_SSH_KEY]
   tasks:
     owner: DreamsAreReal
@@ -25,6 +28,11 @@ services:
         why: delivery steps of deploy-hub and the error records the assistant watches are read from VictoriaLogs
       - to: observability
         why: errors go to Bugsink through the Sentry SDK
+    timers:
+      - name: .github/workflows/history-guard.yml
+        why: every 5 minutes, deletes branches and tags that bring back the history from before the repository was recreated, also when a push was missed
+      - name: .github/workflows/crawl.yml
+        why: once a day, the full UI crawl of every screen on a GitHub-hosted runner, too long for each release (#810)
     secrets: [STT_TOKEN, TASKS_AGENT_TOKEN, SENTRY_DSN, SENTRY_DSN_RUNNER, SENTRY_DSN_WEB]
     config: [HOST, PORT, METRICS_PORT, DB_PATH, REQUIRE_DATA_MOUNT, DEV_LOGIN, PUBLIC_URL, STT_URL, AGENT_BASE_DIR, TASKS_API_URL, TASKS_AGENT_EPIC, AGENT_STATE_DIR, DELIVERY_LOGS_URL, SECRETS_CATALOG]
     data: [/data]
@@ -79,12 +87,19 @@ services:
       - port: 8428
       - port: 9428
       - port: 8000
-      - site: bugsink
+      - site: observability-ingest
     calls:
       - to: tasks
         why: vmalert posts alerts to the tracker, the only alert channel today
         until: "2026-12-31"
         task: "#785"
+    timers:
+      - name: obs-host-metrics.timer
+        why: every minute, host facts node-exporter does not collect (containers, systemd units, sites, certificates, backups) into its textfile
+      - name: app-backup.timer
+        why: daily at 03:30 UTC, backs up the data of every app
+      - name: app-backup-verify.timer
+        why: Sundays at 05:00 UTC, restores the latest backups into a scratch folder to prove they can be restored (#676)
     secrets: [SECRET_KEY, CREATE_SUPERUSER, INGEST_TOKEN, notifier_url]
     config: [INGEST_HOST, ALLOWED_HOSTS, BASE_URL, SNAPPEA_NUM_WORKERS, TIME_ZONE]
   router-ax23:
