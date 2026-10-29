@@ -7,6 +7,7 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/arch"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/dupl"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/growth"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/pack"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/scan"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/source"
@@ -37,6 +38,7 @@ func Checks() []gate.Check {
 		byPack(pack.CheckLint),
 		byPack(pack.CheckComplexity),
 		{Name: "duplication", Kind: gate.KindQuality, Run: dupl.Check},
+		{Name: "growth", Kind: gate.KindQuality, Run: growth.Check},
 		byPack(pack.CheckDeadCode),
 		byPack(pack.CheckTests),
 		byPack(pack.CheckLineCoverage),

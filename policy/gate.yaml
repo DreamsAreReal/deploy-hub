@@ -7,6 +7,7 @@ thresholds:
   max_cognitive_complexity: 9
   max_duplication_percent: 2
   duplicate_min_tokens: 50
+  max_net_growth_lines: 0
 limits:
   check_timeout: 75m
   long_check_timeout: 5h

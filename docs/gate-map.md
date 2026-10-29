@@ -25,7 +25,7 @@ none of them is weakened to make a release pass.
 | make the interface unreadable, cramped or confusing | `ui` (cut text or text out of its box, page wider than the screen, contrast, duplicate or ambiguous buttons, near-aligned edges, cramped controls; every screen at 360 px too, five sizes and the dark theme in a full run) | yes for apps with `ui`; text quality and taste are not checked |
 | change UI markup or look by accident | tasks' own screen snapshots and design rules | partly: per app (#808); no screenshot comparison yet (#809) |
 | add a cron job, timer or a new public site | `architecture`: a scheduled workflow or a host timer must be in the entry's `timers` with a `why`, a host caddy file must be a `site` in `exposes`; `deploy_hub_arch_live_drift`: the public site the hub serves for an app | yes; a loop inside the app's own process is its code, covered by tests, not by the catalog |
-| grow code without removing any (month: +76.7k / −4.7k lines) | — | **no** (#822: growth report and threshold per service) |
+| grow code without removing any (month: +76.7k / −4.7k lines) | `growth`: lines added, removed and net over the last 30 days, per app and release, as gate values | report only: `max_net_growth_lines` is 0 until the owner picks a limit; since 20.10 tasks main gained +60.7k / −9.0k |
 | break API or database compatibility so a rollback fails | — | **no** (#822: migration and API compatibility check) |
 | change behaviour without updating the docs | — | **no** (#822: touched modules vs touched docs) |
 | hard-code domain logic into the assistant | — | **no** (#822: heuristics on assistant code) |

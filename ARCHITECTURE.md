@@ -318,7 +318,8 @@ server/systemd/     timers: status every minute, prune daily, history-guard ever
   letters, forbidden files.
 - `mutation/` (Go, AST based) and `tokmut/` (other languages, token based):
   the mutation engines. `lexis/` is the shared lexer, `dupl/` duplication,
-  `linecov/` and `junit/` report parsers.
+  `growth/` lines added and removed over 30 days of history, `linecov/` and
+  `junit/` report parsers.
 - `scan/`: external scanners (gitleaks, trufflehog, semgrep, osv-scanner,
   syft, zizmor, actionlint, hadolint, trivy).
 - `stage/`: starts the built image in an isolated network for DAST (ZAP) and

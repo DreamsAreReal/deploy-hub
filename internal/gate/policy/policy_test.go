@@ -166,6 +166,7 @@ func TestParseRejects(t *testing.T) {
 		"duplication":        {"max_duplication_percent: 2", "max_duplication_percent: 0"},
 		"cognitive":          {"max_cognitive_complexity: 9", "max_cognitive_complexity: 0"},
 		"tokens":             {"duplicate_min_tokens: 50", "duplicate_min_tokens: 0"},
+		"net growth":         {"duplicate_min_tokens: 50", "duplicate_min_tokens: 50\n  max_net_growth_lines: -1"},
 		"check timeout":      {"check_timeout: 30m", "check_timeout: 0s"},
 		"long check timeout": {"long_check_timeout: 3h", "long_check_timeout: 0s"},
 		"fuzz time":          {"fuzz_time: 10s", "fuzz_time: 0s"},

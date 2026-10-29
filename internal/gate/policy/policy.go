@@ -77,6 +77,7 @@ type Thresholds struct {
 	MaxCognitive    int     `yaml:"max_cognitive_complexity"`
 	MaxDuplication  float64 `yaml:"max_duplication_percent"`
 	DuplicateTokens int     `yaml:"duplicate_min_tokens"`
+	MaxNetGrowth    int     `yaml:"max_net_growth_lines"`
 }
 
 type Limits struct {
@@ -251,6 +252,13 @@ func percent(field string, v float64) error {
 	return nil
 }
 
+func notNegative(field string, v int64) error {
+	if v < 0 {
+		return fmt.Errorf("%w: %s must not be negative", ErrPolicy, field)
+	}
+	return nil
+}
+
 func positive(field string, v int64) error {
 	if v <= 0 {
 		return fmt.Errorf("%w: %s must be positive", ErrPolicy, field)
@@ -266,6 +274,7 @@ func (t Thresholds) validate() error {
 		percent("max_duplication_percent", t.MaxDuplication),
 		positive("max_cognitive_complexity", int64(t.MaxCognitive)),
 		positive("duplicate_min_tokens", int64(t.DuplicateTokens)),
+		notNegative("max_net_growth_lines", int64(t.MaxNetGrowth)),
 	)
 }
 

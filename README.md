@@ -125,6 +125,7 @@ versions and checksums: [`policy/tools.yaml`](policy/tools.yaml).
 | `lint` | any linter finding under the central config (magic numbers/strings, security rules, unused code, …) | per stack |
 | `cognitive-complexity` | a function above 9 | per stack |
 | `duplication` | 2% or more duplicated code lines across every programming-language file (token windows of 50; imports, includes and comments excluded) | built in, chroma lexers |
+| `growth` | the code grew by more net lines than `max_net_growth_lines` over the 30 days of first-parent history before the release, or since the first commit when the history is shorter; `0` sets no limit and the check only reports. Lines of prose, lock files and `testdata` do not count. `added`, `removed` and `net` reach `deploy_hub_gate_check_value` on every release, per app | git |
 | `dead-code` | unreachable functions, including ones reachable only from tests | per stack |
 | `tests` | any failed, skipped or crashed test; unit, integration and e2e together | per stack |
 | `line-coverage` | below 90% of code lines | per stack |
@@ -1644,6 +1645,7 @@ samples over a window counts events. Queries for VictoriaMetrics:
 | Which checks block deploys most | `sort_desc(sum by (check) (count_over_time(deploy_hub_gate_check_passed[30d]) - sum_over_time(deploy_hub_gate_check_passed[30d])))` |
 | Slowest checks | `topk(5, max by (check) (max_over_time(deploy_hub_gate_check_duration_seconds[30d])))` |
 | Coverage, mutation score, duplication trend | `deploy_hub_gate_check_value{check="mutation"}` (and `line-coverage`, `branch-coverage`, `duplication`) |
+| Code growth per app, 30 days | `deploy_hub_gate_check_value{check="growth",name="net"}` (and `added`, `removed`) |
 | CI failures before the gate | `sum by (check) (count_over_time(deploy_hub_gate_check_passed{check=~"ci-.*"}[30d]))` |
 | Failed deploys and rollbacks | `sum by (app, action) (increase_prometheus(deploy_hub_operations_total{result="fail"}[30d]))` |
 | Server command runs and failures | `sum by (command, result) (count_over_time(deploy_hub_command_duration_seconds[30d]))` |
