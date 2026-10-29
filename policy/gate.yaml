@@ -728,11 +728,13 @@ apps:
         - {src: app-backup, dst: /usr/local/sbin/app-backup, owner: root, group: root, mode: "0755"}
         - {src: app-backup.service, dst: /etc/systemd/system/app-backup.service, owner: root, group: root, mode: "0644"}
         - {src: app-backup.timer, dst: /etc/systemd/system/app-backup.timer, owner: root, group: root, mode: "0644"}
+        - {src: app-backup-verify.service, dst: /etc/systemd/system/app-backup-verify.service, owner: root, group: root, mode: "0644"}
+        - {src: app-backup-verify.timer, dst: /etc/systemd/system/app-backup-verify.timer, owner: root, group: root, mode: "0644"}
         - {src: obs-backfill-deploys, dst: /usr/local/sbin/obs-backfill-deploys, owner: root, group: root, mode: "0755"}
         - {src: ingest.caddy, dst: /etc/caddy/extra/observability-ingest.caddy, owner: root, group: caddy, mode: "0640", env: ingest.env}
       dirs:
         - {path: /var/lib/node_exporter/textfile, owner: root, group: root, mode: "0755"}
-      timers: [obs-host-metrics.timer, app-backup.timer]
+      timers: [obs-host-metrics.timer, app-backup.timer, app-backup-verify.timer]
       checks: [obs-host-metrics.service]
 hub:
   sudo_user: deploy
