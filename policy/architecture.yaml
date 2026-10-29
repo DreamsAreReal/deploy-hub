@@ -13,6 +13,20 @@ services:
     timers:
       - name: .github/workflows/history-guard.yml
         why: every 5 minutes, deletes branches and tags that bring back the history from before the repository was recreated, also when a push was missed
+      - name: deploy-hub-history-guard.timer
+        why: every 5 minutes, dispatches history-guard in deploy-hub and tasks from the server, because the GitHub schedule trigger is best-effort and may never fire (#790 decides the interval)
+      - name: deploy-hub-status.timer
+        why: every minute, app health, journal metrics and this check of the server against the catalog; the hub runs no daemon that could push them
+      - name: deploy-hub-self-update.timer
+        why: every 10 minutes, installs the newest gated release of the hub; GitHub cannot send an event into the server
+      - name: deploy-hub-prune.timer
+        why: daily at 04:10 UTC, removes app images beyond the running one and the two previous, so no deploy waits for it
+      - name: deploy-hub-preempt.timer
+        why: every 30 seconds, cancels pull request gates that a main deploy waits behind; the GitHub queue sends no event to the server
+      - name: ci-runner-status.timer
+        why: every minute, pushes the CI runner connection state and the CI disk fill; a runner that drops off sends no event
+      - name: ci-mutation@.timer
+        why: one chunk of the full mutation run of a repo a minute after the previous chunk, yielding to jobs; the whole run takes hours
     secrets: [GH_TOKEN, GH_OWNER, RELEASE_TOKEN, VPS_SSH_KEY]
   tasks:
     owner: DreamsAreReal
@@ -57,6 +71,13 @@ services:
         why: Claude Code runs the agents and the assistant on the owner's subscription
       - to: router-bot
         why: collects the router source of the assistant and runs the router commands the owner approved
+    timers:
+      - name: runner-obs-ship.timer
+        why: every minute, ships the Claude Code telemetry of the agents to the observability ingest, until a node-exporter textfile replaces it (#792)
+      - name: runner-cache-trim.timer
+        why: hourly, trims the Go build cache of the agents once it passes 20 GB; the cache has no limit of its own
+      - name: runner-tmp-trim.timer
+        why: hourly, removes what interrupted tests and builds leave in the private /tmp of the runner for more than 3 hours
     secrets: [TASKS_AGENT_TOKEN, TASKS_ASSISTANT_TOKEN, CLAUDE_CREDENTIALS]
   router-bot:
     owner: DreamsAreReal
@@ -110,6 +131,9 @@ services:
     calls:
       - to: moscow-vps
         why: the WireGuard tunnel for traffic that must leave through Moscow
+    timers:
+      - name: router-backup.timer
+        why: Sundays at 03:00 UTC, saves the router configuration on the server; a change made on the router itself sends no event
   caddy:
     owner: DreamsAreReal
     critical: high
@@ -118,6 +142,20 @@ services:
     calls:
       - to: tasks
         why: HTTPS front of every site
+  server-ops:
+    owner: DreamsAreReal
+    critical: normal
+    external: true
+    exposes:
+      - site: preview-p1
+      - site: preview-p2
+    timers:
+      - name: kernel-autoreboot.timer
+        why: daily at 01:00 UTC, reboots into a newer kernel when the running one is outdated, in the quietest hour
+      - name: vuln-selfcheck.timer
+        why: daily at 05:30 UTC, the checks of the vulnerability runbook; new advisories come without an event on the server
+      - name: preview-sweep.timer
+        why: hourly, removes expired previews whose own one-off timer was lost, for example in a reboot
   router:
     owner: DreamsAreReal
     critical: high

@@ -98,3 +98,30 @@ func TestStatusSkipsDriftWithoutFactsOrCatalog(t *testing.T) {
 	testutil.Equal(t, stopped.dispatch("status", ""), ExitOK)
 	testutil.Equal(t, metricFor(stopped, obs.MetricArchLiveDrift, appName), -1.0)
 }
+
+func TestStatusCountsTimersAndSitesOnTheHostNoServiceDeclares(t *testing.T) {
+	declared := &arch.Catalog{Services: map[string]arch.Service{appName: {Timers: []arch.Timer{{Name: "app-backup.timer"}}}}}
+	e := newEnv(t)
+	e.svc.UnitDir, e.svc.SiteDir, e.svc.Catalog = t.TempDir(), t.TempDir(), declared
+	for _, name := range []string{"app-backup.timer", "rogue.timer"} {
+		e.write(filepath.Join(e.svc.UnitDir, name), "[Timer]\n")
+	}
+	e.write(filepath.Join(e.svc.SiteDir, "stt.caddy"), "stt {}\n")
+	testutil.Equal(t, e.dispatch("status", ""), ExitOK)
+	testutil.Equal(t, metricFor(e, obs.MetricArchHostDrift, ""), 2.0)
+	e.expectLog("host drift")
+	testutil.Contains(t, e.logs.String(), "timer rogue.timer is installed on the host but no service declares it in timers",
+		"public site stt has a caddy file on the host but no service declares it in exposes")
+	blind := newEnv(t)
+	blind.svc.UnitDir, blind.svc.SiteDir, blind.svc.Catalog = filepath.Join(e.svc.UnitDir, "rogue.timer"), e.svc.SiteDir, declared
+	testutil.Equal(t, blind.dispatch("status", ""), ExitOK)
+	testutil.Equal(t, metricFor(blind, obs.MetricArchHostDrift, ""), -1.0)
+	blind.expectLog("host facts unreadable")
+	uncatalogued, unset := newEnv(t), newEnv(t)
+	uncatalogued.svc.UnitDir, uncatalogued.svc.SiteDir = e.svc.UnitDir, e.svc.SiteDir
+	unset.svc.Catalog = declared
+	for _, off := range []*env{uncatalogued, unset} {
+		testutil.Equal(t, off.dispatch("status", ""), ExitOK)
+		testutil.Equal(t, metricFor(off, obs.MetricArchHostDrift, ""), -1.0)
+	}
+}

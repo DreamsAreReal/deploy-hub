@@ -13,6 +13,7 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/compose"
 	"github.com/DreamsAreReal/deploy-hub/internal/docker"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/arch"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/policy"
 	"github.com/DreamsAreReal/deploy-hub/internal/health"
 	"github.com/DreamsAreReal/deploy-hub/internal/journal"
 	"github.com/DreamsAreReal/deploy-hub/internal/lock"
@@ -93,6 +94,8 @@ func (a *App) runnerService(ex procexec.Runner) *runner.Service {
 		WorkflowRef: a.Config.WorkflowRef(),
 		Host:        runner.SudoHost{Exec: ex, Binary: a.Config.Paths.Binary()},
 		Catalog:     a.catalog(),
+		UnitDir:     policy.UnitDir,
+		SiteDir:     policy.CaddySiteDir,
 		HostApps:    a.hostApps(),
 	}
 }

@@ -62,6 +62,7 @@ func (s *Service) status(ctx context.Context) int {
 		)
 		s.liveDrift(ctx, st, shared[a.Name])
 	}
+	s.hostDrift()
 	s.samples = append(s.samples, obs.Sample{Name: obs.MetricAppsRegistered, Labels: obs.Labels{}, Value: float64(len(apps))})
 	return ExitOK
 }
@@ -145,6 +146,22 @@ func (s *Service) liveDrift(ctx context.Context, st appStatus, shared []string) 
 		s.Log.Warn("live drift", "app", st.name, "item", item)
 	}
 	s.samples = append(s.samples, obs.Sample{Name: obs.MetricArchLiveDrift, Labels: obs.Labels{obs.LabelApp: st.name}, Value: float64(len(drift))})
+}
+
+func (s *Service) hostDrift() {
+	if s.Catalog == nil || s.UnitDir == "" {
+		return
+	}
+	facts, err := arch.Installed(s.UnitDir, s.SiteDir)
+	if err != nil {
+		s.Log.Warn("host facts unreadable", "error", err.Error())
+		return
+	}
+	drift := s.Catalog.HostDrift(facts)
+	for _, item := range drift {
+		s.Log.Warn("host drift", "item", item)
+	}
+	s.samples = append(s.samples, obs.Sample{Name: obs.MetricArchHostDrift, Labels: obs.Labels{}, Value: float64(len(drift))})
 }
 
 func (s *Service) history(app string) int {

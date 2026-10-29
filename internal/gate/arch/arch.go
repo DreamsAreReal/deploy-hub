@@ -32,6 +32,7 @@ const (
 	envExampleGlob       = "*.env.example"
 	workflowDir          = ".github/workflows"
 	caddySuffix          = ".caddy"
+	timerSuffix          = ".timer"
 	portSeparator        = ":"
 	protoSeparator       = "/"
 	wholeDay             = 24 * time.Hour
@@ -211,6 +212,8 @@ const (
 	timerInRepo   = "%s runs on a schedule but is not in timers"
 	siteInRepo    = "public site %s comes from a host caddy file but is not in exposes"
 	siteRunning   = "public site %s is served by the hub (app.conf has no site=off) but is not in exposes"
+	timerOnHost   = "timer %s is installed on the host but no service declares it in timers"
+	siteOnHost    = "public site %s has a caddy file on the host but no service declares it in exposes"
 )
 
 func (s Service) Drift(facts Facts) []string {
@@ -222,6 +225,51 @@ func (s Service) Drift(facts Facts) []string {
 func (s Service) LiveDrift(facts Facts) []string {
 	drift := s.drift(facts, envRunning, portRunning)
 	return append(drift, undeclared(facts.Sites, s.siteNames(), siteRunning)...)
+}
+
+func (c Catalog) HostDrift(facts Facts) []string {
+	var timers, sites []string
+	for _, service := range c.Services {
+		timers = append(timers, service.timerNames()...)
+		sites = append(sites, service.siteNames()...)
+	}
+	drift := undeclared(facts.Timers, timers, timerOnHost)
+	return append(drift, undeclared(facts.Sites, sites, siteOnHost)...)
+}
+
+func Installed(unitDir, siteDir string) (Facts, error) {
+	timers, err := hostFiles(unitDir, timerSuffix)
+	if err != nil {
+		return Facts{}, err
+	}
+	sites, err := hostFiles(siteDir, caddySuffix)
+	for i, site := range sites {
+		sites[i] = strings.TrimSuffix(site, caddySuffix)
+	}
+	return Facts{Timers: timers, Sites: sites}, err
+}
+
+func hostFiles(dir, suffix string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	var names []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasSuffix(name, suffix) && !strings.HasPrefix(name, ".") && active(dir, entry) {
+			names = append(names, name)
+		}
+	}
+	return names, err
+}
+
+func active(dir string, entry os.DirEntry) bool {
+	if entry.Type()&os.ModeSymlink == 0 {
+		return entry.Type().IsRegular()
+	}
+	target, err := os.Readlink(filepath.Join(dir, entry.Name()))
+	return err == nil && target != os.DevNull
 }
 
 func (s Service) drift(facts Facts, envLayout, portLayout string) []string {

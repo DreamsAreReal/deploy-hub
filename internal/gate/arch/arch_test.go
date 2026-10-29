@@ -1,6 +1,7 @@
 package arch
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -72,6 +73,52 @@ func TestTheShippedCatalogDeclaresTheShippedTimersAndSites(t *testing.T) {
 		if drift := catalog.Services[name].Drift(facts); len(drift) != 0 {
 			t.Errorf("%s: %v", name, drift)
 		}
+	}
+}
+
+func TestTheShippedCatalogDeclaresTheHubTimerUnits(t *testing.T) {
+	catalog, err := Parse(embedded.Architecture())
+	testutil.NoErr(t, err)
+	for _, dir := range []string{"systemd", "ci-runner"} {
+		facts, err := Installed(filepath.Join("..", "..", "..", "server", dir), t.TempDir())
+		testutil.NoErr(t, err)
+		testutil.True(t, len(facts.Timers) > 0, "no timer units in server/"+dir)
+		testutil.Equal(t, catalog.HostDrift(facts), []string(nil))
+	}
+}
+
+func TestHostDriftNamesTimersAndSitesNoServiceDeclares(t *testing.T) {
+	catalog := Catalog{Services: map[string]Service{
+		appName:     {Timers: []Timer{{Name: "app-backup.timer"}}, Exposes: []Expose{{Port: 8080}, {Site: "app-ingest"}}},
+		siblingName: {Timers: []Timer{{Name: "sweep.timer"}}},
+	}}
+	drift := catalog.HostDrift(Facts{Timers: []string{"sweep.timer", "rogue.timer", "app-backup.timer"}, Sites: []string{"app-ingest", "stt"}})
+	testutil.Equal(t, drift, []string{
+		"timer rogue.timer is installed on the host but no service declares it in timers",
+		"public site stt has a caddy file on the host but no service declares it in exposes",
+	})
+}
+
+func TestInstalledReadsActiveTimersAndCaddySites(t *testing.T) {
+	units, sites := t.TempDir(), t.TempDir()
+	for _, name := range []string{"app.timer", "app.service", "._app.timer"} {
+		testutil.Write(t, filepath.Join(units, name), "[Timer]\n")
+	}
+	testutil.Mkdir(t, filepath.Join(units, "dir.timer"))
+	testutil.NoErr(t, os.Symlink(os.DevNull, filepath.Join(units, "masked.timer")))
+	testutil.NoErr(t, os.Symlink(filepath.Join(units, "app.service"), filepath.Join(units, "linked.timer")))
+	testutil.Write(t, filepath.Join(sites, "stt.caddy"), "stt {}\n")
+	testutil.Write(t, filepath.Join(sites, "notes.txt"), "stt\n")
+	facts, err := Installed(units, sites)
+	testutil.NoErr(t, err)
+	testutil.Equal(t, facts, Facts{Timers: []string{"app.timer", "linked.timer"}, Sites: []string{"stt"}})
+	none, err := Installed(filepath.Join(units, "missing"), filepath.Join(sites, "missing"))
+	testutil.NoErr(t, err)
+	testutil.Equal(t, none, Facts{})
+	file := filepath.Join(units, "app.timer")
+	for _, dirs := range [][2]string{{file, sites}, {units, file}} {
+		_, err := Installed(dirs[0], dirs[1])
+		testutil.Fails(t, err)
 	}
 }
 
