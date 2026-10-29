@@ -143,7 +143,10 @@ mkdir -p "$CONTEXT/web/templates"
 echo x > "$CONTEXT/web/templates/page.html"
 echo x > "$CONTEXT/run.sh"
 chmod u+x "$CONTEXT/run.sh"
-docker() { for a; do ctx=$a; done; find "$ctx" -mindepth 1 -printf '%m %P\n' | sort > "$MODES"; }
+docker() {
+	if [ "$1" = image ]; then echo sha256:built; return; fi
+	for a; do ctx=$a; done; find "$ctx" -mindepth 1 -printf '%m %P\n' | sort > "$MODES"
+}
 `
 
 func TestTheImageIsBuiltFromAContextReadableWhateverTheRunnerUmask(t *testing.T) {
@@ -186,6 +189,84 @@ func gateArgs(t *testing.T, gate workflowStep, built string) string {
 	got, err := os.ReadFile(filepath.Clean(args))
 	testutil.NoErr(t, err)
 	return string(got)
+}
+
+const fakeGateWitness = `deploy-hub() {
+	env > "$SEEN"
+	if [ -e "$RUNNER_TEMP/ssh/deploy_key" ]; then echo key >> "$SEEN"; fi
+}
+sleep() { return 1; }
+`
+
+func stepsByName(t *testing.T) ([]workflowStep, map[string]int) {
+	t.Helper()
+	w, _ := readDeployWorkflow(t)
+	steps := w.Jobs["deploy"].Steps
+	index := map[string]int{}
+	for i, s := range steps {
+		index[s.Name] = i
+	}
+	return steps, index
+}
+
+func TestTheAppCodeRunsWithoutTheDeployKeyOrAnIDTokenRequest(t *testing.T) {
+	steps, index := stepsByName(t)
+	dir := t.TempDir()
+	testutil.Write(t, filepath.Join(dir, "ssh", "deploy_key"), "key")
+	seen := filepath.Join(dir, "seen")
+	cmd := exec.CommandContext(t.Context(), "bash", "-e", "-c", fakeGateWitness+steps[index["Quality gate"]].Run)
+	cmd.Env = []string{systemPath, "TOOLCHAIN=" + dir, "SEEN=" + seen, "BUILT=false", appWeb, "GITHUB_REPOSITORY=Owner/web", shaABC,
+		"POLICY=/p.yaml", "GITHUB_WORKSPACE=/src", "RUNNER_TEMP=" + dir,
+		"ACTIONS_ID_TOKEN_REQUEST_TOKEN=request-token", "ACTIONS_ID_TOKEN_REQUEST_URL=https://token.example"}
+	out, err := cmd.CombinedOutput()
+	testutil.NoErr(t, err)
+	testutil.Equal(t, string(out), "")
+	env, err := os.ReadFile(filepath.Clean(seen))
+	testutil.NoErr(t, err)
+	testutil.Contains(t, string(env), "RUNNER_TEMP="+dir)
+	testutil.Excludes(t, string(env), "ACTIONS_ID_TOKEN_REQUEST", "\nkey\n")
+	again := steps[index["Connect to the VPS after the gate"]]
+	testutil.True(t, index["Connect to the VPS after the gate"] == index["Quality gate"]+1, "the key comes back right after the gate")
+	testutil.Equal(t, again.If, "always() && env.GATE_ONLY != 'true'")
+	for _, name := range []string{"Upload the mutation verdicts to the hub", "Report the verdict to the hub", stepPush, stepDeploy} {
+		testutil.True(t, index[name] > index["Connect to the VPS after the gate"], name+" runs before the key is back")
+	}
+}
+
+const fakePushTools = `docker() {
+	if [ "$1 $2" = "image inspect" ]; then echo "$NOW_ID"; return; fi
+	echo "$*" >> "$CALLS"
+}
+`
+
+func pushWith(t *testing.T, builtID, nowID string) (string, error) {
+	t.Helper()
+	steps, index := stepsByName(t)
+	dir := t.TempDir()
+	calls := filepath.Join(dir, "calls")
+	testutil.Write(t, calls, "")
+	cmd := exec.CommandContext(t.Context(), "bash", "-e", "-c", fakePushTools+steps[index[stepPush]].Run)
+	cmd.Env = []string{systemPath, "CALLS=" + calls, "BUILT_ID=" + builtID, "NOW_ID=" + nowID, "IMAGE=ghcr.io/owner/web", "TAG=sha-abc",
+		"GH_TOKEN=token", "ACTOR=owner", "RUNNER_TEMP=" + dir, "GITHUB_OUTPUT=" + filepath.Join(dir, "out")}
+	out, err := cmd.CombinedOutput()
+	got, rerr := os.ReadFile(filepath.Clean(calls))
+	testutil.NoErr(t, rerr)
+	return string(out) + string(got), err
+}
+
+func TestThePushRefusesAnImageThatChangedAfterTheBuild(t *testing.T) {
+	pushed, err := pushWith(t, "sha256:built", "sha256:built")
+	testutil.NoErr(t, err)
+	testutil.Contains(t, pushed, "push ghcr.io/owner/web:sha-abc")
+	for _, ids := range [][2]string{{"sha256:built", "sha256:swapped"}, {"", ""}} {
+		refused, err := pushWith(t, ids[0], ids[1])
+		testutil.True(t, err != nil, "an image changed after the build was pushed")
+		testutil.Contains(t, refused, "nothing is pushed")
+		testutil.Excludes(t, refused, "push ghcr.io", "login")
+	}
+	steps, index := stepsByName(t)
+	testutil.Equal(t, steps[index[stepPush]].Env["BUILT_ID"], "${{ steps.image.outputs.id }}")
+	testutil.Contains(t, steps[index["Build image"]].Run, `echo "id=$id"`)
 }
 
 func TestAKindBinaryAppIsGatedWithoutAnImageAndNeverDeployed(t *testing.T) {

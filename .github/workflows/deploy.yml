@@ -152,7 +152,8 @@ jobs:
             --build-arg GIT_SHA="$GITHUB_SHA" \
             --build-arg BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             -t "$IMAGE:$TAG" "$CONTEXT"
-          { echo "image=$IMAGE"; echo "tag=$TAG"; } >> "$GITHUB_OUTPUT"
+          id="$(docker image inspect --format '{{.Id}}' "$IMAGE:$TAG")"
+          { echo "image=$IMAGE"; echo "tag=$TAG"; echo "id=$id"; } >> "$GITHUB_OUTPUT"
 
       - name: Connect to the VPS
         if: always() && env.GATE_ONLY != 'true'
@@ -245,6 +246,8 @@ jobs:
           BASELINE: ${{ steps.baseline.outputs.dir }}
         run: |
           set -o pipefail
+          unset ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL
+          rm -rf "$RUNNER_TEMP/ssh"
           export PATH="$TOOLCHAIN:$PATH"
           extra=()
           if [ "$BUILT" = true ]; then extra+=(--image "$IMAGE"); fi
@@ -256,6 +259,17 @@ jobs:
           done &
           deploy-hub gate --app "$APP" --repo "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" \
             --policy "$POLICY" --src "$GITHUB_WORKSPACE" --out "$RUNNER_TEMP/gate" "${extra[@]}"
+
+      - name: Connect to the VPS after the gate
+        if: always() && env.GATE_ONLY != 'true'
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          HOST_KEY: ${{ secrets.VPS_HOST_KEY }}
+        run: |
+          install -d -m 700 "$RUNNER_TEMP/ssh"
+          install -m 600 /dev/null "$RUNNER_TEMP/ssh/deploy_key"
+          printf '%s\n' "$SSH_KEY" > "$RUNNER_TEMP/ssh/deploy_key"
+          printf '%s\n' "$HOST_KEY" > "$RUNNER_TEMP/ssh/known_hosts"
 
       - name: Keep gate reports
         if: always()
@@ -398,10 +412,16 @@ jobs:
         env:
           IMAGE: ${{ steps.image.outputs.image }}
           TAG: ${{ steps.image.outputs.tag }}
+          BUILT_ID: ${{ steps.image.outputs.id }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ACTOR: ${{ github.actor }}
         run: |
           set -euo pipefail
+          now="$(docker image inspect --format '{{.Id}}' "$IMAGE:$TAG")"
+          if [ -z "$BUILT_ID" ] || [ "$now" != "$BUILT_ID" ]; then
+            echo "the image $IMAGE:$TAG is not the one built before the gate ($now, built $BUILT_ID); nothing is pushed"
+            exit 1
+          fi
           export DOCKER_CONFIG="$RUNNER_TEMP/docker-config"
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
           docker push "$IMAGE:$TAG"

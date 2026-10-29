@@ -1760,8 +1760,22 @@ rulesets or required checks: anyone with write access can merge or push to
 - **The hub.** `self-update` installs only a release `sha-<commit>` of a commit
   with a successful `ci.yml` push run on `main` whose binary matches the
   published sha256 and the artifact that run built, and only one that
-  descends from the installed commit (`TestRefusesReleasesThatAreNotGatedBuilds`). The release is published only
-  by that run after its gate passed.
+  descends from the installed commit (`TestRefusesReleasesThatAreNotGatedBuilds`).
+  The release is published only by that run after its gate passed.
+- **Deploy credentials while the app's code runs.** The gate runs the app's
+  own code (tests, fuzzing, mutants) in the job that later deploys. Before it
+  starts, the `Quality gate` step deletes the deploy key from
+  `$RUNNER_TEMP/ssh` and unsets `ACTIONS_ID_TOKEN_REQUEST_TOKEN` and
+  `ACTIONS_ID_TOKEN_REQUEST_URL`, so that code can neither reach the hub over
+  SSH nor mint an OIDC token; `Connect to the VPS after the gate` writes the
+  key again. `Push the gated image` pushes only the image whose ID
+  `Build image` recorded before the gate (e2e
+  `TestTheAppCodeRunsWithoutTheDeployKeyOrAnIDTokenRequest`,
+  `TestThePushRefusesAnImageThatChangedAfterTheBuild`). A process the app's
+  code leaves running is the same user as the later steps and could still
+  read them: moving the deploy into a job of its own (#812) needs the runner
+  to keep the gated image between jobs, and `ci-runner-clean` removes images
+  after every job today.
 - **Residual risk.** App deploys use `deploy.yml` of the hub's `main` as it is
   at that moment: a change to `deploy.yml` that reaches `main` before its own
   gate applies to the next app deploy. Review changes to `deploy.yml` with that

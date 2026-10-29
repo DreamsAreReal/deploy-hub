@@ -29,7 +29,7 @@ none of them is weakened to make a release pass.
 | break API or database compatibility so a rollback fails | — | **no** (#822: migration and API compatibility check) |
 | change behaviour without updating the docs | — | **no** (#822: touched modules vs touched docs) |
 | hard-code domain logic into the assistant | — | **no** (#822: heuristics on assistant code) |
-| deploy without the gate | deploy credentials are used only by the hub workflow after the gate | partly (#812: deploy step separated from the checkout, #814: one deploy key per app) |
+| deploy without the gate | deploy credentials are used only by the hub workflow after the gate; the deploy key and the OIDC token request are gone while the app's code runs, and only the image built before the gate is pushed | partly: a process the app's code leaves behind shares the job (#812: deploy in its own job), #814: one deploy key per app |
 | replace the hub binary | self-update installs a release only when the binary is byte for byte the artifact its green `ci.yml` run on `main` built; a release token cannot change run artifacts | yes (#813) |
 
 Speed matters as much: the tasks gate takes 3.3–5.4 h today. New checks run on what
