@@ -131,7 +131,7 @@ test('the aim is the middle of a target nothing covers', (t) => {
   assert.deepEqual(aim('#missing'), { missing: true });
   env.document.elementFromPoint = (x, y) => (x === 60 && y === 40 ? button.firstChild : null);
   assert.deepEqual(aim('#go'), { x: 60, y: 40 });
-  assert.ok(button.hasAttribute('data-scrolled'));
+  assert.deepEqual(button.scrolledInto, { block: 'center', inline: 'center' });
   env.document.elementFromPoint = () => button;
   assert.deepEqual(aim('#go'), { x: 60, y: 40 });
   env.document.elementFromPoint = () => env.document.getElementById('toast');

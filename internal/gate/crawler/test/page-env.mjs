@@ -46,11 +46,12 @@ export function pageEnv(html, { url = 'https://app/ui/home', width = 400, height
   window.Element.prototype.checkVisibility = function visible() {
     return !this.closest('[hidden], [data-invisible]') && this.isConnected;
   };
-  window.Element.prototype.scrollIntoView = function scrolled() {
-    this.setAttribute('data-scrolled', '');
+  window.Element.prototype.scrollIntoView = function scrolled(options) {
+    this.scrolledInto = options;
   };
   window.Range.prototype.getBoundingClientRect = function textBox() {
-    return boxOf(this.startContainer?.parentElement ?? this.startContainer, 'data-text-box');
+    const owner = this.startContainer?.parentElement ?? this.startContainer;
+    return boxOf(owner, owner?.hasAttribute('data-text-box') ? 'data-text-box' : 'data-box');
   };
   window.Range.prototype.getClientRects = function textRects() {
     const owner = this.startContainer?.parentElement ?? this.startContainer;

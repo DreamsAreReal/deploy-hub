@@ -5,6 +5,9 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+const NativeEvent = Event;
+const NativeTarget = EventTarget;
+
 export const evaluated = (value) => ({ result: { value } });
 
 export function fakeCdp(answer = () => ({})) {
@@ -42,13 +45,13 @@ export function fakeCrawl(answer, config = {}) {
 export const methods = (crawl) => crawl.cdp.socket.sent.map((message) => message.method);
 
 export function socketClass(answer = () => ({})) {
-  return class ScriptedSocket extends EventTarget {
+  return class ScriptedSocket extends NativeTarget {
     constructor(url) {
       super();
       this.url = url;
       this.readyState = WebSocket.OPEN;
       this.sent = [];
-      queueMicrotask(() => this.dispatchEvent(new Event('open')));
+      queueMicrotask(() => this.dispatchEvent(new NativeEvent('open')));
     }
 
     send(text) {
@@ -63,7 +66,7 @@ export function socketClass(answer = () => ({})) {
     }
 
     hear(message) {
-      this.dispatchEvent(Object.assign(new Event('message'), { data: JSON.stringify(message) }));
+      this.dispatchEvent(Object.assign(new NativeEvent('message'), { data: JSON.stringify(message) }));
     }
   };
 }

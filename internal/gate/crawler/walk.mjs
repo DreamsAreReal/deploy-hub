@@ -157,7 +157,7 @@ async function makeSense(crawl, route, overlay) {
   for (const entry of await checked(crawl, 'words')) remember(crawl, entry, where);
   if (!overlay) return screenSense(crawl, route);
   const exits = await inPage(crawl, () => window.checks.exits());
-  if (overlay === 'sheet' && exits && !exits.close) note(crawl, 'no-close', `${where} has no close button`);
+  if (overlay.startsWith('sheet') && exits && !exits.close) note(crawl, 'no-close', `${where} has no close button`);
 }
 
 function titleGaps(crawl) {
