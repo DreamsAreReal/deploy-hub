@@ -119,5 +119,5 @@ test('a pressed target is keyed by where it lives and what it is, ids aside', ()
   assert.equal(keyOf('/ui/epics/7/tasks', [], target), '/ui/epics/N/tasks | task-N-open');
   assert.equal(keyOf('/ui/epics/7/tasks', [{ sheet: '/ui/tasks/3/move' }, { testid: 'move-9' }], target),
     '/ui/epics/N/tasks > /ui/tasks/N/move > move-9 | task-N-open');
-  assert.equal(keyOf('/ui/epics/7/tasks', [], { place: 'shell', testid: '', label: 'Шаг 2' }), 'shell | Шаг N');
+  assert.equal(keyOf('/ui/epics/7/tasks', [], { place: 'shell', testid: '', label: 'Step 2' }), 'shell | Step N');
 });

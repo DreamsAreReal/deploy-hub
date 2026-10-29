@@ -6,14 +6,14 @@ const screen = (body) => `<div id="screen" data-box="0 0 400 800">${body}</div><
 
 test('mixed alphabets, technical words, small fonts and broken images are found in visible text only', (t) => {
   const env = checking(t, screen(`
-    <h1 data-testid="title">Задачи</h1><p>Мой task list</p><p>deployнуть сейчас и потом ещё много слов, чтобы обрезать</p>
-    <p class="md">ТекстWithLatin</p><button disabled>кнопкаX</button><p aria-disabled="true">словоZ</p><p hidden>скрытоеY</p>
+    <h1 data-testid="title">\u0417\u0430\u0434\u0430\u0447\u0438</h1><p>\u041c\u043e\u0439 task list</p><p>deploy\u043d\u0443\u0442\u044c \u0441\u0435\u0439\u0447\u0430\u0441 \u0438 \u043f\u043e\u0442\u043e\u043c \u0435\u0449\u0451 \u043c\u043d\u043e\u0433\u043e \u0441\u043b\u043e\u0432, \u0447\u0442\u043e\u0431\u044b \u043e\u0431\u0440\u0435\u0437\u0430\u0442\u044c</p>
+    <p class="md">\u0422\u0435\u043a\u0441\u0442WithLatin</p><button disabled>\u043a\u043d\u043e\u043f\u043a\u0430X</button><p aria-disabled="true">\u0441\u043b\u043e\u0432\u043eZ</p><p hidden>\u0441\u043a\u0440\u044b\u0442\u043e\u0435Y</p>
     <p>Value: undefined</p><p>NaN items</p><p>[object Object]</p><p>Error HTTP 503 from api</p><p>HTTP 302 moved</p><p>nullable field</p><p>null</p>
     <small style="font-size: 11.5px">tiny note</small><span style="font-size: 12px">ok size</span>
     <img src="/broken.png"><img id="fine" src="/fine.png"><img hidden src="/hidden.png"><img id="loading" src="/later.png">`));
   Object.defineProperty(env.document.getElementById('fine'), 'naturalWidth', { value: 10 });
   Object.defineProperty(env.document.getElementById('loading'), 'complete', { value: false });
-  assert.deepEqual(window.checks.alphabets(), ['deployнуть сейчас и потом ещё много слов']);
+  assert.deepEqual(window.checks.alphabets(), ['deploy\u043d\u0443\u0442\u044c \u0441\u0435\u0439\u0447\u0430\u0441 \u0438 \u043f\u043e\u0442\u043e\u043c \u0435\u0449\u0451 \u043c\u043d\u043e\u0433\u043e \u0441\u043b\u043e\u0432']);
   assert.deepEqual(window.checks.garbage(), ['Value: undefined', 'NaN items', '[object Object]', 'Error HTTP 503 from api', 'null']);
   assert.deepEqual(window.checks.fonts(), ['small «tiny note» 11.5px']);
   assert.deepEqual(window.checks.images(), ['/broken.png']);
@@ -248,6 +248,6 @@ test('a placeholder is measured against the room left by the padding and the lin
 });
 
 test('a word mixing alphabets is found whichever alphabet comes first', (t) => {
-  checking(t, screen('<p>Отчётlog</p><p>logОтчёт</p><p>Отчёт log</p>'));
-  assert.deepEqual(window.checks.alphabets(), ['Отчётlog', 'logОтчёт']);
+  checking(t, screen('<p>\u041e\u0442\u0447\u0451\u0442log</p><p>log\u041e\u0442\u0447\u0451\u0442</p><p>\u041e\u0442\u0447\u0451\u0442 log</p>'));
+  assert.deepEqual(window.checks.alphabets(), ['\u041e\u0442\u0447\u0451\u0442log', 'log\u041e\u0442\u0447\u0451\u0442']);
 });

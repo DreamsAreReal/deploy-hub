@@ -17,6 +17,9 @@ const heavyScreen = 3000;
 const shift = { problem: 0.25, note: 0.1 };
 
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+const fill = (crawl) => inPage(crawl, (value) => window.crawl.fill(value), crawl.config.typed);
+const routesOn = async (crawl) => (await inPage(crawl, () => window.crawl.routes())) ?? [];
+const targetsOn = async (crawl) => (await inPage(crawl, () => window.crawl.targets())) ?? [];
 
 async function still(crawl) {
   const until = Date.now() + limits.still;
@@ -230,10 +233,10 @@ async function chatAt(crawl, size) {
 
 async function reach(crawl, route, path) {
   const opened = await open(crawl, route);
-  await inPage(crawl, (value) => window.crawl.fill(value), crawl.config.typed);
+  await fill(crawl);
   for (const opener of path) {
     if (!(await click(crawl, opener))) return false;
-    await inPage(crawl, (value) => window.crawl.fill(value), crawl.config.typed);
+    await fill(crawl);
   }
   return opened.ok;
 }
@@ -254,7 +257,7 @@ async function press(crawl, route, path, target) {
   const clicked = (await reach(crawl, route, path)) && (await click(crawl, target));
   await shoot(crawl, before);
   if (!clicked) return;
-  discover(crawl, route, (await inPage(crawl, () => window.crawl.routes())) ?? []);
+  discover(crawl, route, await routesOn(crawl));
   if (path.length === 0) await deeper(crawl, route, target);
 }
 
@@ -265,9 +268,9 @@ async function deeper(crawl, route, opener) {
   await lookOver(crawl, where);
   await makeSense(crawl, route, `${overlay} of ${nameOf(opener)}`);
   await upload(crawl).catch((error) => note(crawl, 'upload', firstLine(error)));
-  discover(crawl, route, (await inPage(crawl, () => window.crawl.routes())) ?? []);
-  await inPage(crawl, (value) => window.crawl.fill(value), crawl.config.typed);
-  for (const target of (await inPage(crawl, () => window.crawl.targets())) ?? []) await press(crawl, route, [opener], target);
+  discover(crawl, route, await routesOn(crawl));
+  await fill(crawl);
+  for (const target of await targetsOn(crawl)) await press(crawl, route, [opener], target);
 }
 
 async function upload(crawl) {
@@ -314,13 +317,13 @@ async function visit(crawl, route) {
   const ok = await checkScreen(crawl, route, screen);
   seen(crawl, route, (await inPage(crawl, () => [...document.querySelectorAll('#screen [data-testid]')].map((node) => node.dataset.testid))) ?? []);
   if (ok) await makeSense(crawl, route, '');
-  discover(crawl, route, (await inPage(crawl, () => window.crawl.routes())) ?? [], true);
+  discover(crawl, route, await routesOn(crawl), true);
   if (ok && !crawl.config.quick) await upload(crawl).catch((error) => note(crawl, 'upload', firstLine(error)));
-  discover(crawl, route, (await inPage(crawl, () => window.crawl.routes())) ?? []);
+  discover(crawl, route, await routesOn(crawl));
   if (!ok) return;
   if (crawl.config.quick) return lookOver(crawl, route);
-  await inPage(crawl, (value) => window.crawl.fill(value), crawl.config.typed);
-  for (const target of (await inPage(crawl, () => window.crawl.targets())) ?? []) await press(crawl, route, [], target);
+  await fill(crawl);
+  for (const target of await targetsOn(crawl)) await press(crawl, route, [], target);
 }
 
 function unreached(crawl) {
