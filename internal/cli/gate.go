@@ -42,11 +42,12 @@ const (
 	msgVerdicts    = "mutation verdicts: %s %s%s\n"
 )
 
-var ErrGateArgs = errors.New("usage: deploy-hub gate --app NAME --repo OWNER/NAME --commit SHA --policy FILE --src DIR --out DIR [--image REF] [--fork] [--mutation-cache FILE --mutation-cache-sha256 sha256:HEX] [--mutation-full] [--mutation-budget DURATION] [--mutation-last FILE] [--mutation-yield FILE]")
+var ErrGateArgs = errors.New("usage: deploy-hub gate --app NAME --repo OWNER/NAME --commit SHA --policy FILE --src DIR --out DIR [--image REF] [--previous-image REF:sha-COMMIT] [--fork] [--mutation-cache FILE --mutation-cache-sha256 sha256:HEX] [--mutation-full] [--mutation-budget DURATION] [--mutation-last FILE] [--mutation-yield FILE]")
 
 type gateArgs struct {
 	app, repo, commit, src, out, policy, image string
 	cache, cacheSum, last, yield, baseline     string
+	previous                                   string
 	budget                                     time.Duration
 	fork, full                                 bool
 }
@@ -62,6 +63,7 @@ func parseGateArgs(args []string) (gateArgs, error) {
 	fs.StringVar(&g.out, "out", "", "report directory outside the checkout")
 	fs.StringVar(&g.policy, "policy", "", "central gate policy file")
 	fs.StringVar(&g.image, "image", "", "locally built image reference")
+	fs.StringVar(&g.previous, "previous-image", "", "image of the deployed release, pulled locally, for the rollback check")
 	fs.BoolVar(&g.fork, "fork", false, "the repository is a fork")
 	fs.StringVar(&g.cache, "mutation-cache", "", "mutation verdicts from the hub (absolute path)")
 	fs.StringVar(&g.cacheSum, "mutation-cache-sha256", "", "sha256 the hub recorded for the mutation verdicts")
@@ -84,7 +86,18 @@ func (g *gateArgs) normalize() error {
 	if rel, _ := filepath.Rel(g.src, g.out); !strings.HasPrefix(rel, "..") {
 		return fmt.Errorf("%w: reports must live outside the source tree", ErrGateArgs)
 	}
-	return errors.Join(validate.AppName(g.app), validate.RepoSlug(g.repo), validate.Commit(g.commit), nonEmptyArg(g.policy), g.cacheArgs(), g.fullRunArgs(), g.baselineArgs())
+	return errors.Join(validate.AppName(g.app), validate.RepoSlug(g.repo), validate.Commit(g.commit), nonEmptyArg(g.policy), g.cacheArgs(), g.fullRunArgs(), g.baselineArgs(), g.previousArgs())
+}
+
+func (g *gateArgs) previousArgs() error {
+	if g.previous == "" {
+		return nil
+	}
+	repo, tag, ok := strings.Cut(g.previous, ":")
+	if !ok || validate.Image(repo) != nil || validate.Tag(tag) != nil {
+		return fmt.Errorf("%w: --previous-image must be ghcr.io/<owner>/<app>:sha-<commit>", ErrGateArgs)
+	}
+	return nil
 }
 
 func (g *gateArgs) baselineArgs() error {
@@ -169,7 +182,7 @@ func newWorkspace(ctx context.Context, g *gateArgs, a *App, ex procexec.Runner, 
 	}
 	app, _ := pol.App(g.app)
 	ws := gate.Workspace{Src: g.src, Out: g.out, PolicyDir: filepath.Dir(g.policy), Image: g.image, AppName: g.app, Repo: g.repo, App: app, Policy: pol, Exec: ex, Log: a.Log,
-		UIBaseline: g.baseline}
+		UIBaseline: g.baseline, Previous: g.previous}
 	plan, err := g.mutationPlan()
 	if err != nil {
 		return ws, err

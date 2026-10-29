@@ -322,8 +322,9 @@ server/systemd/     timers: status every minute, prune daily, history-guard ever
   `junit/` report parsers.
 - `scan/`: external scanners (gitleaks, trufflehog, semgrep, osv-scanner,
   syft, zizmor, actionlint, hadolint, trivy).
-- `stage/`: starts the built image in an isolated network for DAST (ZAP) and
-  the load test.
+- `stage/`: starts the built image in an isolated network for DAST (ZAP), the
+  load test and the rollback check (the deployed image on the data this
+  release migrated).
 
 ## 7. How the code is tested
 

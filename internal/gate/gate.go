@@ -104,6 +104,7 @@ type Workspace struct {
 	MemoryLimit int64
 	Mutation    MutationPlan
 	UIBaseline  string
+	Previous    string
 }
 
 type MutationPlan struct {

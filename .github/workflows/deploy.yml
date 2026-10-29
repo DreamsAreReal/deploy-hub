@@ -182,6 +182,10 @@ jobs:
               -o UserKnownHostsFile="$RUNNER_TEMP/ssh/known_hosts" "$VPS_USER@$VPS_HOST" \
               "mutation-cache-get $APP sha-${GITHUB_SHA}" > "$dir/served" || return 1
             : > "$dir/outputs"
+            deployed="$(sed -n 's/^deployed=//p' "$dir/served")"
+            if [ -n "$deployed" ]; then
+              echo "deployed=$deployed" >> "$dir/outputs"
+            fi
             last="$(sed -n 's/^last=//p' "$dir/served")"
             if [ -n "$last" ]; then
               printf '%s' "$last" | base64 -d > "$dir/last.json" || return 1
@@ -201,6 +205,29 @@ jobs:
             echo "::warning::the hub did not serve the mutation cache; every mutant runs"
           fi
           rm -f "$dir/served" "$dir/outputs"
+
+      - name: Pull the deployed release for the rollback check
+        id: deployed
+        if: env.GATE_ONLY != 'true' && steps.cache.outputs.deployed != ''
+        env:
+          DEPLOYED: ${{ steps.cache.outputs.deployed }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -uo pipefail
+          if ! printf '%s' "$DEPLOYED" | grep -Eq '^ghcr\.io/[a-z0-9._/-]{1,100}:sha-[0-9a-f]{7,40}$'; then
+            echo "::warning::the hub named no usable deployed image; the rollback check is skipped"
+            exit 0
+          fi
+          export DOCKER_CONFIG="$RUNNER_TEMP/docker-pull"
+          if printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin > /dev/null \
+            && docker pull --quiet "$DEPLOYED" > /dev/null; then
+            echo "image=$DEPLOYED" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::the deployed release $DEPLOYED could not be pulled; the rollback check is skipped"
+          fi
+          docker logout ghcr.io > /dev/null
+          rm -rf "$DOCKER_CONFIG"
 
       - name: Fetch the UI baseline from the hub
         id: baseline
@@ -244,6 +271,7 @@ jobs:
           CACHE_SHA256: ${{ steps.cache.outputs.sha256 }}
           LAST: ${{ steps.cache.outputs.last }}
           BASELINE: ${{ steps.baseline.outputs.dir }}
+          PREVIOUS: ${{ steps.deployed.outputs.image }}
         run: |
           set -o pipefail
           unset ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL
@@ -254,6 +282,7 @@ jobs:
           if [ -n "$CACHE_FILE" ]; then extra+=(--mutation-cache "$CACHE_FILE" --mutation-cache-sha256 "$CACHE_SHA256"); fi
           if [ -n "$LAST" ]; then extra+=(--mutation-last "$LAST"); fi
           if [ -n "$BASELINE" ]; then extra+=(--ui-baseline "$BASELINE"); fi
+          if [ -n "$PREVIOUS" ]; then extra+=(--previous-image "$PREVIOUS"); fi
           while sleep 30; do
             echo "resources: $(free -m | awk '/^Mem:/ {print "mem_available_mb=" $7}') $(df -m / "$RUNNER_TEMP" | awk 'NR > 1 {print $6 "_free_mb=" $4}' | tr '\n' ' ')top_dirs_mb=$(du -xsm "$RUNNER_TEMP"/gate/* /tmp 2>/dev/null | sort -rn | head -3 | awk '{printf "%s:%s,", $2, $1}')"
           done &

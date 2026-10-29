@@ -235,6 +235,28 @@ func TestParseGateArgsMutationCache(t *testing.T) {
 	}
 }
 
+func TestParseGateArgsPreviousImage(t *testing.T) {
+	src := t.TempDir()
+	base := gateFlags(testApp, testRepo, commitSha, "p", src, filepath.Join(t.TempDir(), "reports"))
+	deployed := "ghcr.io/owner/web:sha-" + commitSha
+	g, err := parseGateArgs(append(append([]string{}, base...), "--previous-image", deployed))
+	testutil.NoErr(t, err)
+	testutil.Equal(t, g.previous, deployed)
+	for _, bad := range []string{"web:old", "ghcr.io/owner/web", "ghcr.io/owner/web:latest", "docker.io/owner/web:sha-" + commitSha} {
+		_, err := parseGateArgs(append(append([]string{}, base...), "--previous-image", bad))
+		testutil.Fails(t, err)
+	}
+	h := newHarness(t)
+	var seen string
+	h.gateChecks = []gate.Check{{Name: checkOnly, Run: func(_ context.Context, ws gate.Workspace) gate.Outcome {
+		seen = ws.Previous
+		return gate.Pass(nil)
+	}}}
+	args := append(gateFlags(hubApp, hubRepo, commitSha, gatePolicy(t), t.TempDir(), filepath.Join(t.TempDir(), "gate")), "--previous-image", deployed)
+	testutil.Equal(t, h.run(append([]string{CmdGate}, args...)...), ExitOK)
+	testutil.Equal(t, seen, deployed)
+}
+
 func TestParseGateArgsUIBaseline(t *testing.T) {
 	src := t.TempDir()
 	base := gateFlags(testApp, testRepo, commitSha, "p", src, filepath.Join(t.TempDir(), "reports"))

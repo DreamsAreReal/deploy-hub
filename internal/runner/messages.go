@@ -69,6 +69,7 @@ const (
 	msgCacheStored      = "mutation cache: %d verdicts received, sha256 %s\n"
 	msgCachePlan        = "plan=%s\n"
 	msgCacheLast        = "last=%s\n"
+	msgCacheDeployed    = "deployed=%s:%s\n"
 	msgBadShots         = "refused: ui baseline shots missing or malformed"
 	msgEnvReadable      = "secrets file %s can be read by group or others (mode %#o)"
 	groupOtherBits      = 0o077

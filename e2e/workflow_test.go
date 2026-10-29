@@ -269,6 +269,56 @@ func TestThePushRefusesAnImageThatChangedAfterTheBuild(t *testing.T) {
 	testutil.Contains(t, steps[index["Build image"]].Run, `echo "id=$id"`)
 }
 
+const fakePullTools = `docker() {
+	echo "$*" >> "$CALLS"
+	if [ "$1" = pull ] && [ -n "$PULL_FAILS" ]; then return 1; fi
+	cat > /dev/null
+}
+`
+
+func pullDeployed(t *testing.T, deployed, fails string) (string, string) {
+	t.Helper()
+	steps, index := stepsByName(t)
+	dir := t.TempDir()
+	calls, out := filepath.Join(dir, "calls"), filepath.Join(dir, "out")
+	testutil.Write(t, calls, "")
+	testutil.Write(t, out, "")
+	cmd := exec.CommandContext(t.Context(), "bash", "-e", "-c", fakePullTools+steps[index["Pull the deployed release for the rollback check"]].Run)
+	cmd.Env = []string{systemPath, "CALLS=" + calls, "DEPLOYED=" + deployed, "PULL_FAILS=" + fails, "GH_TOKEN=token", "ACTOR=owner",
+		"RUNNER_TEMP=" + dir, "GITHUB_OUTPUT=" + out}
+	_, err := cmd.CombinedOutput()
+	testutil.NoErr(t, err)
+	got, err := os.ReadFile(filepath.Clean(calls))
+	testutil.NoErr(t, err)
+	output, err := os.ReadFile(filepath.Clean(out))
+	testutil.NoErr(t, err)
+	return string(got), string(output)
+}
+
+func TestTheDeployedReleaseIsPulledBeforeTheGateForTheRollbackCheck(t *testing.T) {
+	deployed := "ghcr.io/owner/web:sha-0123456789abcdef0123456789abcdef01234567"
+	calls, out := pullDeployed(t, deployed, "")
+	testutil.Contains(t, calls, "login ghcr.io -u owner --password-stdin", "pull --quiet "+deployed, "logout ghcr.io")
+	testutil.Equal(t, out, "image="+deployed+"\n")
+	calls, out = pullDeployed(t, deployed, "yes")
+	testutil.Contains(t, calls, "pull --quiet", "logout ghcr.io")
+	testutil.Equal(t, out, "")
+	for _, odd := range []string{"docker.io/evil/web:sha-0123456", "ghcr.io/owner/web:latest", "ghcr.io/owner/web:sha-1234567;id"} {
+		calls, out = pullDeployed(t, odd, "")
+		testutil.Equal(t, calls+out, "")
+	}
+	steps, index := stepsByName(t)
+	pull := steps[index["Pull the deployed release for the rollback check"]]
+	testutil.Equal(t, pull.If, "env.GATE_ONLY != 'true' && steps.cache.outputs.deployed != ''")
+	testutil.True(t, index["Pull the deployed release for the rollback check"] < index["Quality gate"], "the image is pulled before the gate")
+	gate := steps[index["Quality gate"]]
+	testutil.Equal(t, gate.Env["PREVIOUS"], "${{ steps.deployed.outputs.image }}")
+	gate.Run = "PREVIOUS=" + deployed + "\n" + gate.Run
+	testutil.Contains(t, gateArgs(t, gate, "true"), "--previous-image "+deployed)
+	testutil.Excludes(t, gateArgs(t, steps[index["Quality gate"]], "true"), "--previous-image")
+	testutil.Contains(t, steps[index["Fetch the mutation cache from the hub"]].Run, `deployed="$(sed -n 's/^deployed=//p' "$dir/served")"`)
+}
+
 func TestAKindBinaryAppIsGatedWithoutAnImageAndNeverDeployed(t *testing.T) {
 	w, raw := readDeployWorkflow(t)
 	testutil.Contains(t, raw, "      image:\n", "        type: boolean\n        default: true\n")

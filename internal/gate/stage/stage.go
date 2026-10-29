@@ -42,6 +42,7 @@ const (
 	flagPids       = "--pids-limit"
 	flagSecurity   = "--security-opt"
 	noPrivileges   = "no-new-privileges"
+	stopSeconds    = "10"
 )
 
 var (
@@ -78,7 +79,7 @@ func StartSeeded(ctx context.Context, ws gate.Workspace, purpose string, seed []
 		s.Stop(ctx)
 		return nil, err
 	}
-	if err := s.docker(ctx, s.runArgs()...); err != nil {
+	if err := s.docker(ctx, s.runArgs(s.ws.Image)...); err != nil {
 		s.Stop(ctx)
 		return nil, err
 	}
@@ -92,7 +93,19 @@ func StartSeeded(ctx context.Context, ws gate.Workspace, purpose string, seed []
 	return s, nil
 }
 
-func (s *Stage) runArgs() []string {
+func (s *Stage) Swap(ctx context.Context, image string) error {
+	_, _ = s.ws.Run(ctx, DockerBinary, "stop", "--time", stopSeconds, s.Name)
+	_, _ = s.ws.Run(ctx, DockerBinary, "rm", "-f", s.Name)
+	if err := s.docker(ctx, s.runArgs(image)...); err != nil {
+		return err
+	}
+	if err := s.resolve(ctx); err != nil {
+		return err
+	}
+	return s.waitReady(ctx)
+}
+
+func (s *Stage) runArgs(image string) []string {
 	lim := s.ws.App
 	args := []string{
 		"run", "-d", "--name", s.Name, flagNetwork, s.Network, "--network-alias", s.Name,
@@ -105,7 +118,7 @@ func (s *Stage) runArgs() []string {
 	for i, dst := range s.ws.App.Data {
 		args = append(args, "--mount", fmt.Sprintf(mountFormat, s.volume(i), dst))
 	}
-	return append(args, s.ws.Image)
+	return append(args, image)
 }
 
 func (s *Stage) seed(ctx context.Context, args []string) error {
@@ -170,16 +183,8 @@ func (s *Stage) waitReady(ctx context.Context) error {
 }
 
 func healthy(ctx context.Context, client *http.Client, url string) bool {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
-	if err != nil {
-		return false
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return false
-	}
-	_ = resp.Body.Close()
-	return resp.StatusCode < firstBadStatus
+	code := status(ctx, client, url)
+	return code != 0 && code < firstBadStatus
 }
 
 func (s *Stage) State(ctx context.Context) (State, error) {

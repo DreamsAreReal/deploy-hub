@@ -26,7 +26,8 @@ push to default branch
         toolchain: deploy-hub + pinned scanners (sha256-verified)
         [repo has a compose file] deploy-hub render
         docker build (local, not pushed yet)
-        ssh deploy@vps "mutation-cache-get <app> <tag>"  → the app's mutation verdicts
+        ssh deploy@vps "mutation-cache-get <app> <tag>"  → the app's mutation verdicts and its deployed image
+        docker pull <deployed image>  (for the rollback check; GITHUB_TOKEN only in that step)
         ssh deploy@vps "ui-baseline-get <app> <tag>"  → screenshots of the deployed version
         deploy-hub gate  → verdict.json + SBOMs + the crawl report with its screenshots of problems and changed screens (kept as workflow artifacts)
         ssh deploy@vps "mutation-cache-put <app> <tag>"  ← always, pass or fail
@@ -146,6 +147,7 @@ versions and checksums: [`policy/tools.yaml`](policy/tools.yaml).
 | `dast` | any ZAP alert of Low risk or above on the running app | OWASP ZAP full scan |
 | `load` | p95 above the profile, errors above the profile, crash, restart or OOM under load | built in |
 | `ui` | a problem the app's crawl finds in the seeded stage: page or console error, 5xx, hang, dead or covered button, duplicate or ambiguous button, delete without confirmation, cut text, page wider than the screen, unreadable contrast, a screen that looks different from the deployed version without a line in `.gate/visual.yaml` | the app's crawl in the pinned browser image |
+| `rollback` | the deployed release does not start, or answers a `load` path with a 5xx or not at all, on the data this release seeded and migrated: the stage starts this release with the `ui` seed, then replaces its container with the deployed image on the same volumes. Not applicable without a deployed release or without `data` | built in |
 
 What this table covers and what it misses, seen from what an agent could break:
 [docs/gate-map.md](docs/gate-map.md).
@@ -1364,8 +1366,10 @@ sha256 recorded next to them. Over 100,000 verdicts, only the latest upload is
 kept, and a file over 16 MiB is never written, so an app's directory under
 `/opt/deploy-hub/mutation-cache` stays within a few tens of MiB. One upload is limited by the 8 MiB stdin line to about 75,000 verdicts.
 `mutation-cache-get` prints `sha256=<hex>` and `verdicts=<base64>`, or nothing
-when there is no cache yet, and `last=<base64>` with the last full mutation run
-(commit, key bases, passed, time) when there is one. With `mode=full` it first
+when there is no cache yet, `deployed=<image>:<tag>` (from `app.conf` and
+`.deploy-state`) when a release of the app is deployed, and `last=<base64>`
+with the last full mutation run (commit, key bases, passed, time) when there
+is one. With `mode=full` it first
 prints `plan=new|continue|skip` and serves the verdicts of the open full run
 session instead. `mutation-cache-put` also takes `mode=full` (the verdicts go to
 the session too) and `run` (base64 of `mutation-run.json`), which records a full
