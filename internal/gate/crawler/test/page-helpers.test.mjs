@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { aim, frozenClock, helpers, holdStill, letGo, pixelDiff } from '../page.mjs';
+import { aim, answered, frozenClock, helpers, holdStill, letGo, markAssistant, pixelDiff } from '../page.mjs';
 import { pageEnv } from './page-env.mjs';
 
 function withPage(t, html, options) {
@@ -259,4 +259,46 @@ test('a large difference is encoded in chunks without losing a byte', async (t) 
   const bytes = Buffer.from(result.diff, 'base64');
   assert.equal(bytes.length, width * 4);
   assert.ok(bytes.every((value, index) => value === [255, 0, 0, 255][index % 4]));
+});
+
+test('the first target can be marked too', (t) => {
+  withPage(t, shell);
+  const first = window.crawl.mark({ testid: 'root-home' });
+  assert.deepEqual([first.index, first.label], [0, 'Home']);
+});
+
+test('a frozen clock is still the Date every check in the page knows', (t) => {
+  const Real = Date;
+  t.after(() => {
+    globalThis.Date = Real;
+  });
+  frozenClock(0);
+  assert.ok(new Date() instanceof Date);
+  assert.ok(Object.prototype.isPrototypeOf.call(Date.prototype, new Date(5)));
+});
+
+test('a request counts as answered in the page only when the page timed one close to when it was sent', (t) => {
+  const saved = Object.getOwnPropertyDescriptor(globalThis, 'performance');
+  t.after(() => Object.defineProperty(globalThis, 'performance', saved));
+  const entries = { '/api/a': [{ responseEnd: 10, startTime: 100 }], '/api/b': [{ responseEnd: 0, startTime: 100 }], '/api/c': [{ responseEnd: 5, startTime: 50 }, { responseEnd: 9, startTime: 120 }] };
+  Object.defineProperty(globalThis, 'performance', { configurable: true, value: { timeOrigin: 1000, getEntriesByName: (url) => entries[url] ?? [] } });
+  assert.equal(answered({ url: '/api/a', at: 1100, near: 1 }), true);
+  assert.equal(answered({ url: '/api/a', at: 1101, near: 1 }), false);
+  assert.equal(answered({ url: '/api/a', at: 1099, near: 2 }), true);
+  assert.equal(answered({ url: '/api/a', at: 1098, near: 2 }), false);
+  assert.equal(answered({ url: '/api/a', at: 1102, near: 2 }), false);
+  assert.equal(answered({ url: '/api/b', at: 1100, near: 5 }), false);
+  assert.equal(answered({ url: '/api/c', at: 1121, near: 2 }), true);
+  assert.equal(answered({ url: '/api/none', at: 1100, near: 5 }), false);
+});
+
+test('the assistant button is the only marked target when it is there and visible', (t) => {
+  const env = withPage(t, '<button data-crawl>old</button><button data-testid="assistant-open">Assistant</button>');
+  assert.equal(markAssistant(), true);
+  assert.deepEqual([...env.document.querySelectorAll('[data-crawl]')].map((node) => node.textContent), ['Assistant']);
+  env.document.querySelector('[data-testid="assistant-open"]').hidden = true;
+  assert.equal(markAssistant(), false);
+  env.document.querySelector('[data-testid="assistant-open"]').remove();
+  assert.equal(markAssistant(), false);
+  assert.equal(env.document.querySelectorAll('[data-crawl]').length, 0);
 });

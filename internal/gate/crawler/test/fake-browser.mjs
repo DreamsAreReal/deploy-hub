@@ -12,16 +12,16 @@ function contains(node, x, y) {
   return x >= left && x <= left + width && y >= top && y <= top + height;
 }
 
-export function shellOf(screen, { menu = true, assistant = true } = {}) {
+export function shellOf(screen, { menu = true, assistant = true, chat = '<p>Chat</p>' } = {}) {
   const roots = menu ? '<nav data-testid="roots" data-box="0 760 400 40"><button data-testid="root-home" data-nav="/ui/home" data-box="0 752 100 48">Home</button></nav>' : '';
-  const frog = assistant ? '<button data-testid="assistant-open" data-box="340 700 48 48">Assistant</button>' : '';
-  return `${roots}<div id="screen">${screen}</div><div id="sheet" hidden></div><div id="chat" hidden><p>Chat</p><button data-testid="chat-close" data-close data-box="300 0 48 48">Close chat</button></div><div id="toast" hidden></div>${frog}`;
+  const frog = assistant ? '<button data-testid="assistant-open" data-box="300 680 48 48">Assistant</button>' : '';
+  return `${roots}<div id="screen">${screen}</div><div id="sheet" hidden></div><div id="chat" hidden>${chat}<button data-testid="chat-close" data-close data-box="300 0 48 48">Close chat</button></div><div id="toast" hidden></div>${frog}`;
 }
 
 export function fakeApp(app) {
   const env = pageEnv('', { url: 'https://app/' });
   env.document.documentElement.dataset.bg = 'rgb(255, 255, 255)';
-  const seen = { navigations: [], clicks: [], uploads: [], metrics: [], media: [], scripts: [], evaluations: 0, requests: 0 };
+  const seen = { navigations: [], clicks: [], uploads: [], metrics: [], viewports: [], media: [], scripts: [], evaluations: 0, requests: 0 };
   const scripts = [];
   let socket = null;
   const emit = (method, params) => socket.hear({ method, params });
@@ -42,6 +42,9 @@ export function fakeApp(app) {
   function draw(route) {
     const page = app.pages[route];
     document.getElementById('screen').innerHTML = typeof page === 'function' ? page() : page ?? '<div data-screen="missing"><p>Not found</p></div>';
+    const wide = app.widths?.[route];
+    if (wide) document.documentElement.dataset.scrollWidth = String(wide);
+    else delete document.documentElement.dataset.scrollWidth;
   }
 
   function screenTo(route) {
@@ -51,10 +54,14 @@ export function fakeApp(app) {
       setTimeout(() => draw(route), delay);
     } else draw(route);
     for (const fetched of app.fetches?.[route] ?? [route]) request(fetched);
+    for (const fetched of app.hanging?.[route] ?? []) request(fetched, 'GET', 200, false);
     const moving = app.moving?.[route];
     if (moving) {
       env.animations.push({ playState: 'running', effect: { getComputedTiming: () => ({ endTime: moving }) } });
-      setTimeout(() => env.animations.splice(0), moving);
+      setTimeout(() => {
+        env.animations.splice(0);
+        if (app.after?.[route]) document.getElementById('screen').innerHTML = app.after[route];
+      }, moving);
     }
   }
 
@@ -127,6 +134,8 @@ export function fakeApp(app) {
     'Page.captureScreenshot': () => ({ data: shotBytes.toString('base64') }),
     'Emulation.setDeviceMetricsOverride': (params) => {
       seen.metrics.push(params.width);
+      seen.viewports.push(params);
+      env.window.happyDOM.setViewport({ width: params.width, height: params.height });
       return {};
     },
     'Emulation.setEmulatedMedia': (params) => {
@@ -138,6 +147,7 @@ export function fakeApp(app) {
     'DOM.setFileInputFiles': ({ nodeId, files }) => {
       seen.uploads.push(files.length);
       if (app.badUpload === nodeId) throw new Error('file input is gone');
+      app.onUpload?.({ document });
       return {};
     },
   };

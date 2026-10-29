@@ -177,7 +177,7 @@ export function checks() {
     for (let up = node; up; up = up.parentElement) {
       if (getComputedStyle(up).backgroundImage !== 'none') return null;
       const color = channels(getComputedStyle(up).backgroundColor);
-      if (color && color[3] > 0) layers.push(color);
+      if (color) layers.push(color);
       if (color && color[3] >= 1) return layers.reverse().reduce((under, top) => over(top, under));
     }
     return layers.reverse().reduce((under, top) => over(top, under), page());
@@ -208,39 +208,31 @@ export function checks() {
     }
     return null;
   };
+  const beyond = (box, bounds) => box.right > bounds.right + 1 || box.left < bounds.left - 1;
   const spills = (node) => {
     const edge = clipper(node);
-    if (!edge || ellipsed(edge)) return false;
-    const box = node.getBoundingClientRect();
-    const bounds = edge.getBoundingClientRect();
-    return box.right > bounds.right + 1 || box.left < bounds.left - 1;
+    return Boolean(edge) && !ellipsed(edge) && beyond(node.getBoundingClientRect(), edge.getBoundingClientRect());
+  };
+  const textBox = (child) => {
+    const range = document.createRange();
+    range.selectNodeContents(child);
+    return range.getBoundingClientRect();
   };
   const outgrows = (node) => {
     const style = getComputedStyle(node);
-    if (style.display === 'inline' || style.overflowX !== 'visible') return false;
-    const box = node.getBoundingClientRect();
-    const range = document.createRange();
-    return [...node.childNodes].filter((child) => child.nodeType === Node.TEXT_NODE && child.textContent.trim()).some((child) => {
-      range.selectNodeContents(child);
-      const text = range.getBoundingClientRect();
-      return text.right > box.right + 1 || text.left < box.left - 1;
-    });
+    return style.display !== 'inline' && style.overflowX === 'visible'
+      && [...node.childNodes].filter((child) => child.nodeType === Node.TEXT_NODE && child.textContent.trim()).some((child) => beyond(textBox(child), node.getBoundingClientRect()));
   };
   const cut = (node) => !ellipsed(node) && ((getComputedStyle(node).overflowX !== 'visible' && node.scrollWidth > node.clientWidth + 1) || spills(node) || outgrows(node));
-  const scrolled = (node) => {
-    for (let up = node.parentElement; up; up = up.parentElement) {
-      const overflow = getComputedStyle(up).overflowX;
-      if (overflow === 'auto' || overflow === 'scroll') return true;
-    }
-    return false;
+  const ancestors = (node) => {
+    const chain = [];
+    for (let up = node.parentElement; up; up = up.parentElement) chain.push(up);
+    return chain;
   };
-  const inView = (box) => box.width > 0 && box.height > 0 && box.top < window.innerHeight && box.bottom > 0;
-  const crosses = (one, two) => {
-    if (one.node.contains(two.node) || two.node.contains(one.node)) return false;
-    const width = Math.min(one.box.right, two.box.right) - Math.max(one.box.left, two.box.left);
-    const height = Math.min(one.box.bottom, two.box.bottom) - Math.max(one.box.top, two.box.top);
-    return width > marks.overlap && height > marks.overlap;
-  };
+  const scrolled = (node) => ancestors(node).some((up) => ['auto', 'scroll'].includes(getComputedStyle(up).overflowX));
+  const inView = (box) => box.top < window.innerHeight && box.bottom > 0;
+  const crosses = (one, two) => !nested(one, two) && Math.min(one.box.right, two.box.right) - Math.max(one.box.left, two.box.left) > marks.overlap
+    && Math.min(one.box.bottom, two.box.bottom) - Math.max(one.box.top, two.box.top) > marks.overlap;
   const overlapsOf = (boxes, index) => boxes.slice(index + 1).filter((other) => crosses(boxes[index], other)).map((other) => `${named(boxes[index].node)} over ${named(other.node)}`);
   const pressable = (node) => node.matches(tools().clickable);
   const reddish = (node) => {
@@ -285,7 +277,7 @@ export function checks() {
   };
   const uneven = (row) => {
     const centers = [...row.children].filter((child) => shown(child) && pressable(child)).map(centerOf);
-    return centers.length > 1 && Math.max(...centers) - Math.min(...centers) > marks.rowSkew;
+    return Math.max(...centers) - Math.min(...centers) > marks.rowSkew;
   };
   const sized = () => tools().nodes().filter((node) => getComputedStyle(node).display !== 'inline').map((node) => ({ node, box: node.getBoundingClientRect() })).filter(({ box }) => box.width > 0);
   const sizeOf = ({ node, box }) => `${named(node)} ${Math.round(box.width)}×${Math.round(box.height)}`;
@@ -453,6 +445,17 @@ export function checks() {
       return `${location.href} ${html.length} ${hash}`;
     },
   };
+}
+
+export function answered({ url, at, near }) {
+  return performance.getEntriesByName(url).some((entry) => entry.responseEnd > 0 && Math.abs(performance.timeOrigin + entry.startTime - at) < near);
+}
+
+export function markAssistant() {
+  for (const node of document.querySelectorAll('[data-crawl]')) node.removeAttribute('data-crawl');
+  const node = document.querySelector('[data-testid="assistant-open"]');
+  node?.setAttribute('data-crawl', '');
+  return node?.checkVisibility() ?? false;
 }
 
 export function aim(selector) {

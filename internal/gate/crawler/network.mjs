@@ -1,5 +1,6 @@
 import { limits, longLived } from './config.mjs';
 import { call, inPage } from './cdp.mjs';
+import { answered } from './page.mjs';
 import { firstLine, note, problem, sentBy } from './record.mjs';
 
 const serverError = 500;
@@ -78,9 +79,7 @@ export function listen(crawl) {
   on('Network.loadingFailed', (event) => failed(crawl, event));
 }
 
-const finishedInPage = (crawl, sent) =>
-  inPage(crawl, ({ url, at, near }) => performance.getEntriesByName(url).some((entry) => entry.responseEnd > 0 && Math.abs(performance.timeOrigin + entry.startTime - at) < near),
-    { url: sent.url, at: sent.at, near: limits.caused });
+const finishedInPage = (crawl, sent) => inPage(crawl, answered, { url: sent.url, at: sent.at, near: limits.caused });
 
 export async function stuck(crawl) {
   const waiting = [];

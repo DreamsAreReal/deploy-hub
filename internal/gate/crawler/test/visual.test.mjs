@@ -98,3 +98,13 @@ test('without a baseline nothing is compared, and a baseline that never came is 
   await compareShots(empty.crawl);
   assert.deepEqual([empty.crawl.problems, empty.crawl.notes], [[], []]);
 });
+
+test('an accepted screen with one changed shot is not stale, and comparing twice reuses the visual folder', async () => {
+  const { crawl } = comparing({
+    'board-360.png': { differ: 500, total, diff: '' },
+    'board-390-dark.png': { differ: 0, total, diff: '' },
+  }, ['board'], ['board-360.png', 'board-390-dark.png']);
+  await compareShots(crawl);
+  await compareShots(crawl);
+  assert.deepEqual(crawl.problems, []);
+});

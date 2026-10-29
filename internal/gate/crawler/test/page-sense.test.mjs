@@ -39,7 +39,7 @@ test('a list of four rows or more with a long description per row is heavy, fift
     <ul data-testid="a" aria-label="tasks">${[21, 21, 21, 21].map(row).join('')}</ul>
     <ul data-testid="b" aria-label="notes">${[20, 20, 20, 20].map(row).join('')}</ul>
     <ul data-testid="c" aria-label="three">${[30, 30, 30].map(row).join('')}</ul>
-    <ol data-testid="d" aria-label="mixed">${[26, 1, 25, 2].map(row).join('')}</ol>
+    <ol data-testid="d" aria-label="mixed">${[30, 25, 1, 2].map(row).join('')}</ol>
     <ul data-testid="e" aria-label="plain">${Array.from({ length: 4 }, () => `<li>${words(21)}</li>`).join('')}</ul>
     <ul data-testid="f" aria-label="long">${Array.from({ length: 15 }, () => '<li>x</li>').join('')}</ul>
     <ul data-testid="g" aria-label="almost">${Array.from({ length: 14 }, () => '<li>x</li>').join('')}</ul>
@@ -83,7 +83,10 @@ test('a button that moves when its field loses focus jumps, a still or removed o
       <button id="gone" data-box="100 0 40 40">Gone</button><button hidden data-box="150 0 40 40">Hidden</button></form>
     <div><textarea aria-label="body" id="body"></textarea><button id="send" data-box="0 100 40 40">Send</button></div>
     <div><input aria-label="off" disabled><button id="near-off" data-box="0 200 40 40">Near</button></div>
-    <div><input aria-label="fixed" readonly><button data-box="0 300 40 40">Fixed</button></div>`));
+    <div><input aria-label="fixed" id="fixed" readonly><button id="fixed-button" data-box="0 300 40 40">Fixed</button></div>
+    <div><input aria-label="secret" id="secret" hidden><button id="peek" data-box="0 400 40 40">Peek</button></div>`));
+  env.document.getElementById('fixed').addEventListener('blur', () => env.document.getElementById('fixed-button').setAttribute('data-box', '9 300 40 40'));
+  env.document.getElementById('secret').addEventListener('blur', () => env.document.getElementById('peek').setAttribute('data-box', '9 400 40 40'));
   const title = env.document.getElementById('title');
   title.addEventListener('focus', () => env.document.getElementById('send').setAttribute('data-box', '9 9 40 40'));
   title.addEventListener('blur', () => {

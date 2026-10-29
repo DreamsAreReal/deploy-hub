@@ -82,6 +82,7 @@ test('answers of 5xx are problems, 4xx are notes and slow answers are told by wh
   fire('Network.responseReceived', { requestId: '9', response: { status: 399, url: 'https://app/redirect' } });
   fire('Network.responseReceived', { requestId: '9', response: { status: 499, url: 'https://app/closed' } });
   fire('Network.responseReceived', { requestId: '9', response: { status: 500, url: 'https://app/boom' } });
+  fire('Network.responseReceived', { requestId: '9', response: { status: 400, url: 'https://app/bad' } });
   t.mock.timers.tick(limits.slow);
   fire('Network.loadingFinished', { requestId: '4' });
   t.mock.timers.tick(1);
@@ -89,7 +90,8 @@ test('answers of 5xx are problems, 4xx are notes and slow answers are told by wh
   fire('Network.loadingFinished', { requestId: '3' });
   fire('Network.loadingFinished', { requestId: '8' });
   assert.deepEqual(kinds(crawl.problems), ['http-503: POST https://app/a → 503', 'http-500: GET https://app/boom → 500', 'slow: POST https://app/b took 3001 ms']);
-  assert.deepEqual(kinds(crawl.notes), ['http-404: GET https://app/gone → 404', 'http-499: GET https://app/closed → 499', 'slow-background: POST https://app/c took 3001 ms']);
+  assert.deepEqual(kinds(crawl.notes), ['http-404: GET https://app/gone → 404', 'http-499: GET https://app/closed → 499', 'http-400: GET https://app/bad → 400',
+    'slow-background: POST https://app/c took 3001 ms']);
   assert.equal(crawl.pending.size, 0);
 });
 
@@ -138,4 +140,6 @@ test('a hung request is told once and its late end becomes a note', async (t) =>
   fire('Network.requestWillBeSent', request('6', 'https://app/next', { loaderId: 'L9' }));
   await stuck(crawl);
   assert.equal(crawl.hung.size, 1);
+  assert.equal(crawl.problems.length, 1);
+  assert.equal(kinds(crawl.notes).at(-1), `background-hang: no answer in ${limits.hang} ms: https://app/next (Fetch by other)`);
 });

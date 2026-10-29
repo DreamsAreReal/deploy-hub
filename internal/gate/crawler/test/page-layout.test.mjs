@@ -174,3 +174,80 @@ test('a field alone in its row and narrower than 60% of its parent is narrow', (
     <div data-size="0 400 0 0"><input aria-label="hidden" hidden data-box="0 500 10 40"><input aria-label="shadow" data-box="0 500 100 40"><p hidden data-box="0 500 100 40">x</p></div>`));
   assert.deepEqual(window.checks.narrow(), ['input «alone»', 'input «padded»', 'input «touching»', 'input «shadow»']);
 });
+
+test('text a person cannot see because of opacity or visibility is not read', (t) => {
+  checking(t, screen('<p style="opacity: 0">undefined</p><div style="visibility: hidden"><p>NaN here</p></div><p>[object Object]</p>'));
+  assert.deepEqual(window.checks.garbage(), ['[object Object]']);
+});
+
+test('contrast counts translucent colours and layers and stops at the first opaque ground', (t) => {
+  const env = checking(t, screen(`
+    <p style="color: rgb(5, 5, 5)">near black</p><p style="color: rgba(255, 0, 0, 0.5)">half red</p>
+    <div style="background-color: rgba(0, 0, 0, 0.5)"><div style="background-color: rgba(255, 255, 255, 0.5)"><p style="color: rgb(80, 80, 80)">stacked</p></div></div>
+    <div style="background-image: url(/bg.png)"><div style="background-color: rgb(0, 0, 0)"><p style="color: rgb(90, 90, 90)">dark card</p></div></div>
+    <div style="background-color: transparent"><p style="color: rgb(0, 0, 0)">clear ground</p></div>`));
+  env.document.documentElement.dataset.bg = 'rgb(255, 255, 255)';
+  assert.deepEqual(window.checks.contrast(), [{ what: 'p «half red»', ratio: 2.44, need: 4.5 }, { what: 'p «stacked»', ratio: 4.4, need: 4.5 },
+    { what: 'p «dark card»', ratio: 3.04, need: 4.5 }]);
+});
+
+test('a translucent layer over a page without a colour keeps its own transparency', (t) => {
+  const env = checking(t, screen('<div style="background-color: rgba(255, 255, 255, 0.5)"><p style="color: rgba(255, 0, 0, 0.5)">veiled</p></div>'));
+  env.document.documentElement.dataset.bg = 'rgba(0, 0, 0, 0)';
+  assert.deepEqual(window.checks.contrast(), [{ what: 'p «veiled»', ratio: 3.14, need: 4.5 }]);
+});
+
+test('text one pixel past its clipping edge still fits and only text nodes can outgrow their box', (t) => {
+  checking(t, screen(`<div style="overflow-x: hidden" data-box="0 0 100 50"><span data-box="-1 0 50 20">flush</span><span data-box="0 20 101 20">snug</span></div>
+    <div data-box="0 100 100 20">ok <b data-text-box="0 100 150 20">wide child</b></div>`));
+  assert.deepEqual(window.checks.cut(), []);
+});
+
+test('text exactly at the bottom or top edge of the screen is out of view', (t) => {
+  checking(t, screen(`<p data-box="200 790 100 20">low</p><p data-box="200 800 100 20">lower</p>
+    <p data-box="200 -30 100 30">above</p><p data-box="200 -10 100 20">peek</p>`));
+  assert.deepEqual(window.checks.overlap(), []);
+});
+
+test('controls framed only by transparent borders do not count, and closeness is measured to the pixel', (t) => {
+  const framed = 'background-color: rgb(240, 240, 240)';
+  const ghost = 'border-top-width: 1px; border-right-width: 1px; border-bottom-width: 1px; border-left-width: 1px';
+  checking(t, screen(`
+    <button style="${ghost}" data-box="0 0 100 40">g1</button><button style="${framed}" data-box="0 42 100 40">g2</button>
+    <button style="${framed}" data-box="0 200 100 40">v1</button><button style="${framed}" data-box="0 239 100 40">v2</button>
+    <button style="${framed}" data-box="0 400 100 40">h1</button><button style="${framed}" data-box="103 432 100 40">h2</button>
+    <button style="${framed}" data-box="0 600 100 40">x1</button><button style="${framed}" data-box="99 600 100 40">x2</button>
+    <button style="${framed}" data-box="0 800 100 40">t1</button><button style="${framed}" data-box="0 840 100 40">t2</button>
+    <div role="button" style="${framed}" data-box="200 0 200 60">outer<button style="${framed}" data-box="200 60 200 0">edge</button></div>`));
+  assert.deepEqual(window.checks.cramped(), ['button «t1» and button «t2»']);
+});
+
+test('columns are measured from the left edge of the open area and need two members each', (t) => {
+  checking(t, `<div id="screen" data-box="10 0 400 800">
+    <p data-text-box="56 0 50 20">late1</p><p data-text-box="56 30 50 20">late2</p><p data-text-box="50 60 50 20">early1</p><p data-text-box="50 90 50 20">early2</p>
+    <p data-text-box="34 120 50 20">p34</p><span data-text-box="34 150 50 20">s34</span><p style="text-align: center" data-text-box="30 180 50 20">c30</p>
+    <p data-text-box="30 210 50 20">p30</p><p data-text-box="80 240 50 20"><b data-text-box="70 240 10 20">B</b> tail</p>
+    <p data-text-box="70 270 50 20">r70</p><p data-text-box="70 300 50 20">r70b</p><p data-text-box="72 330 50 20">r72</p><p data-text-box="72 360 50 20">r72b</p>
+    <p data-text-box="74 390 50 20">r74</p><p data-text-box="74 420 50 20">r74b</p><p data-text-box="75 450 50 20">r75</p><p data-text-box="75 480 50 20">r75b</p>
+  </div><div id="sheet" hidden></div>`);
+  assert.deepEqual(window.checks.edges(), ['p «early1» at 50px, p «late1» at 56px', 'p «r70» at 70px, p «r72» at 72px', 'p «r72» at 72px, p «r74» at 74px']);
+});
+
+test('buttons of different heights whose middles line up are an even row', (t) => {
+  checking(t, screen('<div data-testid="row" style="display: flex"><button data-box="0 0 40 40">tall</button><button data-box="50 5 40 30">short</button></div>'));
+  assert.deepEqual(window.checks.rows(), []);
+});
+
+test('a placeholder is measured against the room left by the padding and the lines a text area shows', (t) => {
+  checking(t, screen(`
+    <input aria-label="padded" placeholder="${'x'.repeat(18)}" style="padding-left: 5px; padding-right: 5px" data-size="0 150 0 0">
+    <textarea aria-label="roomy" placeholder="${'x'.repeat(13)}" style="padding-top: 20px; padding-bottom: 20px; line-height: 20px" data-size="0 100 0 60"></textarea>
+    <textarea aria-label="almost" placeholder="${'x'.repeat(19)}" style="line-height: 20px" data-size="0 100 0 39"></textarea>
+    <textarea aria-label="normal" placeholder="${'x'.repeat(30)}" data-size="0 100 0 50"></textarea>`));
+  assert.deepEqual(window.checks.placeholders(), ['input «padded»', 'textarea «roomy»', 'textarea «normal»']);
+});
+
+test('a word mixing alphabets is found whichever alphabet comes first', (t) => {
+  checking(t, screen('<p>Отчётlog</p><p>logОтчёт</p><p>Отчёт log</p>'));
+  assert.deepEqual(window.checks.alphabets(), ['Отчётlog', 'logОтчёт']);
+});

@@ -74,7 +74,7 @@ test('a route remembers the screen it was found on unless that would loop back',
   assert.deepEqual(crawl.queue, ['/ui/epics/7/tasks', '/ui/home']);
   assert.ok(leadsTo(crawl, '/ui/epics/7/tasks', '/ui/elsewhere'));
   crawl.found.set('/ui/elsewhere', '/ui/epics/7/tasks');
-  assert.ok(!leadsTo(crawl, '/ui/epics/7/tasks', '/ui/nowhere'));
+  assert.equal(leadsTo(crawl, '/ui/epics/7/tasks', '/ui/nowhere'), false);
 });
 
 test('a screen behind an id is guessed from an id seen in another route', () => {

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { start } from '../browser.mjs';
-import { chromeFlags, limits, viewport } from '../config.mjs';
+import { chromeFlags, limits } from '../config.mjs';
 import { checks, frozenClock, helpers } from '../page.mjs';
 import { fakeCrawl, fakeLaunch, socketClass } from './fake.mjs';
 
@@ -27,7 +27,7 @@ test('chrome starts headless with its own profile, denies what the crawl must no
   assert.deepEqual(sent[4].params, { targetId: 'T1', flatten: true });
   assert.equal(sent[4].sessionId, undefined);
   assert.equal(sent[5].sessionId, 'S1');
-  assert.deepEqual(sent[9].params, viewport);
+  assert.deepEqual(sent[9].params, { width: 420, height: 860, deviceScaleFactor: 1, mobile: true });
   assert.deepEqual(sent.slice(10).map((message) => message.params.source), [`(${frozenClock})(1893490200000)`, `(${helpers})()`, `(${checks})()`,
     `performance.setResourceTimingBufferSize(${limits.timings})`]);
   assert.ok(crawl.cdp.handlers.has('Network.requestWillBeSent'));

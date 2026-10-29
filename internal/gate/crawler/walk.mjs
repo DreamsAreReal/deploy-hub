@@ -5,6 +5,7 @@ import { alive, call, goto, inPage, tap } from './cdp.mjs';
 import { stuck } from './network.mjs';
 import { firstLine, nameOf, newCrawl, note, problem, report, serverErrors, tell } from './record.mjs';
 import { discover, guessMissing, keyOf, schedule, seen, shape, skipped, widen } from './routes.mjs';
+import { markAssistant } from './page.mjs';
 import { compareShots, screenshot } from './visual.mjs';
 
 const halves = 2;
@@ -36,11 +37,12 @@ async function settle(crawl) {
 async function shown(crawl, route) {
   const id = crawl.config.screens.get(shape(route))?.id;
   const until = Date.now() + limits.hang;
-  while (Date.now() < until) {
-    if ((await inPage(crawl, () => window.crawl?.screen())) === id) return true;
-    await sleep(limits.poll);
+  let there = false;
+  while (!there && Date.now() < until) {
+    there = (await inPage(crawl, () => window.crawl?.screen())) === id;
+    if (!there) await sleep(limits.poll);
   }
-  return false;
+  return there;
 }
 
 async function arrive(crawl, route, passed = new Set()) {
@@ -69,10 +71,13 @@ async function open(crawl, route) {
 async function click(crawl, target) {
   crawl.steps.push(`click ${nameOf(target)}`);
   const marked = await inPage(crawl, (wanted) => window.crawl.mark(wanted), target);
-  if (!marked || skipped(crawl, marked)) {
-    crawl.log.write(`  ${marked ? 'unsafe now' : 'gone'}: ${nameOf(target)}\n`);
-    return false;
-  }
+  const pressable = Boolean(marked) && !skipped(crawl, marked);
+  if (pressable) await pressMarked(crawl, target, marked);
+  else crawl.log.write(`  ${marked ? 'unsafe now' : 'gone'}: ${nameOf(target)}\n`);
+  return pressable;
+}
+
+async function pressMarked(crawl, target, marked) {
   crawl.clicks += 1;
   const before = await inPage(crawl, () => window.checks.signature());
   const sent = crawl.requests;
@@ -82,7 +87,6 @@ async function click(crawl, target) {
   if (marked.menu) await menuKept(crawl, marked);
   const alert = await inPage(crawl, () => window.crawl.alert());
   if (alert) note(crawl, 'alert', alert);
-  return true;
 }
 
 async function deadCheck(crawl, target, before) {
@@ -162,7 +166,8 @@ async function makeSense(crawl, route, overlay) {
 
 function titleGaps(crawl) {
   const gaps = [...crawl.gaps].sort((one, two) => one[1] - two[1]);
-  if (gaps.length > 1 && gaps.at(-1)[1] - gaps[0][1] > titleSpread) problem(crawl, 'uneven-title-gap', `${gaps[0][1]} px under the title on ${gaps[0][0]}, ${gaps.at(-1)[1]} px on ${gaps.at(-1)[0]}`);
+  const [low, high] = [gaps[0], gaps.at(-1)];
+  if (high && high[1] - low[1] > titleSpread) problem(crawl, 'uneven-title-gap', `${low[1]} px under the title on ${low[0]}, ${high[1]} px on ${high[0]}`);
 }
 
 function mixedWords(crawl) {
@@ -213,12 +218,7 @@ async function narrowPass(crawl) {
 async function chatAt(crawl, size) {
   const route = crawl.visited.values().next().value;
   if (!route || !(await open(crawl, route)).ok) return;
-  const frog = await inPage(crawl, () => {
-    for (const node of document.querySelectorAll('[data-crawl]')) node.removeAttribute('data-crawl');
-    const node = document.querySelector('[data-testid="assistant-open"]');
-    node?.setAttribute('data-crawl', '');
-    return node?.checkVisibility() ?? false;
-  });
+  const frog = await inPage(crawl, markAssistant);
   if (!frog) return;
   crawl.steps.push('open the assistant chat');
   await tap(crawl, '[data-crawl]', 'assistant-open');

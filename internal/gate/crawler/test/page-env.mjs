@@ -43,18 +43,27 @@ export function pageEnv(html, { url = 'https://app/ui/home', width = 400, height
   window.Element.prototype.getBoundingClientRect = function box() {
     return boxOf(this);
   };
-  window.Element.prototype.checkVisibility = function visible() {
-    return !this.closest('[hidden], [data-invisible]') && this.isConnected;
+  const lineage = (element) => {
+    const chain = [];
+    for (let node = element; node; node = node.parentElement) chain.push(computed(node));
+    return chain;
+  };
+  window.Element.prototype.checkVisibility = function visible(options = {}) {
+    const chain = lineage(this);
+    const faded = options.checkOpacity && chain.some((style) => style.opacity === '0');
+    const veiled = options.checkVisibilityCSS && chain.some((style) => style.visibility === 'hidden');
+    return !this.closest('[hidden], [data-invisible]') && this.isConnected && !faded && !veiled;
   };
   window.Element.prototype.scrollIntoView = function scrolled(options) {
     this.scrolledInto = options;
   };
+  const ownerOf = (range) => (range.startContainer?.nodeType === window.Node.TEXT_NODE ? range.startContainer.parentElement : range.startContainer);
   window.Range.prototype.getBoundingClientRect = function textBox() {
-    const owner = this.startContainer?.parentElement ?? this.startContainer;
+    const owner = ownerOf(this);
     return boxOf(owner, owner?.hasAttribute('data-text-box') ? 'data-text-box' : 'data-box');
   };
   window.Range.prototype.getClientRects = function textRects() {
-    const owner = this.startContainer?.parentElement ?? this.startContainer;
+    const owner = ownerOf(this);
     return owner?.hasAttribute('data-text-box') ? [boxOf(owner, 'data-text-box')] : [];
   };
   window.HTMLCanvasElement.prototype.getContext = () => ({ font: '', measureText: (text) => ({ width: text.length * 8 }) });
@@ -65,7 +74,7 @@ export function pageEnv(html, { url = 'https://app/ui/home', width = 400, height
   }
   document.getAnimations = () => animations;
   document.elementFromPoint = () => null;
-  Object.defineProperty(document.documentElement, 'scrollWidth', { configurable: true, get: () => Number(document.documentElement.dataset.scrollWidth ?? width) });
+  Object.defineProperty(document.documentElement, 'scrollWidth', { configurable: true, get: () => Number(document.documentElement.dataset.scrollWidth ?? window.innerWidth) });
   const names = ['window', 'document', 'location', 'Node', 'Event', 'HTMLElement', 'getComputedStyle', 'requestAnimationFrame', 'PerformanceObserver'];
   const saved = new Map(names.map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)]));
   const values = { window, document, location: window.location, Node: window.Node, Event: window.Event, HTMLElement: window.HTMLElement, getComputedStyle: computed,

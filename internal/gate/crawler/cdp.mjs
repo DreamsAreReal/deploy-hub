@@ -21,8 +21,8 @@ export function deliver(cdp, message) {
 export async function connect(url, Socket = WebSocket) {
   const socket = new Socket(url);
   await new Promise((resolve, reject) => {
-    socket.addEventListener('open', resolve, { once: true });
-    socket.addEventListener('error', reject, { once: true });
+    socket.addEventListener('open', resolve);
+    socket.addEventListener('error', reject);
   });
   const cdp = { socket, next: 0, calls: new Map(), handlers: new Map(), session: undefined };
   socket.addEventListener('message', (event) => deliver(cdp, JSON.parse(event.data)));
