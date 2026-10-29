@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -103,9 +104,13 @@ func TestUISeedsTheStandAndCrawlsItQuickly(t *testing.T) {
 		}
 	}
 	testutil.True(t, seedAt >= 0 && seedAt < standAt, "the seed runs before the stand starts")
-	written, err := os.ReadFile(filepath.Join(ws.Out, crawlerDir, crawler.File))
+	modules, err := crawler.Modules()
 	testutil.NoErr(t, err)
-	testutil.True(t, bytes.Equal(written, crawler.Script) && len(written) > 0, "the hub's own crawler is laid out for the browser container")
+	for _, module := range modules {
+		written, err := os.ReadFile(filepath.Join(ws.Out, crawlerDir, module.Name))
+		testutil.NoErr(t, err)
+		testutil.True(t, bytes.Equal(written, module.Body), module.Name+" of the hub's own crawler is laid out for the browser container")
+	}
 }
 
 func TestUIFailsWhenItCannotLayOutItsCrawler(t *testing.T) {
@@ -113,9 +118,28 @@ func TestUIFailsWhenItCannotLayOutItsCrawler(t *testing.T) {
 	blocked := filepath.Join(t.TempDir(), "file")
 	testutil.NoErr(t, os.WriteFile(blocked, nil, 0o600))
 	ws.Out = blocked
-	out := UI(context.Background(), ws)
+	taken := uiApp(t, &crawlSim{report: cleanReport})
+	testutil.Mkdir(t, filepath.Join(taken.Out, crawlerDir, crawler.File))
+	for _, app := range []gate.Workspace{ws, taken} {
+		out := UI(context.Background(), app)
+		testutil.Equal(t, out.Status, gate.StatusFail)
+		testutil.Equal(t, out.Reason, reasonNoCrawl)
+	}
+}
+
+func TestUIFailsWhenItCannotLoadItsCrawler(t *testing.T) {
+	loadCrawler = func() ([]crawler.Module, error) { return nil, errors.New("embedded crawler unreadable") }
+	t.Cleanup(func() { loadCrawler = crawler.Modules })
+	out := UI(context.Background(), uiApp(t, &crawlSim{report: cleanReport}))
 	testutil.Equal(t, out.Status, gate.StatusFail)
-	testutil.Equal(t, out.Reason, reasonNoCrawl)
+	testutil.Contains(t, strings.Join(out.Findings, " ")+out.Reason, reasonNoCrawl)
+}
+
+func keyFor(t *testing.T, ws gate.Workspace) string {
+	t.Helper()
+	modules, err := crawler.Modules()
+	testutil.NoErr(t, err)
+	return (&Stage{ws: ws, crawler: modules}).renderKey()
 }
 
 func TestUIFailsOnTheProblemsOfTheReportAndCrawlsFullyInAFullGate(t *testing.T) {
@@ -157,7 +181,7 @@ func visualApp(t *testing.T, list string) gate.Workspace {
 func TestUIComparesWithTheDeployedShotsAndPassesTheIntendedChanges(t *testing.T) {
 	ws := visualApp(t, "changes:\n  - screen: board\n    task: 809\n  - screen: memory-topic\n    task: 782\n")
 	ws.UIBaseline = t.TempDir()
-	key := (&Stage{ws: ws}).renderKey()
+	key := keyFor(t, ws)
 	testutil.Write(t, filepath.Join(ws.UIBaseline, RenderKeyFile), key+"\n")
 	out := UI(context.Background(), ws)
 	testutil.Equal(t, out.Status, gate.StatusPass)
@@ -176,7 +200,14 @@ func TestUIComparesWithTheDeployedShotsAndPassesTheIntendedChanges(t *testing.T)
 	}
 	browser := visualApp(t, "")
 	browser.Policy.Images.Browser = "browser@sha256:3"
-	testutil.True(t, (&Stage{ws: browser}).renderKey() != key, "a new browser image changes the key")
+	testutil.True(t, keyFor(t, browser) != key, "a new browser image changes the key")
+	modules, err := crawler.Modules()
+	testutil.NoErr(t, err)
+	for index := range modules {
+		edited := slices.Clone(modules)
+		edited[index].Body = append(slices.Clone(edited[index].Body), ' ')
+		testutil.True(t, (&Stage{ws: ws, crawler: edited}).renderKey() != key, "a change of "+modules[index].Name+" changes the key")
+	}
 }
 
 func exists(path string) bool {

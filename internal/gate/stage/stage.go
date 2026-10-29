@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/crawler"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
 )
 
@@ -55,6 +56,7 @@ type Stage struct {
 	Name     string
 	Network  string
 	HostAddr string
+	crawler  []crawler.Module
 }
 
 type State struct {

@@ -24,6 +24,7 @@ import (
 
 const (
 	ValueProblems   = "problems"
+	keyTail         = 2
 	purposeUI       = "ui"
 	crawlSuffix     = "-crawl"
 	crawlSrc        = "/src"
@@ -60,6 +61,8 @@ const (
 	screenIDLimit   = 80
 	RenderKeyFile   = "render-key"
 )
+
+var loadCrawler = crawler.Modules
 
 var screenID = regexp.MustCompile(fmt.Sprintf(`^[a-z0-9][a-z0-9-]{0,%d}$`, screenIDLimit-1))
 
@@ -162,7 +165,17 @@ func (s *Stage) crawlerScripts() (string, error) {
 	if err := os.MkdirAll(dir, crawlerMode); err != nil {
 		return "", err
 	}
-	return dir, os.WriteFile(filepath.Join(dir, crawler.File), crawler.Script, crawlerFileMode)
+	modules, err := loadCrawler()
+	if err != nil {
+		return "", err
+	}
+	s.crawler = modules
+	for _, module := range modules {
+		if err := os.WriteFile(filepath.Join(dir, module.Name), module.Body, crawlerFileMode); err != nil {
+			return "", err
+		}
+	}
+	return dir, nil
 }
 
 func (s *Stage) crawlArgs(name, scripts string, accepted []string) []string {
@@ -186,7 +199,11 @@ func (s *Stage) crawlArgs(name, scripts string, accepted []string) []string {
 
 func (s *Stage) renderKey() string {
 	sum := sha256.New()
-	for _, part := range [][]byte{crawler.Script, []byte(s.ws.Policy.Images.Browser), []byte(FrozenAt)} {
+	parts := make([][]byte, 0, len(s.crawler)+len(s.crawler)+keyTail)
+	for _, module := range s.crawler {
+		parts = append(parts, []byte(module.Name), module.Body)
+	}
+	for _, part := range append(parts, []byte(s.ws.Policy.Images.Browser), []byte(FrozenAt)) {
 		sum.Write(part)
 		sum.Write([]byte{0})
 	}
