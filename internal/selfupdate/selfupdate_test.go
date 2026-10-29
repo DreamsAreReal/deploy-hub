@@ -1,6 +1,7 @@
 package selfupdate
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -44,6 +45,9 @@ const (
 	oldBinary   = "old binary"
 	latest      = "/repos/" + repo + "/releases/latest"
 	runsPath    = "/repos/" + repo + "/actions/workflows/ci.yml/runs"
+	runID       = 77
+	builtPath   = "/repos/" + repo + "/actions/runs/77/artifacts"
+	zipPath     = "/repos/" + repo + "/actions/artifacts/5/zip"
 	assets      = "/repos/" + repo + "/releases/assets/"
 	binaryPath  = assets + "11"
 	sumPath     = assets + "12"
@@ -102,10 +106,30 @@ func releaseJSON(h *hub, tag, target string) string {
 }
 
 func runsJSON(commit, branch, event, conclusion, path string) string {
-	data, _ := json.Marshal(map[string]any{"workflow_runs": []map[string]string{
-		{"head_sha": commit, "head_branch": branch, "event": event, "conclusion": conclusion, "path": path},
+	data, _ := json.Marshal(map[string]any{"workflow_runs": []map[string]any{
+		{"id": runID, "head_sha": commit, "head_branch": branch, "event": event, "conclusion": conclusion, "path": path},
 	}})
 	return string(data)
+}
+
+func builtJSON(h *hub, name string, expired bool) string {
+	data, _ := json.Marshal(map[string]any{"artifacts": []map[string]any{
+		{"name": "gate-reports", "expired": false, "archive_download_url": h.srv.URL + "/repos/" + repo + "/actions/artifacts/4/zip"},
+		{"name": name, "expired": expired, "archive_download_url": h.srv.URL + zipPath},
+	}})
+	return string(data)
+}
+
+func zipOf(t testing.TB, name, body string) string {
+	t.Helper()
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	f, err := w.Create(name)
+	testutil.NoErr(t, err)
+	_, err = f.Write([]byte(body))
+	testutil.NoErr(t, err)
+	testutil.NoErr(t, w.Close())
+	return buf.String()
 }
 
 type fixture struct {
@@ -142,6 +166,8 @@ func newFixture(t *testing.T) *fixture {
 		sumPath:     sum(newBinary) + "  deploy-hub-linux-amd64\n",
 		comparePath: `{"status":"ahead"}`,
 	}
+	h.routes[builtPath] = builtJSON(h, AssetBinary, false)
+	h.routes[zipPath] = zipOf(t, BuiltEntry, newBinary)
 	dir := t.TempDir()
 	testutil.Write(t, filepath.Join(dir, "deploy-hub"), oldBinary)
 	f := &fixture{hub: h, metrics: &capture{}, out: &bytes.Buffer{}}
@@ -246,7 +272,19 @@ func TestRefusesReleasesThatAreNotGatedBuilds(t *testing.T) {
 		"run of another commit": {func(f *fixture) {
 			f.hub.routes[runsPath] = runsJSON(oldCommit, mainBranch, pushEvent, success, ".github/workflows/ci.yml")
 		}, ErrNotGated},
-		"substituted binary":    {func(f *fixture) { f.hub.routes[binaryPath] = forged }, ErrChecksum},
+		"substituted binary": {func(f *fixture) { f.hub.routes[binaryPath] = forged }, ErrChecksum},
+		"binary and checksum both replaced": {func(f *fixture) {
+			f.hub.routes[binaryPath], f.hub.routes[sumPath] = forged, sum(forged)
+		}, ErrNotBuilt},
+		"build artifact expired":  {func(f *fixture) { f.hub.routes[builtPath] = builtJSON(f.hub, AssetBinary, true) }, ErrNotBuilt},
+		"build artifact missing":  {func(f *fixture) { f.hub.routes[builtPath] = builtJSON(f.hub, "other", false) }, ErrNotBuilt},
+		"build artifact not zip":  {func(f *fixture) { f.hub.routes[zipPath] = garbage }, ErrNotBuilt},
+		"build artifact is other": {func(f *fixture) { f.hub.routes[zipPath] = zipOf(t, "notes.txt", newBinary) }, ErrNotBuilt},
+		"no artifact list":        {func(f *fixture) { delete(f.hub.routes, builtPath) }, ErrHTTP},
+		"no artifact download":    {func(f *fixture) { delete(f.hub.routes, zipPath) }, ErrHTTP},
+		"artifact elsewhere": {func(f *fixture) {
+			f.hub.routes[builtPath] = strings.ReplaceAll(builtJSON(f.hub, AssetBinary, false), f.hub.srv.URL, "https://evil.example")
+		}, ErrNotBuilt},
 		"checksum not a sha256": {func(f *fixture) { f.hub.routes[sumPath] = "nope" }, ErrSumFormat},
 		"binary missing":        {func(f *fixture) { delete(f.hub.routes, binaryPath) }, ErrHTTP},
 		"checksum missing":      {func(f *fixture) { delete(f.hub.routes, sumPath) }, ErrHTTP},
@@ -397,7 +435,7 @@ func TestWrongTokenIsReportedAsUnauthorized(t *testing.T) {
 func TestEveryRequestCarriesTheToken(t *testing.T) {
 	f := newFixture(t)
 	testutil.NoErr(t, f.u.Run(context.Background(), ""))
-	testutil.Equal(t, len(f.hub.auth), 5)
+	testutil.Equal(t, len(f.hub.auth), 7)
 	for _, a := range f.hub.auth {
 		testutil.Equal(t, a, "Bearer "+pat)
 	}

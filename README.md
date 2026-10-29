@@ -720,7 +720,8 @@ root SSH to. `<vps>` is the server address.
    `bootstrap` reads the token over root SSH (`VPS_HOST_ALIAS`, default
    `vpn`), takes the newest release (or the given one) and makes the same
    checks as `self-update`: tag `sha-<40 hex>` targeting that commit, a green
-   `ci.yml` push run on `main` for it, the published sha256. It streams the
+   `ci.yml` push run on `main` for it, the published sha256, the binary that
+   run built. It streams the
    binary to `/opt/deploy-hub/bin/deploy-hub.new`, moves it into place only if
    it prints that commit from `version`, and removes it otherwise. It refuses
    to run when `/opt/deploy-hub/bin/deploy-hub` already exists (the hub
@@ -827,6 +828,13 @@ that passed the full gate on `main`:
      replaces the branch protection the private repo lacks on the free plan.
      A release pinned by tag skips this check (that is how a rollback works);
    - the downloaded binary matches the published sha256;
+   - the binary is byte for byte the one that green run built: its artifact
+     `deploy-hub-linux-amd64` (step `Keep the hub binary`, a zip holding
+     `deploy-hub`) is listed by the run, not expired, and served by the API of
+     this repo. A release token can replace the release assets, but not the
+     artifacts of a run, so a binary built anywhere else is refused even with
+     a matching sha256 file. When the artifact has expired (90 days by default),
+     that release can no longer be installed;
    - the candidate (`/opt/deploy-hub/bin/deploy-hub.new`) reports that commit
      from `version`.
 4. It keeps the current binary as `deploy-hub.prev`, renames the candidate into
@@ -1751,8 +1759,8 @@ rulesets or required checks: anyone with write access can merge or push to
   gate is gated again on the push and never deployed when it fails.
 - **The hub.** `self-update` installs only a release `sha-<commit>` of a commit
   with a successful `ci.yml` push run on `main` whose binary matches the
-  published sha256, and only one that descends from the installed commit
-  (`TestRefusesReleasesThatAreNotGatedBuilds`). The release is published only
+  published sha256 and the artifact that run built, and only one that
+  descends from the installed commit (`TestRefusesReleasesThatAreNotGatedBuilds`). The release is published only
   by that run after its gate passed.
 - **Residual risk.** App deploys use `deploy.yml` of the hub's `main` as it is
   at that moment: a change to `deploy.yml` that reaches `main` before its own

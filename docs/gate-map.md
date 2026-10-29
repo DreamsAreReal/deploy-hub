@@ -30,7 +30,7 @@ none of them is weakened to make a release pass.
 | change behaviour without updating the docs | — | **no** (#822: touched modules vs touched docs) |
 | hard-code domain logic into the assistant | — | **no** (#822: heuristics on assistant code) |
 | deploy without the gate | deploy credentials are used only by the hub workflow after the gate | partly (#812: deploy step separated from the checkout, #814: one deploy key per app) |
-| replace the hub binary | self-update checks the release commit | partly (#813: verify the binary's signature) |
+| replace the hub binary | self-update installs a release only when the binary is byte for byte the artifact its green `ci.yml` run on `main` built; a release token cannot change run artifacts | yes (#813) |
 
 Speed matters as much: the tasks gate takes 3.3–5.4 h today. New checks run on what
 changed and in parallel with the heavy ones; a check that slows every release has to
