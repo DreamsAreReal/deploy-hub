@@ -37,35 +37,36 @@ const (
 )
 
 const (
-	assetURL    = "url"
-	pat         = "github_pat_good"
-	wrongPAT    = "github_pat_wrong"
-	noRuns      = `{"workflow_runs":[]}`
-	forged      = "evil"
-	behind      = `{"status":"behind"}`
-	assetName   = "name"
-	garbage     = "garbage"
-	repo        = "Owner/deploy-hub"
-	oldCommit   = "1111111111111111111111111111111111111111"
-	newCommit   = "2222222222222222222222222222222222222222"
-	newTag      = TagPrefix + newCommit
-	newBinary   = "new binary"
-	oldBinary   = "old binary"
-	latest      = "/repos/" + repo + "/releases/latest"
-	runsPath    = "/repos/" + repo + "/actions/workflows/ci.yml/runs"
-	runID       = 77
-	builtPath   = "/repos/" + repo + "/actions/runs/77/artifacts"
-	zipPath     = "/repos/" + repo + "/actions/artifacts/5/zip"
-	assets      = "/repos/" + repo + "/releases/assets/"
-	binaryPath  = assets + "11"
-	sumPath     = assets + "12"
-	comparePath = "/repos/" + repo + "/compare/" + oldCommit + "..." + newCommit
-	verify      = "visudo -cf"
-	version     = InstalledCommand + " version"
-	candidate   = CandidateCommand + " version"
-	syncCmd     = InstalledCommand + " sudoers-sync"
-	runnerCmd   = InstalledCommand + " ci-runner-sync"
-	setupCmd    = SetupCommand + " host"
+	assetURL        = "url"
+	pat             = "github_pat_good"
+	wrongPAT        = "github_pat_wrong"
+	noRuns          = `{"workflow_runs":[]}`
+	forged          = "evil"
+	behind          = `{"status":"behind"}`
+	assetName       = "name"
+	garbage         = "garbage"
+	repo            = "Owner/deploy-hub"
+	oldCommit       = "1111111111111111111111111111111111111111"
+	newCommit       = "2222222222222222222222222222222222222222"
+	newTag          = TagPrefix + newCommit
+	newBinary       = "new binary"
+	oldBinary       = "old binary"
+	latest          = "/repos/" + repo + "/releases/latest"
+	runsPath        = "/repos/" + repo + "/actions/workflows/ci.yml/runs"
+	runID           = 77
+	builtPath       = "/repos/" + repo + "/actions/runs/77/artifacts"
+	artifactArchive = "/zip"
+	zipPath         = "/repos/" + repo + "/actions/artifacts/5/zip"
+	assets          = "/repos/" + repo + "/releases/assets/"
+	binaryPath      = assets + "11"
+	sumPath         = assets + "12"
+	comparePath     = "/repos/" + repo + "/compare/" + oldCommit + "..." + newCommit
+	verify          = "visudo -cf"
+	version         = InstalledCommand + " version"
+	candidate       = CandidateCommand + " version"
+	syncCmd         = InstalledCommand + " sudoers-sync"
+	runnerCmd       = InstalledCommand + " ci-runner-sync"
+	setupCmd        = SetupCommand + " host"
 )
 
 type hub struct {
@@ -87,6 +88,10 @@ func (h *hub) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Header.Get("Authorization") != "Bearer "+pat {
 		http.Error(w, "Bad credentials", http.StatusUnauthorized)
+		return
+	}
+	if strings.HasSuffix(r.URL.Path, artifactArchive) && r.Header.Get("Accept") != acceptJSON {
+		http.Error(w, "Unsupported Media Type", http.StatusUnsupportedMediaType)
 		return
 	}
 	body, ok := h.routes[r.URL.Path]
