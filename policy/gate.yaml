@@ -18,6 +18,8 @@ limits:
   stage_ready_timeout: 90s
   mutation_disk_gib: 20
   mutation_free_gib: 10
+mutation:
+  skip_in_deploys: true
 licenses:
   - 0BSD
   - Apache-2.0

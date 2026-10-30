@@ -62,6 +62,11 @@ type Policy struct {
 	Images         Images            `yaml:"images"`
 	Apps           map[string]App    `yaml:"apps"`
 	Hub            Hub               `yaml:"hub"`
+	Mutation       Mutation          `yaml:"mutation"`
+}
+
+type Mutation struct {
+	SkipInDeploys bool `yaml:"skip_in_deploys"`
 }
 
 type Images struct {

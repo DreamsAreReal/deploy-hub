@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/pack"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/policy"
 	"github.com/DreamsAreReal/deploy-hub/internal/testutil"
 )
@@ -31,6 +32,24 @@ func TestChecksAreUniqueAndOrdered(t *testing.T) {
 		"secrets-gitleaks", "secrets-trufflehog", "sast", "vulnerabilities", "sca", "sbom-licenses", "workflows", "dockerfile", "iac", "image", "dast", "load"} {
 		testutil.True(t, seen[required], "missing check "+required)
 	}
+}
+
+func TestMutationRunsOnlyInFullRunsWhenThePolicySkipsDeploys(t *testing.T) {
+	ran := 0
+	check := fullRunsOnly(gate.Check{Name: pack.CheckMutation, Run: func(context.Context, gate.Workspace) gate.Outcome {
+		ran++
+		return gate.Pass(nil)
+	}})
+	ws := gate.Workspace{}
+	testutil.Equal(t, check.Run(context.Background(), ws).Status, gate.StatusPass)
+	ws.Policy.Mutation.SkipInDeploys = true
+	out := check.Run(context.Background(), ws)
+	testutil.Equal(t, out.Status, gate.StatusNA)
+	testutil.Equal(t, out.Reason, reasonFullRunsOnly)
+	ws.Mutation.Full = true
+	testutil.Equal(t, check.Run(context.Background(), ws).Status, gate.StatusPass)
+	testutil.Equal(t, ran, 2)
+	testutil.Equal(t, check.Name, pack.CheckMutation)
 }
 
 func TestRegistration(t *testing.T) {

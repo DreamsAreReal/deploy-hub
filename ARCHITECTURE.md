@@ -378,7 +378,10 @@ The gate runs on this repo exactly as on apps, so before you push:
   test are not.
 - **Line coverage, branch coverage and mutation score all at least 90 %.**
   Mutants on lines no test executes count as survivors, so untested code
-  lowers the score twice.
+  lowers the score twice. With `mutation.skip_in_deploys` in
+  `policy/gate.yaml`, deploys skip mutation testing: the hub's full run of each
+  repository measures it every two weeks (`FullRunAge`), and a score below
+  90 % becomes a task to raise it.
 - **Duplication below 2 %**, counted over all code including tests.
 - **Every test passes with `-race`**, and none is skipped.
 - **Dependencies** must be in the approved list in `policy/gate.yaml`, with
@@ -481,7 +484,8 @@ that appears inside the window as if all its history happened then. Use
 stale; that is intended. Continuous counters depend on
 `deploy-hub-status.timer`; if it stops, `DeployHubSilent` fires.
 
-**The gate is slow and memory hungry.** Mutation testing dominates. Each
+**The gate is slow and memory hungry.** Mutation testing dominates, which is
+why deploys skip it and the full run every two weeks carries it. Each
 mutant runs in its own process group with a memory budget and is killed
 (counted as detected) when it exceeds it. CI has a 120-minute limit for this
 repo, 360 minutes for app deploys.

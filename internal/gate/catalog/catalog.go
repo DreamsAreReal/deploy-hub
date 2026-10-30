@@ -16,6 +16,7 @@ import (
 const (
 	reasonUnregistered = "the app is not registered in the central gate policy"
 	reasonWrongRepo    = "the repository is not the registered source of the app"
+	reasonFullRunsOnly = "mutation testing runs in the hub's full runs every two weeks, not in deploys"
 )
 
 func Checks() []gate.Check {
@@ -43,7 +44,7 @@ func Checks() []gate.Check {
 		byPack(pack.CheckFuzz),
 		{Name: "dast", Kind: gate.KindSecurity, Needs: gate.NeedHTTP, Run: stage.DAST},
 		{Name: "load", Kind: gate.KindQuality, Needs: gate.NeedHTTP, Run: stage.Load},
-		byPack(pack.CheckMutation),
+		fullRunsOnly(byPack(pack.CheckMutation)),
 		{Name: "secrets-gitleaks", Kind: gate.KindSecurity, Run: scan.Gitleaks},
 		{Name: "secrets-trufflehog", Kind: gate.KindSecurity, Run: scan.Trufflehog},
 		{Name: "sast", Kind: gate.KindSecurity, Run: scan.SAST},
@@ -62,6 +63,17 @@ var kinds = map[string]gate.Kind{
 	pack.CheckLint: gate.KindQuality, pack.CheckComplexity: gate.KindQuality, pack.CheckDeadCode: gate.KindQuality,
 	pack.CheckTests: gate.KindQuality, pack.CheckLineCoverage: gate.KindQuality, pack.CheckBranches: gate.KindQuality,
 	pack.CheckFuzz: gate.KindQuality, pack.CheckMutation: gate.KindQuality,
+}
+
+func fullRunsOnly(c gate.Check) gate.Check {
+	run := c.Run
+	c.Run = func(ctx context.Context, ws gate.Workspace) gate.Outcome {
+		if ws.Policy.Mutation.SkipInDeploys && !ws.Mutation.Full {
+			return gate.Outcome{Status: gate.StatusNA, Reason: reasonFullRunsOnly}
+		}
+		return run(ctx, ws)
+	}
+	return c
 }
 
 func Registration(_ context.Context, ws gate.Workspace) gate.Outcome {
