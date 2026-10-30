@@ -27,6 +27,7 @@ const (
 func writeMode(t *testing.T, path, body string, mode os.FileMode) {
 	t.Helper()
 	testutil.NoErr(t, os.WriteFile(path, []byte(body), mode))
+	testutil.NoErr(t, os.Chmod(path, mode))
 }
 
 func driftEnv(t *testing.T, runEnv string, catalog *arch.Catalog) *env {
