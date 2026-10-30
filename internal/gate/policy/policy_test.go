@@ -126,17 +126,20 @@ func TestLoadFile(t *testing.T) {
 	testutil.True(t, os.IsNotExist(err), "missing file")
 }
 
-func TestRepositoryPolicyIsValid(t *testing.T) {
+func repositoryPolicy(t *testing.T) Policy {
+	t.Helper()
 	_, file, _, _ := runtime.Caller(0)
 	p, err := LoadFile(filepath.Join(filepath.Dir(file), "..", "..", "..", "policy", "gate.yaml"))
 	testutil.NoErr(t, err)
-	testutil.True(t, p.Mutation.SkipInDeploys, "mutation testing runs only in the full runs")
+	return p
+}
+
+func TestRepositoryPolicyIsValid(t *testing.T) {
+	testutil.True(t, repositoryPolicy(t).Mutation.SkipInDeploys, "mutation testing runs only in the full runs")
 }
 
 func TestRepositoryPolicyAcceptsOneFinding(t *testing.T) {
-	_, file, _, _ := runtime.Caller(0)
-	p, err := LoadFile(filepath.Join(filepath.Dir(file), "..", "..", "..", "policy", "gate.yaml"))
-	testutil.NoErr(t, err)
+	p := repositoryPolicy(t)
 	accepted := map[string][]Accepted{}
 	for name, app := range p.Apps {
 		if len(app.Accepted) > 0 {
