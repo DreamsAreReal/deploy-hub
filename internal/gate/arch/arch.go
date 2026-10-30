@@ -50,25 +50,29 @@ var (
 type Catalog struct {
 	TasksCallers []string           `yaml:"tasks_callers"`
 	LinkBudget   int                `yaml:"link_budget"`
+	Admins       []Admin            `yaml:"admins"`
 	Services     map[string]Service `yaml:"services"`
 }
 
 type Service struct {
-	Owner    string   `yaml:"owner"`
-	Critical string   `yaml:"critical"`
-	External bool     `yaml:"external"`
-	Gives    []string `yaml:"gives"`
-	Exposes  []Expose `yaml:"exposes"`
-	Calls    []Call   `yaml:"calls"`
-	Timers   []Timer  `yaml:"timers"`
-	Secrets  []string `yaml:"secrets"`
-	Config   []string `yaml:"config"`
-	Data     []string `yaml:"data"`
+	Owner    string      `yaml:"owner"`
+	Critical string      `yaml:"critical"`
+	External bool        `yaml:"external"`
+	Gives    []string    `yaml:"gives"`
+	Exposes  []Expose    `yaml:"exposes"`
+	Calls    []Call      `yaml:"calls"`
+	Timers   []Timer     `yaml:"timers"`
+	Secrets  []string    `yaml:"secrets"`
+	Config   []string    `yaml:"config"`
+	Data     []string    `yaml:"data"`
+	Isolated []Isolation `yaml:"isolated"`
 }
 
 type Expose struct {
-	Site string `yaml:"site"`
-	Port int    `yaml:"port"`
+	Site   string `yaml:"site"`
+	Port   int    `yaml:"port"`
+	Public bool   `yaml:"public"`
+	Why    string `yaml:"why"`
 }
 
 type Call struct {
@@ -84,10 +88,13 @@ type Timer struct {
 }
 
 type Facts struct {
-	Env    []string
-	Ports  []int
-	Timers []string
-	Sites  []string
+	Env        []string
+	Ports      []int
+	Timers     []string
+	Sites      []string
+	Listening  []int
+	Grants     []Grant
+	Namespaces map[string]string
 }
 
 func Load(dir string) (Catalog, error) {
@@ -126,7 +133,8 @@ func Check(_ context.Context, ws gate.Workspace) gate.Outcome {
 	names := siblings(ws)
 	HostFacts(ws.Policy.Apps, names, &facts)
 	repo := catalog.Merged(names)
-	findings := append(catalog.Problems(ws.AppName, time.Now()), repo.Drift(facts)...)
+	findings := append(catalog.Problems(ws.AppName, time.Now()), catalog.adminProblems()...)
+	findings = append(findings, repo.Drift(facts)...)
 	outcome := gate.Findings(reasonDrift, findings)
 	outcome.Findings = append(outcome.Findings, catalog.budgetFindings()...)
 	return outcome
@@ -173,7 +181,7 @@ func (c Catalog) Problems(name string, now time.Time) []string {
 			problems = append(problems, fmt.Sprintf("%s: timer %q without a why: a schedule needs a reason it cannot wait for an event", name, timer.Name))
 		}
 	}
-	return problems
+	return append(problems, service.hostProblems(name)...)
 }
 
 func (c Catalog) callProblems(name string, call Call, now time.Time) []string {
@@ -234,7 +242,10 @@ func (c Catalog) HostDrift(facts Facts) []string {
 		sites = append(sites, service.siteNames()...)
 	}
 	drift := undeclared(facts.Timers, timers, timerOnHost)
-	return append(drift, undeclared(facts.Sites, sites, siteOnHost)...)
+	drift = append(drift, undeclared(facts.Sites, sites, siteOnHost)...)
+	drift = append(drift, c.listenDrift(facts.Listening)...)
+	drift = append(drift, c.adminDrift(facts.Grants)...)
+	return append(drift, c.netnsDrift(facts.Namespaces)...)
 }
 
 func Installed(unitDir, siteDir string) (Facts, error) {

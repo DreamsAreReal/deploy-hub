@@ -115,7 +115,7 @@ versions and checksums: [`policy/tools.yaml`](policy/tools.yaml).
 | Check | What blocks a deploy | Tool |
 |---|---|---|
 | `registration` | app missing from the policy or deployed from another repository | — |
-| `architecture` | the app's entry in [`policy/architecture.yaml`](policy/architecture.yaml) is missing or broken (unknown callee, a link or a timer without `why`, a direct call to `tasks` by an app outside `tasks_callers` without an `until` date and the task that removes it, an ended exception), or the repository does something the entry does not declare: an environment variable of a `*.env.example` file or of compose that is in neither `secrets` nor `config`, a port published by compose that is not in `exposes`, a workflow that runs on `schedule` or a timer of the app's `host` spec that is not in `timers`, a host file in `/etc/caddy/extra/` whose name without `.caddy` is not a `site` in `exposes`. Apps sharing one repository are checked against their entries together. The catalog lives in the hub so an app change cannot add its own links; `Catalog.Mermaid` draws the map | — |
+| `architecture` | the app's entry in [`policy/architecture.yaml`](policy/architecture.yaml) is missing or broken (unknown callee, a link, a timer, a public port, an `isolated` unit or an admin without `why`, a direct call to `tasks` by an app outside `tasks_callers` without an `until` date and the task that removes it, an ended exception), or the repository does something the entry does not declare: an environment variable of a `*.env.example` file or of compose that is in neither `secrets` nor `config`, a port published by compose that is not in `exposes`, a workflow that runs on `schedule` or a timer of the app's `host` spec that is not in `timers`, a host file in `/etc/caddy/extra/` whose name without `.caddy` is not a `site` in `exposes`. Apps sharing one repository are checked against their entries together. The catalog lives in the hub so an app change cannot add its own links; `Catalog.Mermaid` draws the map | — |
 | `hygiene` | state/backup/debug/report files, keys, scanner-suppression files tracked in git, except the exact paths an app lists in `allowed_files` | — |
 | `comments` | any comment or documentation string in source and configuration files of any language (Python docstrings included); prose (`.md`, `.txt`, …) and tool-generated lockfiles are not source, `// indirect` is the only note allowed in `go.mod` | go/scanner, YAML parser, chroma lexers |
 | `markers` | work markers (the four listed in the policy) anywhere in tracked files | — |
@@ -159,6 +159,23 @@ catalog embedded in the binary, the counts (services, links, secrets, public sit
 longest call chain) and for every service what it can call if it is hacked and what stops
 if it is down; with a file argument it also writes the same numbers in the Prometheus text
 format (`deploy_hub_arch_*`) for a textfile collector.
+
+Besides the links, the catalog states what the server itself may look like, and
+`runner status` compares it with the server every minute (`deploy_hub_arch_host_drift`):
+
+- `admins` (top level): every user that can act as root, each with a `why`. Members of
+  the groups `root`, `sudo`, `wheel`, `admin`, `docker`, `lxd` and `disk` (also as their
+  primary group) and users with uid 0 are read from `/etc/group` and `/etc/passwd`.
+  Sudo rules in `/etc/sudoers.d` are not readable without root, so an admin who comes
+  from there is listed for the reader only.
+- `exposes` entries with `public: true` and a `why`: every port the host listens on
+  beyond loopback, TCP or UDP, read from `/proc/net/{tcp,tcp6,udp,udp6}` of the host's
+  network namespace.
+- `isolated` (per service): systemd units that must run in a network namespace of their
+  own, `unit`, `netns` (a template unit writes `%i` for the instance) and `why`. The
+  check reads `NetworkNamespacePath=` from the unit in `/etc/systemd/system`, its
+  drop-ins and, for a template, the drop-ins of every instance; a unit that is not
+  installed is skipped.
 
 **Language packs.** The checks marked "per stack" run once per project in the
 repository; a project is the directory of a stack manifest. A repository with
@@ -1625,7 +1642,7 @@ their own time. This is the first step of moving the hub from push to textfile
 | `deploy_hub_request_refused` | verb, reason | one sample per refusal; reason `bad-request`, `unknown-app`, `bad-tag`, `bad-compose`, `no-identity`, `identity-unverified`, `no-repo-binding`, `not-gated`, `bad-digest`, `bad-verdict`, `bad-cache` |
 | `deploy_hub_mutation_cache_intact` | app | 1 when the stored mutation cache matched its recorded sha256 on read, 0 when it did not |
 | `deploy_hub_arch_live_drift` | app | from `status` (every minute): environment variables the running container got beyond its image and published ports that the app's entry in `policy/architecture.yaml` does not declare, every other app whose containers share a docker network with it while the catalog has no call between the two (either way; `observability` may reach an app that `gives` it something), an `.env` that group or others can read, and the public site the hub serves for the app (`app.conf` without `site=off`) when `exposes` has no `site` of the app's name (an app missing from the catalog counts one more); each item is logged as `live drift` |
-| `deploy_hub_arch_host_drift` | — | from `status` (every minute): timers in `/etc/systemd/system` and caddy files in `/etc/caddy/extra` that no service in `policy/architecture.yaml` declares in `timers` or as a `site` in `exposes` (hidden files and units masked to `/dev/null` are skipped, as systemd skips them); the directories are read as the `deploy` user, without root; each item is logged as `host drift` |
+| `deploy_hub_arch_host_drift` | — | from `status` (every minute): timers in `/etc/systemd/system` and caddy files in `/etc/caddy/extra` that no service in `policy/architecture.yaml` declares in `timers` or as a `site` in `exposes` (hidden files and units masked to `/dev/null` are skipped, as systemd skips them), ports open beyond loopback without a `public` expose, users who can act as root without an entry in `admins`, and `isolated` units outside their network namespace (see the catalog section above); everything is read as the `deploy` user, without root; each item is logged as `host drift` |
 | `deploy_hub_journal_readable` | — | 0 when `deploys.log` could not be read; the journal counters are then not pushed |
 
 ### Alerts

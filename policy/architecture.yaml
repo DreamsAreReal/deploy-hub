@@ -2,6 +2,13 @@ link_budget: 14
 tasks_callers:
   - runner
   - caddy
+admins:
+  - user: deploy
+    why: the hub runs as deploy and drives docker for every app (group docker)
+  - user: ubuntu
+    why: the default user of the cloud image (groups sudo and lxd); its authorized_keys is empty
+  - user: ops
+    why: the ops and epics Claude sessions administer the server through /etc/sudoers.d/ops, which the hub cannot read, so the check does not see this entry
 services:
   deploy-hub:
     owner: DreamsAreReal
@@ -28,6 +35,16 @@ services:
       - name: ci-mutation@.timer
         why: one chunk of the full mutation run of a repo a minute after the previous chunk, yielding to jobs; the whole run takes hours
     secrets: [GH_TOKEN, GH_OWNER, RELEASE_TOKEN, VPS_SSH_KEY]
+    isolated:
+      - unit: ci-runner@.service
+        netns: /run/netns/ci-%i
+        why: CI jobs run pull request code; the namespace of each repo has NAT to the internet and no way to the ports of the server
+      - unit: ci-docker@.service
+        netns: /run/netns/ci-%i
+        why: the rootless docker of each CI runner builds and runs pull request images in the same namespace
+      - unit: ci-mutation@.service
+        netns: /run/netns/ci-%i
+        why: mutation chunks run the tests of the repo, pull request code too, in the same namespace
   tasks:
     owner: DreamsAreReal
     critical: high
@@ -79,6 +96,13 @@ services:
       - name: runner-tmp-trim.timer
         why: hourly, removes what interrupted tests and builds leave in the private /tmp of the runner for more than 3 hours
     secrets: [TASKS_AGENT_TOKEN, TASKS_ASSISTANT_TOKEN, CLAUDE_CREDENTIALS]
+    isolated:
+      - unit: runner.service
+        netns: /run/netns/runner
+        why: agents run code from tasks; their traffic leaves only through the WireGuard tunnel to the home router, and the ports of the server are out of reach
+      - unit: runner-obs-ship.service
+        netns: /run/netns/runner
+        why: ships the telemetry of the agents from their own namespace
   router-bot:
     owner: DreamsAreReal
     critical: normal
@@ -139,6 +163,13 @@ services:
     critical: high
     external: true
     gives: [logs]
+    exposes:
+      - port: 80
+        public: true
+        why: plain HTTP, which only redirects to HTTPS and answers ACME challenges
+      - port: 443
+        public: true
+        why: HTTPS and HTTP/3 of every public site
     calls:
       - to: tasks
         why: HTTPS front of every site
@@ -149,6 +180,12 @@ services:
     exposes:
       - site: preview-p1
       - site: preview-p2
+      - port: 22
+        public: true
+        why: SSH for the owner, the ops session and deploys; keys only, no passwords
+      - port: 51820
+        public: true
+        why: WireGuard tunnel to the home router, the only way out of the network namespace of the agents
     timers:
       - name: kernel-autoreboot.timer
         why: daily at 01:00 UTC, reboots into a newer kernel when the running one is outdated, in the quietest hour

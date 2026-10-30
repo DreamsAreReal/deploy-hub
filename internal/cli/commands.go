@@ -94,8 +94,7 @@ func (a *App) runnerService(ex procexec.Runner) *runner.Service {
 		WorkflowRef: a.Config.WorkflowRef(),
 		Host:        runner.SudoHost{Exec: ex, Binary: a.Config.Paths.Binary()},
 		Catalog:     a.catalog(),
-		UnitDir:     policy.UnitDir,
-		SiteDir:     policy.CaddySiteDir,
+		HostDirs:    arch.HostDirs{Units: policy.UnitDir, Sites: policy.CaddySiteDir, Net: arch.ProcNetDir, Accounts: arch.AccountsDir},
 		HostApps:    a.hostApps(),
 	}
 }

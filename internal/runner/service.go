@@ -69,8 +69,7 @@ type Service struct {
 	Host        HostSyncer
 	HostApps    []string
 	Catalog     *arch.Catalog
-	UnitDir     string
-	SiteDir     string
+	HostDirs    arch.HostDirs
 	samples     []obs.Sample
 	steps       []delivery.Step
 }

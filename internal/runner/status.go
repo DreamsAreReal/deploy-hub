@@ -149,10 +149,10 @@ func (s *Service) liveDrift(ctx context.Context, st appStatus, shared []string) 
 }
 
 func (s *Service) hostDrift() {
-	if s.Catalog == nil || s.UnitDir == "" {
+	if s.Catalog == nil || s.HostDirs.Units == "" {
 		return
 	}
-	facts, err := arch.Installed(s.UnitDir, s.SiteDir)
+	facts, err := s.HostDirs.Facts(s.Catalog.IsolatedUnits())
 	if err != nil {
 		s.Log.Warn("host facts unreadable", "error", err.Error())
 		return

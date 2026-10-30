@@ -102,26 +102,43 @@ func TestStatusSkipsDriftWithoutFactsOrCatalog(t *testing.T) {
 func TestStatusCountsTimersAndSitesOnTheHostNoServiceDeclares(t *testing.T) {
 	declared := &arch.Catalog{Services: map[string]arch.Service{appName: {Timers: []arch.Timer{{Name: "app-backup.timer"}}}}}
 	e := newEnv(t)
-	e.svc.UnitDir, e.svc.SiteDir, e.svc.Catalog = t.TempDir(), t.TempDir(), declared
+	e.svc.HostDirs, e.svc.Catalog = arch.HostDirs{Units: t.TempDir(), Sites: t.TempDir()}, declared
 	for _, name := range []string{"app-backup.timer", "rogue.timer"} {
-		e.write(filepath.Join(e.svc.UnitDir, name), "[Timer]\n")
+		e.write(filepath.Join(e.svc.HostDirs.Units, name), "[Timer]\n")
 	}
-	e.write(filepath.Join(e.svc.SiteDir, "stt.caddy"), "stt {}\n")
+	e.write(filepath.Join(e.svc.HostDirs.Sites, "stt.caddy"), "stt {}\n")
 	testutil.Equal(t, e.dispatch("status", ""), ExitOK)
 	testutil.Equal(t, metricFor(e, obs.MetricArchHostDrift, ""), 2.0)
 	e.expectLog("host drift")
 	testutil.Contains(t, e.logs.String(), "timer rogue.timer is installed on the host but no service declares it in timers",
 		"public site stt has a caddy file on the host but no service declares it in exposes")
 	blind := newEnv(t)
-	blind.svc.UnitDir, blind.svc.SiteDir, blind.svc.Catalog = filepath.Join(e.svc.UnitDir, "rogue.timer"), e.svc.SiteDir, declared
+	blind.svc.HostDirs, blind.svc.Catalog = arch.HostDirs{Units: filepath.Join(e.svc.HostDirs.Units, "rogue.timer"), Sites: e.svc.HostDirs.Sites}, declared
 	testutil.Equal(t, blind.dispatch("status", ""), ExitOK)
 	testutil.Equal(t, metricFor(blind, obs.MetricArchHostDrift, ""), -1.0)
 	blind.expectLog("host facts unreadable")
 	uncatalogued, unset := newEnv(t), newEnv(t)
-	uncatalogued.svc.UnitDir, uncatalogued.svc.SiteDir = e.svc.UnitDir, e.svc.SiteDir
+	uncatalogued.svc.HostDirs = e.svc.HostDirs
 	unset.svc.Catalog = declared
 	for _, off := range []*env{uncatalogued, unset} {
 		testutil.Equal(t, off.dispatch("status", ""), ExitOK)
 		testutil.Equal(t, metricFor(off, obs.MetricArchHostDrift, ""), -1.0)
 	}
+}
+
+func TestStatusCountsOpenPortsRootUsersAndLostSandboxes(t *testing.T) {
+	declared := &arch.Catalog{Admins: []arch.Admin{{User: "hub", Why: "docker"}}, Services: map[string]arch.Service{appName: {
+		Exposes:  []arch.Expose{{Port: 22, Public: true}},
+		Isolated: []arch.Isolation{{Unit: "runner.service", Netns: "/run/netns/runner"}},
+	}}}
+	e := newEnv(t)
+	dirs := arch.HostDirs{Units: t.TempDir(), Net: t.TempDir(), Accounts: t.TempDir()}
+	e.write(filepath.Join(dirs.Net, "tcp"), "   0: 00000000:0016 00000000:0000 0A\n   1: 00000000:1F90 00000000:0000 0A\n")
+	e.write(filepath.Join(dirs.Accounts, "group"), "docker:x:988:hub,eve\n")
+	e.write(filepath.Join(dirs.Units, "runner.service"), "[Service]\nUser=runner\n")
+	e.svc.HostDirs, e.svc.Catalog = dirs, declared
+	testutil.Equal(t, e.dispatch("status", ""), ExitOK)
+	testutil.Equal(t, metricFor(e, obs.MetricArchHostDrift, ""), 3.0)
+	testutil.Contains(t, e.logs.String(), "port 8080 listens beyond loopback on the host",
+		"user eve can act as root through group docker", "unit runner.service runs in the host network namespace, and the catalog declares /run/netns/runner")
 }
