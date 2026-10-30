@@ -91,6 +91,10 @@ func Fixture(rel string) bool {
 	return slices.Contains(strings.Split(path.Dir(rel), "/"), fixtureDir)
 }
 
+func Code(rel string) bool {
+	return !prose[path.Ext(rel)] && !generated[path.Base(rel)] && !Fixture(rel)
+}
+
 func Select(ctx context.Context, ws gate.Workspace, keep func(string) bool) ([]string, error) {
 	files, err := Tracked(ctx, ws.Exec, ws.Src)
 	return slices.DeleteFunc(files, func(f string) bool { return !keep(f) }), err

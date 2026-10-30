@@ -90,7 +90,7 @@ jobs:
       - name: Toolchain
         id: hub
         if: env.HUB != 'true'
-        uses: DreamsAreReal/deploy-hub/.github/actions/hub@204ab7008d257618adbfefa757b63a47ea05cbce
+        uses: DreamsAreReal/deploy-hub/.github/actions/hub@6ba2a84c29d95e443d653b2c6e11a1f6cb2041da
 
       - name: Set up Go for the hub commit under test
         if: env.HUB == 'true'
@@ -152,7 +152,8 @@ jobs:
             --build-arg GIT_SHA="$GITHUB_SHA" \
             --build-arg BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             -t "$IMAGE:$TAG" "$CONTEXT"
-          { echo "image=$IMAGE"; echo "tag=$TAG"; } >> "$GITHUB_OUTPUT"
+          id="$(docker image inspect --format '{{.Id}}' "$IMAGE:$TAG")"
+          { echo "image=$IMAGE"; echo "tag=$TAG"; echo "id=$id"; } >> "$GITHUB_OUTPUT"
 
       - name: Connect to the VPS
         if: always() && env.GATE_ONLY != 'true'
@@ -181,6 +182,10 @@ jobs:
               -o UserKnownHostsFile="$RUNNER_TEMP/ssh/known_hosts" "$VPS_USER@$VPS_HOST" \
               "mutation-cache-get $APP sha-${GITHUB_SHA}" > "$dir/served" || return 1
             : > "$dir/outputs"
+            deployed="$(sed -n 's/^deployed=//p' "$dir/served")"
+            if [ -n "$deployed" ]; then
+              echo "deployed=$deployed" >> "$dir/outputs"
+            fi
             last="$(sed -n 's/^last=//p' "$dir/served")"
             if [ -n "$last" ]; then
               printf '%s' "$last" | base64 -d > "$dir/last.json" || return 1
@@ -201,6 +206,62 @@ jobs:
           fi
           rm -f "$dir/served" "$dir/outputs"
 
+      - name: Pull the deployed release for the rollback check
+        id: deployed
+        if: env.GATE_ONLY != 'true' && steps.cache.outputs.deployed != ''
+        env:
+          DEPLOYED: ${{ steps.cache.outputs.deployed }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -uo pipefail
+          if ! printf '%s' "$DEPLOYED" | grep -Eq '^ghcr\.io/[a-z0-9._/-]{1,100}:sha-[0-9a-f]{7,40}$'; then
+            echo "::warning::the hub named no usable deployed image; the rollback check is skipped"
+            exit 0
+          fi
+          export DOCKER_CONFIG="$RUNNER_TEMP/docker-pull"
+          if printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin > /dev/null \
+            && docker pull --quiet "$DEPLOYED" > /dev/null; then
+            echo "image=$DEPLOYED" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::the deployed release $DEPLOYED could not be pulled; the rollback check is skipped"
+          fi
+          docker logout ghcr.io > /dev/null
+          rm -rf "$DOCKER_CONFIG"
+
+      - name: Fetch the UI baseline from the hub
+        id: baseline
+        if: env.GATE_ONLY != 'true'
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          set -uo pipefail
+          dir="$RUNNER_TEMP/ui-baseline"
+          served="$RUNNER_TEMP/ui-baseline.served"
+          fetch() {
+            install -d -m 700 "$dir" || return 1
+            oidc="$(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$OIDC_AUDIENCE" | jq -er .value)" || return 1
+            printf 'oidc=%s\n' "$oidc" | ssh -i "$RUNNER_TEMP/ssh/deploy_key" -o IdentitiesOnly=yes \
+              -o UserKnownHostsFile="$RUNNER_TEMP/ssh/known_hosts" "$VPS_USER@$VPS_HOST" \
+              "ui-baseline-get $APP sha-${GITHUB_SHA}" > "$served" || return 1
+            while IFS= read -r line; do
+              name="${line%%:*}"
+              case "$name" in
+                ''|.*|*[!a-z0-9.-]*) return 1 ;;
+              esac
+              printf '%s' "${line#*:}" | base64 -d > "$dir/$name" || return 1
+            done < <(sed -n 's/^shot=//p' "$served")
+            sed -n 's/^key=//p' "$served" > "$dir/render-key"
+          }
+          if fetch && [ -n "$(ls -A "$dir")" ]; then
+            echo "dir=$dir" >> "$GITHUB_OUTPUT"
+            echo "UI baseline of $(sed -n 's/^from=//p' "$served"): $(find "$dir" -type f | wc -l) screenshots"
+          else
+            echo "no UI baseline for $APP yet; screens are not compared"
+          fi
+          rm -f "$served"
+
       - name: Quality gate
         id: gate
         env:
@@ -211,8 +272,12 @@ jobs:
           CACHE_FILE: ${{ steps.cache.outputs.file }}
           CACHE_SHA256: ${{ steps.cache.outputs.sha256 }}
           LAST: ${{ steps.cache.outputs.last }}
+          BASELINE: ${{ steps.baseline.outputs.dir }}
+          PREVIOUS: ${{ steps.deployed.outputs.image }}
         run: |
           set -o pipefail
+          unset ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL
+          rm -rf "$RUNNER_TEMP/ssh"
           export PATH="$TOOLCHAIN:$PATH"
           hub_go="$(go env GOVERSION)"
           unset GOTOOLCHAIN PWD
@@ -224,11 +289,24 @@ jobs:
           if [ "$BUILT" = true ]; then extra+=(--image "$IMAGE"); fi
           if [ -n "$CACHE_FILE" ]; then extra+=(--mutation-cache "$CACHE_FILE" --mutation-cache-sha256 "$CACHE_SHA256"); fi
           if [ -n "$LAST" ]; then extra+=(--mutation-last "$LAST"); fi
+          if [ -n "$BASELINE" ]; then extra+=(--ui-baseline "$BASELINE"); fi
+          if [ -n "$PREVIOUS" ]; then extra+=(--previous-image "$PREVIOUS"); fi
           while sleep 30; do
             echo "resources: $(free -m | awk '/^Mem:/ {print "mem_available_mb=" $7}') $(df -m / "$RUNNER_TEMP" | awk 'NR > 1 {print $6 "_free_mb=" $4}' | tr '\n' ' ')top_dirs_mb=$(du -xsm "$RUNNER_TEMP"/gate/* /tmp 2>/dev/null | sort -rn | head -3 | awk '{printf "%s:%s,", $2, $1}')"
           done &
           deploy-hub gate --app "$APP" --repo "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" \
             --policy "$POLICY" --src "$GITHUB_WORKSPACE" --out "$RUNNER_TEMP/gate" "${extra[@]}"
+
+      - name: Connect to the VPS after the gate
+        if: always() && env.GATE_ONLY != 'true'
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          HOST_KEY: ${{ secrets.VPS_HOST_KEY }}
+        run: |
+          install -d -m 700 "$RUNNER_TEMP/ssh"
+          install -m 600 /dev/null "$RUNNER_TEMP/ssh/deploy_key"
+          printf '%s\n' "$SSH_KEY" > "$RUNNER_TEMP/ssh/deploy_key"
+          printf '%s\n' "$HOST_KEY" > "$RUNNER_TEMP/ssh/known_hosts"
 
       - name: Keep gate reports
         if: always()
@@ -239,6 +317,9 @@ jobs:
             ${{ runner.temp }}/gate/verdict.json
             ${{ runner.temp }}/gate/**/mutation.json
             ${{ runner.temp }}/gate/sbom-*.cdx.json
+            ${{ runner.temp }}/gate/ui-crawl/crawl.md
+            ${{ runner.temp }}/gate/ui-crawl/shots/
+            ${{ runner.temp }}/gate/ui-crawl/visual/
           if-no-files-found: ignore
 
       - name: Summarize the verdict
@@ -368,10 +449,16 @@ jobs:
         env:
           IMAGE: ${{ steps.image.outputs.image }}
           TAG: ${{ steps.image.outputs.tag }}
+          BUILT_ID: ${{ steps.image.outputs.id }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ACTOR: ${{ github.actor }}
         run: |
           set -euo pipefail
+          now="$(docker image inspect --format '{{.Id}}' "$IMAGE:$TAG")"
+          if [ -z "$BUILT_ID" ] || [ "$now" != "$BUILT_ID" ]; then
+            echo "the image $IMAGE:$TAG is not the one built before the gate ($now, built $BUILT_ID); nothing is pushed"
+            exit 1
+          fi
           export DOCKER_CONFIG="$RUNNER_TEMP/docker-config"
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
           docker push "$IMAGE:$TAG"
@@ -411,3 +498,29 @@ jobs:
             fi
           } | ssh -i "$RUNNER_TEMP/ssh/deploy_key" -o IdentitiesOnly=yes -o UserKnownHostsFile="$RUNNER_TEMP/ssh/known_hosts" \
                 "$VPS_USER@$VPS_HOST" "deploy $APP sha-${GITHUB_SHA}"
+
+      - name: Keep the deployed screens as the UI baseline
+        if: env.GATE_ONLY != 'true'
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          set -uo pipefail
+          screens="$RUNNER_TEMP/gate/ui-crawl/screens"
+          key="$RUNNER_TEMP/gate/ui-crawl/render-key"
+          if [ -z "$(ls -A "$screens" 2>/dev/null)" ] || [ ! -s "$key" ]; then
+            echo "the gate took no screenshots"
+            exit 0
+          fi
+          upload() {
+            oidc="$(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$OIDC_AUDIENCE" | jq -er .value)" || return 1
+            {
+              printf 'oidc=%s\n' "$oidc"
+              printf 'key=%s\n' "$(cat "$key")"
+              for shot in "$screens"/*.png; do
+                printf 'shot=%s:%s\n' "$(basename "$shot")" "$(base64 -w0 "$shot")"
+              done
+            } | ssh -i "$RUNNER_TEMP/ssh/deploy_key" -o IdentitiesOnly=yes -o UserKnownHostsFile="$RUNNER_TEMP/ssh/known_hosts" \
+                  "$VPS_USER@$VPS_HOST" "ui-baseline-put $APP sha-${GITHUB_SHA}"
+          }
+          upload || echo "::warning::the hub did not take the UI baseline; the next gate compares with the previous one"

@@ -106,8 +106,11 @@ func TestBootstrapRefusesUngatedOrForgedReleases(t *testing.T) {
 		mutate func(h *hostFixture)
 		want   error
 	}{
-		"no green run":    {func(h *hostFixture) { h.hub.routes[runsPath] = noRuns }, ErrNotGated},
-		"forged binary":   {func(h *hostFixture) { h.hub.routes[binaryPath] = forged }, ErrChecksum},
+		"no green run":  {func(h *hostFixture) { h.hub.routes[runsPath] = noRuns }, ErrNotGated},
+		"forged binary": {func(h *hostFixture) { h.hub.routes[binaryPath] = forged }, ErrChecksum},
+		"forged release": {func(h *hostFixture) {
+			h.hub.routes[binaryPath], h.hub.routes[sumPath] = forged, sum(forged)
+		}, ErrNotBuilt},
 		"tag not commit":  {func(h *hostFixture) { h.hub.routes[latest] = releaseJSON(h.hub, "v1", newCommit) }, ErrTag},
 		"other candidate": {func(h *hostFixture) { h.set(candidateRun, procexectest.Reply{Res: procexec.Result{Stdout: oldCommit}}) }, ErrVersion},
 	}

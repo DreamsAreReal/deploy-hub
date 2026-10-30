@@ -24,12 +24,12 @@ func TestChecksAreUniqueAndOrdered(t *testing.T) {
 		index[n] = i
 	}
 	testutil.True(t, index["tests"] < index["line-coverage"] && index["line-coverage"] < index["mutation"] && index["tests"] < index["scenarios"], "report producers run first")
-	testutil.True(t, index["dast"] < index["mutation"] && index["load"] < index["mutation"], "the stage runs before the long mutation check")
+	testutil.True(t, index["dast"] < index["mutation"] && index["load"] < index["mutation"] && index["ui"] < index["mutation"], "the stage runs before the long mutation check")
 	for _, c := range Checks() {
 		testutil.Equal(t, c.Long, c.Name == "mutation")
 	}
 	for _, required := range []string{"comments", "markers", "language", "hygiene", "lint", "cognitive-complexity", "duplication", "dead-code", "branch-coverage", "fuzz",
-		"secrets-gitleaks", "secrets-trufflehog", "sast", "vulnerabilities", "sca", "sbom-licenses", "workflows", "dockerfile", "iac", "image", "dast", "load"} {
+		"secrets-gitleaks", "secrets-trufflehog", "sast", "vulnerabilities", "sca", "sbom-licenses", "workflows", "dockerfile", "iac", "image", "dast", "load", "ui"} {
 		testutil.True(t, seen[required], "missing check "+required)
 	}
 }
@@ -51,6 +51,9 @@ func TestChecksWaitOnlyForEarlierChecks(t *testing.T) {
 	testutil.Equal(t, checks[index[pack.CheckLint]].After, []string{pack.CheckDependencies})
 	testutil.Equal(t, checks[index[pack.CheckLineCoverage]].After, []string{pack.CheckDependencies, pack.CheckTests})
 	testutil.Equal(t, checks[index[checkLoad]].After, []string{pack.CheckDependencies, checkDAST})
+	testutil.Equal(t, checks[index[checkUI]].After, []string{pack.CheckDependencies, checkLoad})
+	testutil.Equal(t, checks[index[checkRollback]].After, []string{pack.CheckDependencies, checkUI})
+	testutil.Equal(t, checks[index[pack.CheckMutation]].After, []string{pack.CheckDependencies, pack.CheckTests, pack.CheckLineCoverage, checkDAST, checkLoad, checkUI, checkRollback})
 }
 
 func TestMutationRunsOnlyInFullRunsWhenThePolicySkipsDeploys(t *testing.T) {

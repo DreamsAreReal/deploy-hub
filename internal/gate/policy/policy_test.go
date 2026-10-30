@@ -11,6 +11,11 @@ import (
 )
 
 const (
+	dupTokensLine = "duplicate_min_tokens: 50"
+	uiMapLine     = "map: web/appmap.json"
+)
+
+const (
 	ownersLine = "owners: [Owner]"
 	freeLine   = "mutation_free_gib: 10"
 	pathsLine  = "paths: [/health]"
@@ -19,6 +24,11 @@ const (
 const localizedLine = "localized: [internal/texts/]"
 
 const dataLine = "data: [/data, /cache]"
+
+const (
+	uiBlock     = "    ui: {map: web/appmap.json, seed: [seed], env: [DEV_LOGIN=1], chromium: /ms/chrome}\n"
+	browserLine = "  browser: mcr.microsoft.com/playwright" + digest + "\n"
+)
 
 const digest = "@sha256:" + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
@@ -65,6 +75,7 @@ sast_rulesets: [p/default]
 images:
   semgrep: semgrep/semgrep` + digest + `
   zap: ghcr.io/zaproxy/zaproxy` + digest + `
+  browser: mcr.microsoft.com/playwright` + digest + `
 apps:
   hub:
     repo: Owner/hub
@@ -92,6 +103,7 @@ apps:
     data: [/data, /cache]
     dast: {spider: 1m, max_time: 5m, openapi: /openapi.json}
     load: {rate: 20, duration: 30s, p95: 300ms, max_error_percent: 0, concurrency: 10, paths: [/health]}
+    ui: {map: web/appmap.json, seed: [seed], env: [DEV_LOGIN=1], chromium: /ms/chrome}
   bot:
     repo: Owner/bot
     shell_utilities: busybox
@@ -163,7 +175,8 @@ func TestParseRejects(t *testing.T) {
 		"mutation":           {"mutation_score: 90", "mutation_score: -1"},
 		"duplication":        {"max_duplication_percent: 2", "max_duplication_percent: 0"},
 		"cognitive":          {"max_cognitive_complexity: 9", "max_cognitive_complexity: 0"},
-		"tokens":             {"duplicate_min_tokens: 50", "duplicate_min_tokens: 0"},
+		"tokens":             {dupTokensLine, "duplicate_min_tokens: 0"},
+		"net growth":         {dupTokensLine, "duplicate_min_tokens: 50\n  max_net_growth_lines: -1"},
 		"check timeout":      {"check_timeout: 30m", "check_timeout: 0s"},
 		"long check timeout": {"long_check_timeout: 3h", "long_check_timeout: 0s"},
 		"fuzz time":          {"fuzz_time: 10s", "fuzz_time: 0s"},
@@ -191,6 +204,13 @@ func TestParseRejects(t *testing.T) {
 		"rulesets":           {"sast_rulesets: [p/default]", "sast_rulesets: []"},
 		"unpinned semgrep":   {"semgrep: semgrep/semgrep" + digest, "semgrep: semgrep/semgrep:latest"},
 		"unpinned zap":       {"zap: ghcr.io/zaproxy/zaproxy" + digest, "zap: ghcr.io/zaproxy/zaproxy:stable"},
+		"unpinned browser":   {"browser: mcr.microsoft.com/playwright" + digest, "browser: mcr.microsoft.com/playwright:v1"},
+		"no browser":         {browserLine, ""},
+		"ui map":             {uiMapLine, "map: ''"},
+		"ui map outside":     {uiMapLine, "map: ../appmap.json"},
+		"ui map absolute":    {uiMapLine, "map: /web/appmap.json"},
+		"ui map unclean":     {uiMapLine, "map: web/../appmap.json"},
+		"ui chromium":        {"chromium: /ms/chrome", "chromium: ms/chrome"},
 		"app name":           {"  hub:\n", "  Hub!:\n"},
 		"repo":               {"repo: Owner/hub", "repo: hub"},
 		"kind":               {"kind: binary", "kind: daemon"},
@@ -247,6 +267,18 @@ func FuzzParse(f *testing.F) {
 			t.Fatalf("invalid policy accepted: %+v", p)
 		}
 	})
+}
+
+func TestOnlyAnAppWithAnInterfaceNeedsTheBrowserImage(t *testing.T) {
+	plain := strings.Replace(strings.Replace(valid, uiBlock, "", 1), browserLine, "", 1)
+	testutil.True(t, plain != valid && !strings.Contains(plain, "browser:"), "fixture lost the ui block and the browser")
+	p, err := Parse([]byte(plain))
+	testutil.NoErr(t, err)
+	testutil.True(t, p.Apps["web"].UI == nil, "no ui")
+	withUI, err := Parse([]byte(valid))
+	testutil.NoErr(t, err)
+	testutil.Equal(t, withUI.Apps["web"].UI.Chromium, "/ms/chrome")
+	testutil.Equal(t, withUI.Apps["web"].UI.Map, "web/appmap.json")
 }
 
 func TestIsLocalized(t *testing.T) {

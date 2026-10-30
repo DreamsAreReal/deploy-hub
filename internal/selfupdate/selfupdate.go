@@ -95,7 +95,8 @@ func (u Updater) update(ctx context.Context, tag string) (Release, bool, error) 
 		changed, cerr := u.keep(ctx)
 		return r, changed, cerr
 	}
-	if gerr := u.Source.Gated(ctx, r.Commit); gerr != nil {
+	runs, gerr := u.Source.Gated(ctx, r.Commit)
+	if gerr != nil {
 		return r, false, gerr
 	}
 	if tag == "" {
@@ -105,6 +106,9 @@ func (u Updater) update(ctx context.Context, tag string) (Release, bool, error) 
 	}
 	bin, err := u.Source.Fetch(ctx, r)
 	if err != nil {
+		return r, false, err
+	}
+	if err := u.Source.Built(ctx, runs, bin); err != nil {
 		return r, false, err
 	}
 	return r, true, u.install(ctx, r, bin)

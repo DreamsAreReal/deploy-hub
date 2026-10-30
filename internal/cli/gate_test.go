@@ -207,6 +207,7 @@ func TestEveryHandlerBinaryIsAllowed(t *testing.T) {
 const (
 	flagCache    = "--mutation-cache"
 	flagCacheSum = "--mutation-cache-sha256"
+	flagBaseline = "--ui-baseline"
 	checkOnly    = "only"
 	verdictKey   = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	cacheSum     = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -232,6 +233,50 @@ func TestParseGateArgsMutationCache(t *testing.T) {
 		_, err := parseGateArgs(append(append([]string{}, base...), extra...))
 		testutil.Fails(t, err)
 	}
+}
+
+func TestParseGateArgsPreviousImage(t *testing.T) {
+	src := t.TempDir()
+	base := gateFlags(testApp, testRepo, commitSha, "p", src, filepath.Join(t.TempDir(), "reports"))
+	deployed := "ghcr.io/owner/web:sha-" + commitSha
+	g, err := parseGateArgs(append(append([]string{}, base...), "--previous-image", deployed))
+	testutil.NoErr(t, err)
+	testutil.Equal(t, g.previous, deployed)
+	for _, bad := range []string{"web:old", "ghcr.io/owner/web", "ghcr.io/owner/web:latest", "docker.io/owner/web:sha-" + commitSha} {
+		_, err := parseGateArgs(append(append([]string{}, base...), "--previous-image", bad))
+		testutil.Fails(t, err)
+	}
+	h := newHarness(t)
+	var seen string
+	h.gateChecks = []gate.Check{{Name: checkOnly, Run: func(_ context.Context, ws gate.Workspace) gate.Outcome {
+		seen = ws.Previous
+		return gate.Pass(nil)
+	}}}
+	args := append(gateFlags(hubApp, hubRepo, commitSha, gatePolicy(t), t.TempDir(), filepath.Join(t.TempDir(), "gate")), "--previous-image", deployed)
+	testutil.Equal(t, h.run(append([]string{CmdGate}, args...)...), ExitOK)
+	testutil.Equal(t, seen, deployed)
+}
+
+func TestParseGateArgsUIBaseline(t *testing.T) {
+	src := t.TempDir()
+	base := gateFlags(testApp, testRepo, commitSha, "p", src, filepath.Join(t.TempDir(), "reports"))
+	shots := filepath.Join(t.TempDir(), "ui-baseline")
+	g, err := parseGateArgs(append(append([]string{}, base...), flagBaseline, shots+"/"))
+	testutil.NoErr(t, err)
+	testutil.Equal(t, g.baseline, shots)
+	for _, bad := range []string{"relative", filepath.Join(src, "shots")} {
+		_, err := parseGateArgs(append(append([]string{}, base...), flagBaseline, bad))
+		testutil.Fails(t, err)
+	}
+	h := newHarness(t)
+	var seen string
+	h.gateChecks = []gate.Check{{Name: checkOnly, Run: func(_ context.Context, ws gate.Workspace) gate.Outcome {
+		seen = ws.UIBaseline
+		return gate.Pass(nil)
+	}}}
+	args := append(gateFlags(hubApp, hubRepo, commitSha, gatePolicy(t), t.TempDir(), filepath.Join(t.TempDir(), "gate")), flagBaseline, shots)
+	testutil.Equal(t, h.run(append([]string{CmdGate}, args...)...), ExitOK)
+	testutil.Equal(t, seen, shots)
 }
 
 func TestGateCommandHandsTheCacheOverAndKeepsTheVerdicts(t *testing.T) {

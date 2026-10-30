@@ -58,11 +58,11 @@ func TestCommandRunResult(t *testing.T) {
 
 func TestCommandRunSamples(t *testing.T) {
 	counts := &LevelCounts{}
-	log := NewLogger(&bytes.Buffer{}, slog.LevelInfo, "prune", counts)
+	log := NewLogger(&bytes.Buffer{}, slog.LevelInfo, commandPrune, counts)
 	log.Warn("w")
 	log.Error("e1")
 	log.Error("e2")
-	run := CommandRun{Command: "prune", ExitCode: 1, Panicked: true, Seconds: 2.5, Logs: counts}
+	run := CommandRun{Command: commandPrune, ExitCode: 1, Panicked: true, Seconds: 2.5, Logs: counts}
 	samples := run.Samples()
 	lines := make([]string, 0, len(samples))
 	for _, s := range samples {

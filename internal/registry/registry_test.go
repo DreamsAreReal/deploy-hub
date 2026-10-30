@@ -51,10 +51,10 @@ func TestKV(t *testing.T) {
 
 func TestAppConfRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	c := AppConf{Mode: ModeBYOC, Main: webApp, Port: "9001", HealthPath: "/", HMode: HealthHTTP, Image: "ghcr.io/o/a"}
+	c := AppConf{Mode: ModeBYOC, Main: webApp, Port: "9001", HealthPath: "/", HMode: HealthHTTP, Image: "ghcr.io/o/a", Site: SiteOff}
 	testutil.NoErr(t, c.Save(dir))
 	path := filepath.Join(dir, AppConfFile)
-	testutil.Equal(t, testutil.Read(t, path), "mode=byoc\nmain=web\nport=9001\nhealth_path=/\nhmode=http\nimage=ghcr.io/o/a\n")
+	testutil.Equal(t, testutil.Read(t, path), "mode=byoc\nmain=web\nport=9001\nhealth_path=/\nhmode=http\nimage=ghcr.io/o/a\nsite=off\n")
 	testutil.Perm(t, path, filePerm)
 	got, err := LoadAppConf(dir)
 	testutil.NoErr(t, err)

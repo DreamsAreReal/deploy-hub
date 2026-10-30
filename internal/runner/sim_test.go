@@ -73,6 +73,10 @@ type sim struct {
 	rwMounts     string
 	mountsErr    error
 	imageLabel   string
+	runEnv       string
+	bakedEnv     string
+	networks     string
+	networksErr  error
 	stopped      []string
 }
 
@@ -113,6 +117,9 @@ func (s *sim) handle(c procexec.Command) (procexec.Result, error) {
 	case "compose":
 		return s.compose(c)
 	case psVerb:
+		if a[1] == "--format" {
+			return procexec.Result{Stdout: s.networks}, s.networksErr
+		}
 		name := strings.TrimSuffix(strings.TrimPrefix(a[3], "name=^"), "$")
 		if s.running[name] {
 			return procexec.Result{Stdout: "id123\n"}, nil
@@ -133,6 +140,9 @@ func (s *sim) inspectCall(a []string) (procexec.Result, error) {
 func (s *sim) lifecycle(a []string) (procexec.Result, error) {
 	switch a[0] {
 	case "image":
+		if a[1] == verbInsp && a[3] == envFormat {
+			return procexec.Result{Stdout: s.bakedEnv}, nil
+		}
 		if a[1] == verbInsp {
 			return procexec.Result{Stdout: s.imageLabel + "\n"}, nil
 		}
@@ -197,6 +207,8 @@ func (s *sim) inspect(format, container string) procexec.Result {
 		return procexec.Result{Stdout: "unhealthy"}
 	case "{{range $p,$c := .NetworkSettings.Ports}}{{range $c}}{{$p}} {{.HostPort}}\n{{end}}{{end}}":
 		return procexec.Result{Stdout: "8080/tcp " + appPort + "\n"}
+	case envFormat:
+		return procexec.Result{Stdout: s.runEnv}
 	default:
 		return procexec.Result{Stdout: "web_default\n"}
 	}
@@ -406,7 +418,7 @@ func (e *env) state(s registry.DeployState) {
 }
 
 func (e *env) dispatch(raw, stdin string) int {
-	if !e.bare && slices.ContainsFunc([]string{VerbDeploy, VerbReport, VerbCacheGet, VerbCachePut}, func(v string) bool { return strings.HasPrefix(raw, v+" ") }) {
+	if !e.bare && slices.ContainsFunc([]string{VerbDeploy, VerbReport, VerbCacheGet, VerbCachePut, VerbBaselineGet, VerbBaselinePut}, func(v string) bool { return strings.HasPrefix(raw, v+" ") }) {
 		stdin = identity() + stdin
 	}
 	return e.svc.Dispatch(context.Background(), raw, strings.NewReader(stdin))

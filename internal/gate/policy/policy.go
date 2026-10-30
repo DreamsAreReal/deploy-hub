@@ -32,8 +32,8 @@ const (
 	percentCeiling    = 100
 	maxParallelChecks = 16
 	purlScheme        = "pkg:"
-	policyChecks      = 8
-	appChecks         = 5
+	policyChecks      = 9
+	appChecks         = 6
 )
 
 var (
@@ -73,6 +73,7 @@ type Mutation struct {
 type Images struct {
 	Semgrep string `yaml:"semgrep"`
 	ZAP     string `yaml:"zap"`
+	Browser string `yaml:"browser"`
 }
 
 type Thresholds struct {
@@ -82,6 +83,7 @@ type Thresholds struct {
 	MaxCognitive    int     `yaml:"max_cognitive_complexity"`
 	MaxDuplication  float64 `yaml:"max_duplication_percent"`
 	DuplicateTokens int     `yaml:"duplicate_min_tokens"`
+	MaxNetGrowth    int     `yaml:"max_net_growth_lines"`
 }
 
 type Limits struct {
@@ -115,6 +117,14 @@ type App struct {
 	Accepted  []Accepted  `yaml:"accepted_workflow_findings"`
 	Host      *Host       `yaml:"host"`
 	Shell     string      `yaml:"shell_utilities"`
+	UI        *UI         `yaml:"ui"`
+}
+
+type UI struct {
+	Map      string   `yaml:"map"`
+	Seed     []string `yaml:"seed"`
+	Env      []string `yaml:"env"`
+	Chromium string   `yaml:"chromium"`
 }
 
 const ShellBusybox = "busybox"
@@ -189,7 +199,7 @@ func (p Policy) Validate() error {
 	errs = append(errs,
 		p.Thresholds.validate(), p.Limits.validate(), p.Images.validate(),
 		nonEmpty("owners", p.Owners), nonEmpty("licenses", p.Licenses), nonEmpty("markers", p.Markers), nonEmpty("sast_rulesets", p.SASTRules),
-		p.validateDeclared(), p.validateReviewedTexts(), p.Hub.validate(),
+		p.validateDeclared(), p.validateReviewedTexts(), p.Hub.validate(), p.validateBrowser(),
 	)
 	for name, app := range p.Apps {
 		errs = append(errs, app.validate(name))
@@ -249,6 +259,13 @@ func percent(field string, v float64) error {
 	return nil
 }
 
+func notNegative(field string, v int64) error {
+	if v < 0 {
+		return fmt.Errorf("%w: %s must not be negative", ErrPolicy, field)
+	}
+	return nil
+}
+
 func positive(field string, v int64) error {
 	if v <= 0 {
 		return fmt.Errorf("%w: %s must be positive", ErrPolicy, field)
@@ -264,6 +281,7 @@ func (t Thresholds) validate() error {
 		percent("max_duplication_percent", t.MaxDuplication),
 		positive("max_cognitive_complexity", int64(t.MaxCognitive)),
 		positive("duplicate_min_tokens", int64(t.DuplicateTokens)),
+		notNegative("max_net_growth_lines", int64(t.MaxNetGrowth)),
 	)
 }
 
@@ -294,6 +312,15 @@ func (i Images) validate() error {
 	return errors.Join(pinned("images.semgrep", i.Semgrep), pinned("images.zap", i.ZAP))
 }
 
+func (p Policy) validateBrowser() error {
+	for _, app := range p.Apps {
+		if app.UI != nil {
+			return pinned("images.browser", p.Images.Browser)
+		}
+	}
+	return nil
+}
+
 func pinned(field, ref string) error {
 	if !digestRef.MatchString(ref) {
 		return fmt.Errorf("%w: %s must be pinned by sha256 digest", ErrPolicy, field)
@@ -303,7 +330,7 @@ func pinned(field, ref string) error {
 
 func (a App) validate(name string) error {
 	errs := make([]error, 0, len(a.Scenarios)+appChecks)
-	errs = append(errs, validate.AppName(name), validate.RepoSlug(a.Repo), a.validateKind(name), validateHost(name, a.Host), a.validateShell(name))
+	errs = append(errs, validate.AppName(name), validate.RepoSlug(a.Repo), a.validateKind(name), validateHost(name, a.Host), a.validateShell(name), a.UI.validate(name))
 	seen := map[string]bool{}
 	for _, s := range a.Scenarios {
 		errs = append(errs, s.validate(name, seen))
@@ -318,6 +345,13 @@ func (a App) validate(name string) error {
 		errs = append(errs, f.validate(name))
 	}
 	return errors.Join(errs...)
+}
+
+func (u *UI) validate(name string) error {
+	if u == nil || (u.Map != "" && !path.IsAbs(u.Map) && path.Clean(u.Map) == u.Map && !strings.HasPrefix(u.Map, "..") && path.IsAbs(u.Chromium)) {
+		return nil
+	}
+	return fmt.Errorf("%w: %s: ui needs the repo path of its app map and the absolute path of chromium in the browser image", ErrPolicy, name)
 }
 
 func (a App) validateShell(name string) error {

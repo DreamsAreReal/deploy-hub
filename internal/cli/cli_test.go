@@ -22,6 +22,15 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/testutil"
 )
 
+const (
+	verbStatus = "status"
+)
+
+const (
+	sourcePrune = "prune"
+	runnerOther = "runner-other"
+)
+
 var errSim = errors.New("simulated")
 
 const (
@@ -56,7 +65,7 @@ func newHarness(t *testing.T) *harness {
 	if err := os.MkdirAll(h.hubDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	h.env = map[string]string{envHubDir: h.hubDir, envMetricsURL: "", envCaddyfile: filepath.Join(root, "Caddyfile"), envHome: root, envHostSlug: testSlug, envVPSAddr: testAddr}
+	h.env = map[string]string{envHubDir: h.hubDir, envMetricsURL: "", envLogsURL: "", envCaddyfile: filepath.Join(root, "Caddyfile"), envHome: root, envHostSlug: testSlug, envVPSAddr: testAddr}
 	return h
 }
 
@@ -125,6 +134,8 @@ func TestConfigValidation(t *testing.T) {
 	cases := map[string]string{
 		envHubDir:      relativeDir,
 		envMetricsURL:  "ftp://x",
+		envLogsURL:     "gopher://logs",
+		envTextfileDir: relativeDir,
 		envDeployUser:  "Bad User",
 		envHostSlug:    "bad slug",
 		envHubRepo:     "no-slash",
@@ -183,6 +194,7 @@ func TestBlankValuesFallBackToDefaults(t *testing.T) {
 	testutil.Equal(t, cfg.Paths.Dir, hub.DefaultDir)
 	testutil.Equal(t, cfg.DeployUser, defaultDeployUser)
 	testutil.Equal(t, cfg.MetricsURL, "")
+	testutil.Equal(t, cfg.LogsURL, "")
 	emailOnly := map[string]string{envACMEEmail: "ops@example.org"}
 	_, err = LoadConfig(func(k string) (string, bool) { v, ok := emailOnly[k]; return v, ok })
 	testutil.Is(t, err, caddy.ErrBadSlug)
@@ -197,12 +209,25 @@ func TestDefaultsAndMetricsToggle(t *testing.T) {
 		t.Fatalf("defaults %+v", cfg)
 	}
 	testutil.Equal(t, cfg.WorkflowRef(), "DreamsAreReal/deploy-hub/.github/workflows/deploy.yml@refs/heads/main")
+	testutil.Equal(t, cfg.LogsURL, "http://127.0.0.1:9428/select/logsql/query")
 	testutil.Equal(t, cfg.Audience, defaultAudience)
 	a := &App{Config: Config{MetricsURL: unreachableURL}, Now: time.Now}
 	p, ok := a.metrics().(obs.HTTPPusher)
 	testutil.True(t, ok && p.URL == unreachableURL && p.Client != nil, "HTTP pusher for a configured URL")
 	_, off := (&App{}).metrics().(obs.Discard)
 	testutil.True(t, off, "an empty URL disables metrics")
+	dir := t.TempDir()
+	both := &App{Config: Config{MetricsURL: unreachableURL, TextfileDir: dir}, Now: time.Now, source: sourcePrune}
+	fanout, fans := both.metrics().(obs.Fanout)
+	again, _ := both.metrics().(obs.Fanout)
+	testutil.True(t, fans && len(fanout) == 2 && len(again) == 2 && again[1] == fanout[1], "push and one shared textfile for the whole run")
+	only := &App{Config: Config{TextfileDir: dir}, Now: time.Now, source: sourcePrune}
+	file, alone := only.metrics().(*obs.Textfile)
+	testutil.True(t, alone && file.Path() == filepath.Join(dir, "deploy-hub-prune.prom"), "a textfile alone")
+	for request, want := range map[string]string{verbStatus: "runner-status", "  deploy web sha-1": "runner-deploy", "Bad;verb": runnerOther, "": runnerOther} {
+		testutil.Equal(t, textfileSource(CmdRunner, request), want)
+	}
+	testutil.Equal(t, textfileSource(CmdPrune, verbStatus), CmdPrune)
 }
 
 func TestRenderCommand(t *testing.T) {
@@ -256,7 +281,7 @@ func TestFactsCommand(t *testing.T) {
 func TestRunnerCommandUsesSSHOriginalCommand(t *testing.T) {
 	h := newHarness(t)
 	h.write(filepath.Join(h.hubDir, "apps.list"), "web\n")
-	h.env[envSSHOriginal] = "status"
+	h.env[envSSHOriginal] = verbStatus
 	if code := h.run(CmdRunner, "ignored"); code != ExitOK {
 		t.Fatalf("exit %d: %s", code, h.err)
 	}
@@ -270,7 +295,7 @@ func TestRunnerCommandUsesSSHOriginalCommand(t *testing.T) {
 	testutil.Contains(t, testutil.Read(t, filepath.Join(h2.hubDir, "deploys.log")), "refuse denied(reboot_now)")
 	h3 := newHarness(t)
 	h3.env[envHubDir] = filepath.Join(t.TempDir(), "absent")
-	if code := h3.run(CmdRunner, "status"); code != ExitFail {
+	if code := h3.run(CmdRunner, verbStatus); code != ExitFail {
 		t.Fatal("status without apps.list must fail")
 	}
 }
@@ -428,4 +453,21 @@ func TestMainEntry(t *testing.T) {
 	if code := Main(context.Background(), nil, func(string) (string, bool) { return "", false }, IO{Stdin: strings.NewReader(""), Stdout: &out, Stderr: &errb}); code != ExitUsage {
 		t.Fatalf("exit %d", code)
 	}
+}
+
+func TestLogsURLTurnsTheAccessLogCheckOnAndOff(t *testing.T) {
+	_, err := LoadConfig(func(k string) (string, bool) {
+		if k == envLogsURL {
+			return "logs store", true
+		}
+		return "", false
+	})
+	testutil.Is(t, err, ErrLogsURL)
+	off := &App{Config: Config{}}
+	testutil.True(t, off.visits() == nil, "no logs URL, no access log check")
+	on := &App{Config: Config{LogsURL: "http://127.0.0.1:1/select/logsql/query"}}
+	visits := on.visits()
+	testutil.True(t, visits != nil, "a logs URL turns the check on")
+	_, err = visits(context.Background())
+	testutil.Fails(t, err)
 }

@@ -1,6 +1,8 @@
 package selfupdate
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -18,6 +20,7 @@ import (
 const (
 	AssetBinary  = "deploy-hub-linux-amd64"
 	AssetSum     = AssetBinary + ".sha256"
+	BuiltEntry   = "deploy-hub"
 	TagPrefix    = "sha-"
 	Workflow     = "ci.yml"
 	DefaultAPI   = "https://api.github.com"
@@ -46,9 +49,11 @@ var (
 	ErrNoToken   = errors.New("no GitHub token: the private repo needs one to read releases and CI runs")
 	ErrRewritten = errors.New("release commit does not descend from the installed one: main was rewritten")
 	ErrRedirects = errors.New("too many redirects")
+	ErrNotBuilt  = errors.New("the release binary is not the one the gated CI run built")
 	releaseTag   = regexp.MustCompile(`^sha-([0-9a-f]{40})$`)
 	sumLine      = regexp.MustCompile(`^([0-9a-f]{64})(\s|$)`)
 	assetID      = regexp.MustCompile(`^[0-9]{1,20}$`)
+	artifactZip  = regexp.MustCompile(`^[0-9]{1,20}/zip$`)
 	fullCommit   = regexp.MustCompile(`^[0-9a-f]{40}$`)
 )
 
@@ -77,12 +82,21 @@ type releaseDoc struct {
 
 type runsDoc struct {
 	Runs []struct {
+		ID         int64  `json:"id"`
 		HeadSHA    string `json:"head_sha"`
 		HeadBranch string `json:"head_branch"`
 		Event      string `json:"event"`
 		Conclusion string `json:"conclusion"`
 		Path       string `json:"path"`
 	} `json:"workflow_runs"`
+}
+
+type artifactsDoc struct {
+	Artifacts []struct {
+		Name    string `json:"name"`
+		Expired bool   `json:"expired"`
+		URL     string `json:"archive_download_url"`
+	} `json:"artifacts"`
 }
 
 func ValidTag(tag string) bool {
@@ -159,19 +173,81 @@ func (s Source) release(doc releaseDoc, want string) (Release, error) {
 	return r, nil
 }
 
-func (s Source) Gated(ctx context.Context, commit string) error {
+func (s Source) Gated(ctx context.Context, commit string) ([]int64, error) {
 	q := url.Values{"head_sha": {commit}, "branch": {mainBranch}, "event": {pushEvent}, "status": {success}}
 	var doc runsDoc
 	if err := s.getJSON(ctx, s.API+"/repos/"+s.Repo+"/actions/workflows/"+Workflow+"/runs?"+q.Encode(), &doc); err != nil {
-		return err
+		return nil, err
 	}
+	var runs []int64
 	for _, r := range doc.Runs {
 		if r.HeadSHA == commit && r.HeadBranch == mainBranch && r.Event == pushEvent && r.Conclusion == success &&
 			strings.HasSuffix(r.Path, "/"+Workflow) {
-			return nil
+			runs = append(runs, r.ID)
 		}
 	}
-	return fmt.Errorf("%w: %s", ErrNotGated, commit)
+	if len(runs) == 0 {
+		return nil, fmt.Errorf("%w: %s", ErrNotGated, commit)
+	}
+	return runs, nil
+}
+
+func (s Source) Built(ctx context.Context, runs []int64, bin []byte) error {
+	for _, run := range runs {
+		built, err := s.runBuilt(ctx, run, bin)
+		if err != nil || built {
+			return err
+		}
+	}
+	return fmt.Errorf("%w: no artifact %s of runs %v holds it", ErrNotBuilt, AssetBinary, runs)
+}
+
+func (s Source) runBuilt(ctx context.Context, run int64, bin []byte) (bool, error) {
+	var doc artifactsDoc
+	query := url.Values{"name": {AssetBinary}}.Encode()
+	if err := s.getJSON(ctx, fmt.Sprintf("%s/repos/%s/actions/runs/%d/artifacts?%s", s.API, s.Repo, run, query), &doc); err != nil {
+		return false, err
+	}
+	prefix := s.API + "/repos/" + s.Repo + "/actions/artifacts/"
+	for _, a := range doc.Artifacts {
+		if id, ok := strings.CutPrefix(a.URL, prefix); !ok || a.Name != AssetBinary || a.Expired || !artifactZip.MatchString(id) {
+			continue
+		}
+		built, err := s.builtBinary(ctx, a.URL)
+		if err != nil {
+			return false, err
+		}
+		if bytes.Equal(built, bin) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s Source) builtBinary(ctx context.Context, raw string) ([]byte, error) {
+	archive, err := s.get(ctx, raw, acceptBinary, maxBinary)
+	if err != nil {
+		return nil, err
+	}
+	reader, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrNotBuilt, err)
+	}
+	for _, file := range reader.File {
+		if file.Name == BuiltEntry && file.UncompressedSize64 <= maxBinary {
+			return readEntry(file)
+		}
+	}
+	return nil, fmt.Errorf("%w: the artifact has no %s", ErrNotBuilt, BuiltEntry)
+}
+
+func readEntry(file *zip.File) ([]byte, error) {
+	body, err := file.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = body.Close() }()
+	return io.ReadAll(io.LimitReader(body, maxBinary))
 }
 
 func (s Source) Fetch(ctx context.Context, r Release) ([]byte, error) {

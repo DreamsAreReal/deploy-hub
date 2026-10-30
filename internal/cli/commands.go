@@ -3,15 +3,19 @@ package cli
 import (
 	"context"
 	"flag"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/DreamsAreReal/deploy-hub/internal/accesslog"
 	"github.com/DreamsAreReal/deploy-hub/internal/caddy"
 	"github.com/DreamsAreReal/deploy-hub/internal/compose"
 	"github.com/DreamsAreReal/deploy-hub/internal/docker"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/arch"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/policy"
 	"github.com/DreamsAreReal/deploy-hub/internal/health"
 	"github.com/DreamsAreReal/deploy-hub/internal/journal"
 	"github.com/DreamsAreReal/deploy-hub/internal/lock"
@@ -24,9 +28,11 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/registry"
 	"github.com/DreamsAreReal/deploy-hub/internal/runner"
 	"github.com/DreamsAreReal/deploy-hub/internal/validate"
+	embedded "github.com/DreamsAreReal/deploy-hub/policy"
 )
 
 const (
+	flagOnly     = "--only"
 	LockWait     = 300 * time.Second
 	lockPoll     = time.Second
 	renderArgs   = 3
@@ -47,11 +53,17 @@ func (a *App) journal() journal.Journal {
 }
 
 func runRunner(ctx context.Context, a *App, ex procexec.Runner, args []string) int {
+	only := ""
+	if len(args) > 1 && args[0] == flagOnly {
+		only, args = args[1], args[2:]
+	}
 	raw := a.Config.SSHCommand
 	if raw == "" {
 		raw = strings.Join(args, " ")
 	}
-	return a.runnerService(ex).Dispatch(ctx, raw, a.IO.Stdin)
+	svc := a.runnerService(ex)
+	svc.Only = only
+	return svc.Dispatch(ctx, raw, a.IO.Stdin)
 }
 
 func (a *App) runnerService(ex procexec.Runner) *runner.Service {
@@ -76,12 +88,16 @@ func (a *App) runnerService(ex procexec.Runner) *runner.Service {
 		Log:         a.Log,
 		Metrics:     a.metrics(),
 		Delivery:    a.delivery(),
+		Secrets:     a.secrets(ex),
 		Identity: runner.OIDCVerifier{Fetcher: oidc.Fetcher{
 			Client: &http.Client{}, URL: a.Config.JWKSURL, Cache: a.Config.JWKSCache, Log: a.Log,
 		}},
 		Audience:    a.Config.Audience,
 		WorkflowRef: a.Config.WorkflowRef(),
 		Host:        runner.SudoHost{Exec: ex, Binary: a.Config.Paths.Binary()},
+		Catalog:     a.catalog(),
+		HostDirs:    arch.HostDirs{Units: policy.UnitDir, Sites: policy.CaddySiteDir, Net: arch.ProcNetDir, Accounts: arch.AccountsDir},
+		Visits:      a.visits(),
 		HostApps:    a.hostApps(),
 	}
 }
@@ -191,4 +207,21 @@ func runOnboard(ctx context.Context, a *App, ex procexec.Runner, args []string) 
 		Exec: ex, Out: a.Out, Err: a.Err, Log: a.Log,
 	}
 	return o.Run(ctx, args)
+}
+
+func (a *App) visits() func(context.Context) ([]arch.Visit, error) {
+	if a.Config.LogsURL == "" {
+		return nil
+	}
+	reader := accesslog.Reader{URL: a.Config.LogsURL, Domain: caddy.Domain(a.Config.Caddy.HostSlug), Client: &http.Client{}, Addresses: net.InterfaceAddrs}
+	return reader.FromServer
+}
+
+func (a *App) catalog() *arch.Catalog {
+	catalog, err := arch.Parse(embedded.Architecture())
+	if err != nil {
+		a.Log.Warn("catalog unreadable, no live drift check", "error", err.Error())
+		return nil
+	}
+	return &catalog
 }

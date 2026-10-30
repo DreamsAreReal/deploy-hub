@@ -40,6 +40,7 @@ const (
 	msgUpToDate      = "caddy-sync: Caddyfile already up to date (no reload)"
 	msgUpdated       = "caddy-sync: Caddyfile updated and Caddy reloaded"
 	candidateSuffix  = ".new"
+	domainSuffix     = ".sslip.io"
 
 	standbyPortOffset = 10000
 	SpareStandbyFirst = 30000
@@ -78,6 +79,7 @@ type Route struct {
 	App     string
 	Port    string
 	Standby string
+	Private bool
 }
 
 func Routes(apps []registry.Entry, busy func(int) bool) []Route {
@@ -106,11 +108,19 @@ func appRoutes(apps []registry.Entry, busy func(int) bool) ([]Route, portPool) {
 		if err != nil || validate.Port(conf.Port) != nil {
 			continue
 		}
-		out = append(out, Route{App: a.Name, Port: conf.Port})
+		out = append(out, Route{App: a.Name, Port: conf.Port, Private: !Public(conf)})
 		port, _ := strconv.Atoi(conf.Port)
 		pool.taken[port] = true
 	}
 	return out, pool
+}
+
+func Domain(slug string) string {
+	return slug + domainSuffix
+}
+
+func Public(conf registry.AppConf) bool {
+	return validate.Port(conf.Port) == nil && conf.Site != registry.SiteOff
 }
 
 func (p portPool) free(port int) bool {
@@ -147,6 +157,9 @@ func Render(routes []Route, slug, email string) string {
 	fmt.Fprintf(&b, globalBlock, email)
 	b.WriteString(extraImport)
 	for _, r := range routes {
+		if r.Private {
+			continue
+		}
 		fmt.Fprintf(&b, siteOpen, r.App, slug, r.Port)
 		if r.Standby != "" {
 			fmt.Fprintf(&b, standbyUpstream, r.Standby)

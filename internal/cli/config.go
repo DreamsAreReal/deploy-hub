@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/DreamsAreReal/deploy-hub/internal/accesslog"
 	"github.com/DreamsAreReal/deploy-hub/internal/caddy"
 	"github.com/DreamsAreReal/deploy-hub/internal/health"
 	"github.com/DreamsAreReal/deploy-hub/internal/hub"
@@ -23,6 +24,7 @@ const (
 	envCaddyUser   = "CADDY_USER"
 	envDeployUser  = "DEPLOY_USER"
 	envMetricsURL  = "DEPLOY_HUB_METRICS_URL"
+	envLogsURL     = "DEPLOY_HUB_LOGS_URL"
 	envDeliveryURL = "DEPLOY_HUB_DELIVERY_URL"
 	envLogLevel    = "DEPLOY_HUB_LOG_LEVEL"
 	envLogFile     = "DEPLOY_HUB_LOG_FILE"
@@ -38,6 +40,12 @@ const (
 	envAudience    = "DEPLOY_HUB_OIDC_AUDIENCE"
 	envJWKSURL     = "DEPLOY_HUB_JWKS_URL"
 	envJWKSCache   = "DEPLOY_HUB_JWKS_CACHE"
+	envStoreFile   = "DEPLOY_HUB_SECRETS_FILE"
+	envTextfileDir = "DEPLOY_HUB_TEXTFILE_DIR"
+	envStoreAge    = "DEPLOY_HUB_SECRETS_KEY"
+	envAge         = "DEPLOY_HUB_AGE"
+	defaultAge     = "/usr/bin/age"
+	defaultAgeKey  = "/run/deploy-hub/age.key"
 
 	minGateTimeout = 60 * time.Second
 	maxGateTimeout = 10 * time.Minute
@@ -64,6 +72,8 @@ const (
 var (
 	ErrHubDir     = errors.New("invalid HUB_DIR: must be an absolute path")
 	ErrMetricsURL = errors.New("invalid DEPLOY_HUB_METRICS_URL: must be an http(s) URL or empty")
+	ErrLogsURL    = errors.New("invalid DEPLOY_HUB_LOGS_URL: must be an http(s) URL or empty")
+	ErrTextfile   = errors.New("invalid DEPLOY_HUB_TEXTFILE_DIR: must be an absolute path or empty")
 	ErrDelivery   = errors.New("invalid delivery_url: must be an http(s) URL or empty")
 	ErrUser       = errors.New("invalid user name")
 	ErrGate       = errors.New("invalid health gate timing: timeout 60s..10m, interval 1s..30s")
@@ -80,26 +90,35 @@ func (e Env) get(key, fallback string) string {
 }
 
 type Config struct {
-	Paths      hub.Paths
-	Caddy      caddy.Config
-	CaddyUser  string
-	DeployUser string
-	MetricsURL string
-	Delivery   string
-	LogLevel   string
-	LogFile    string
-	HostAlias  string
-	VPSAddr    string
-	DeployKey  string
-	HubRepo    string
-	RepoOwner  string
-	SSHCommand string
-	GateWait   time.Duration
-	GateTick   time.Duration
-	Audience   string
-	JWKSURL    string
-	JWKSCache  string
-	SpoolRoot  string
+	Paths       hub.Paths
+	Caddy       caddy.Config
+	CaddyUser   string
+	DeployUser  string
+	MetricsURL  string
+	Delivery    string
+	LogsURL     string
+	TextfileDir string
+	LogLevel    string
+	LogFile     string
+	HostAlias   string
+	VPSAddr     string
+	DeployKey   string
+	HubRepo     string
+	RepoOwner   string
+	SSHCommand  string
+	GateWait    time.Duration
+	GateTick    time.Duration
+	Audience    string
+	JWKSURL     string
+	JWKSCache   string
+	Secrets     SecretsConfig
+	SpoolRoot   string
+}
+
+type SecretsConfig struct {
+	File string
+	Key  string
+	Age  string
 }
 
 func (c Config) WorkflowRef() string {
@@ -111,27 +130,33 @@ func LoadConfig(env Env) (Config, error) {
 	server, _ := registry.ReadKV(paths.HubConf())
 	slug := env.get(envHostSlug, server[confHostSlug])
 	c := Config{
-		Paths:      paths,
-		Caddy:      caddy.Config{Caddyfile: env.get(envCaddyfile, caddy.DefaultCaddyfile), HostSlug: slug, Email: env.get(envACMEEmail, acmeEmail(server[confACMEEmail], slug))},
-		CaddyUser:  env.get(envCaddyUser, caddy.DefaultUser),
-		DeployUser: env.get(envDeployUser, defaultDeployUser),
-		MetricsURL: defaultMetricsURL,
-		Delivery:   env.get(envDeliveryURL, server[confDeliveryURL]),
-		LogLevel:   env.get(envLogLevel, ""),
-		LogFile:    env.get(envLogFile, ""),
-		HostAlias:  env.get(envHostAlias, defaultHostAlias),
-		VPSAddr:    env.get(envVPSAddr, ""),
-		DeployKey:  env.get(envDeployKey, filepath.Join(env.get(envHome, ""), defaultDeployKey)),
-		HubRepo:    env.get(envHubRepo, defaultHubRepo),
-		RepoOwner:  env.get(envRepoOwner, defaultRepoOwner),
-		SSHCommand: env.get(envSSHOriginal, ""),
-		Audience:   env.get(envAudience, defaultAudience),
-		JWKSURL:    env.get(envJWKSURL, oidc.JWKSURL),
-		JWKSCache:  env.get(envJWKSCache, filepath.Join(env.get(envHome, ""), defaultJWKSCache)),
-		SpoolRoot:  env.get(envSpoolRoot, defaultSpool),
+		Paths:       paths,
+		Caddy:       caddy.Config{Caddyfile: env.get(envCaddyfile, caddy.DefaultCaddyfile), HostSlug: slug, Email: env.get(envACMEEmail, acmeEmail(server[confACMEEmail], slug))},
+		CaddyUser:   env.get(envCaddyUser, caddy.DefaultUser),
+		DeployUser:  env.get(envDeployUser, defaultDeployUser),
+		MetricsURL:  defaultMetricsURL,
+		Delivery:    env.get(envDeliveryURL, server[confDeliveryURL]),
+		LogsURL:     accesslog.DefaultURL,
+		LogLevel:    env.get(envLogLevel, ""),
+		LogFile:     env.get(envLogFile, ""),
+		HostAlias:   env.get(envHostAlias, defaultHostAlias),
+		VPSAddr:     env.get(envVPSAddr, ""),
+		DeployKey:   env.get(envDeployKey, filepath.Join(env.get(envHome, ""), defaultDeployKey)),
+		HubRepo:     env.get(envHubRepo, defaultHubRepo),
+		RepoOwner:   env.get(envRepoOwner, defaultRepoOwner),
+		SSHCommand:  env.get(envSSHOriginal, ""),
+		Audience:    env.get(envAudience, defaultAudience),
+		JWKSURL:     env.get(envJWKSURL, oidc.JWKSURL),
+		JWKSCache:   env.get(envJWKSCache, filepath.Join(env.get(envHome, ""), defaultJWKSCache)),
+		Secrets:     SecretsConfig{File: env.get(envStoreFile, ""), Key: env.get(envStoreAge, defaultAgeKey), Age: env.get(envAge, defaultAge)},
+		SpoolRoot:   env.get(envSpoolRoot, defaultSpool),
+		TextfileDir: env.get(envTextfileDir, ""),
 	}
 	if v, ok := env(envMetricsURL); ok {
 		c.MetricsURL = v
+	}
+	if v, ok := env(envLogsURL); ok {
+		c.LogsURL = v
 	}
 	c.GateWait = duration(env, envGateTimeout, health.Timeout)
 	c.GateTick = duration(env, envGateTick, health.Interval)
@@ -175,8 +200,14 @@ func (c Config) validateEndpoints() error {
 	if err := validMetricsURL(c.MetricsURL); err != nil {
 		return err
 	}
+	if c.TextfileDir != "" && !filepath.IsAbs(c.TextfileDir) {
+		return ErrTextfile
+	}
 	if validMetricsURL(c.JWKSURL) != nil {
 		return ErrJWKSURL
+	}
+	if validMetricsURL(c.LogsURL) != nil {
+		return ErrLogsURL
 	}
 	if validMetricsURL(c.Delivery) != nil {
 		return ErrDelivery

@@ -16,6 +16,7 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/delivery"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/docker"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/arch"
 	"github.com/DreamsAreReal/deploy-hub/internal/health"
 	"github.com/DreamsAreReal/deploy-hub/internal/hub"
 	"github.com/DreamsAreReal/deploy-hub/internal/journal"
@@ -63,8 +64,13 @@ type Service struct {
 	Audience    string
 	WorkflowRef string
 	Delivery    delivery.Notifier
+	Secrets     SecretLayer
+	Only        string
 	Host        HostSyncer
 	HostApps    []string
+	Catalog     *arch.Catalog
+	HostDirs    arch.HostDirs
+	Visits      func(context.Context) ([]arch.Visit, error)
 	samples     []obs.Sample
 	steps       []delivery.Step
 }
@@ -90,6 +96,9 @@ func (s *Service) Dispatch(ctx context.Context, raw string, stdin io.Reader) int
 		s.requested(req.Verb, journal.NoValue)
 		return s.status(ctx)
 	}
+	if s.Only != "" && req.App != s.Only {
+		return s.refuse(raw, msgOtherApp)
+	}
 	entry, err := s.Apps.Lookup(req.App)
 	if err != nil {
 		return s.refuse(raw, msgUnknownApp)
@@ -106,6 +115,10 @@ func (s *Service) Dispatch(ctx context.Context, raw string, stdin io.Reader) int
 		return s.cacheGet(ctx, raw, entry, req.Tag, stdin)
 	case VerbCachePut:
 		return s.cachePut(ctx, raw, entry, req.Tag, stdin)
+	case VerbBaselineGet:
+		return s.baselineGet(ctx, raw, entry, req.Tag, stdin)
+	case VerbBaselinePut:
+		return s.baselinePut(ctx, raw, entry, req.Tag, stdin)
 	default:
 		return s.rollback(ctx, raw, entry, req.Tag)
 	}

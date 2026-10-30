@@ -13,6 +13,18 @@ import (
 )
 
 const (
+	envPolicy = "POLICY=/p.yaml"
+	envGHVar  = "GH_TOKEN=token"
+)
+
+const (
+	envRepoWeb      = "GITHUB_REPOSITORY=Owner/web"
+	envWorkspaceSrc = "GITHUB_WORKSPACE=/src"
+	stepUpload      = "Upload the mutation verdicts to the hub"
+	envActorOwner   = "ACTOR=owner"
+)
+
+const (
 	workflows    = "../.github/workflows"
 	releaseToken = "secrets.RELEASE_TOKEN"
 	stepDeploy   = "Deploy on the VPS"
@@ -145,7 +157,10 @@ mkdir -p "$CONTEXT/web/templates"
 echo x > "$CONTEXT/web/templates/page.html"
 echo x > "$CONTEXT/run.sh"
 chmod u+x "$CONTEXT/run.sh"
-docker() { for a; do ctx=$a; done; find "$ctx" -mindepth 1 -printf '%m %P\n' | sort > "$MODES"; }
+docker() {
+	if [ "$1" = image ]; then echo sha256:built; return; fi
+	for a; do ctx=$a; done; find "$ctx" -mindepth 1 -printf '%m %P\n' | sort > "$MODES"
+}
 `
 
 func TestTheImageIsBuiltFromAContextReadableWhateverTheRunnerUmask(t *testing.T) {
@@ -181,8 +196,8 @@ func runGate(t *testing.T, gate workflowStep, built, autoGo string) (string, str
 	args := filepath.Join(dir, "args")
 	cmd := exec.CommandContext(t.Context(), "bash", "-e", "-c", fakeGateTools+gate.Run)
 	cmd.Env = []string{systemPath, "TOOLCHAIN=" + dir, "ARGS=" + args, "BUILT=" + built, appWeb,
-		"IMAGE=ghcr.io/owner/web:sha-abc", "GITHUB_REPOSITORY=Owner/web", shaABC, "POLICY=/p.yaml",
-		"GITHUB_WORKSPACE=/src", "RUNNER_TEMP=" + dir, "GOTOOLCHAIN=local", "LOCAL_GO=" + hubGo, "AUTO_GO=" + autoGo}
+		"IMAGE=ghcr.io/owner/web:sha-abc", envRepoWeb, shaABC, envPolicy,
+		envWorkspaceSrc, "RUNNER_TEMP=" + dir, "GOTOOLCHAIN=local", "LOCAL_GO=" + hubGo, "AUTO_GO=" + autoGo}
 	out, err := cmd.CombinedOutput()
 	return args, string(out), err
 }
@@ -195,6 +210,135 @@ func gateArgs(t *testing.T, gate workflowStep, built string) string {
 	got, err := os.ReadFile(filepath.Clean(args))
 	testutil.NoErr(t, err)
 	return string(got)
+}
+
+const fakeGateWitness = `deploy-hub() {
+	env > "$SEEN"
+	if [ -e "$RUNNER_TEMP/ssh/deploy_key" ]; then echo key >> "$SEEN"; fi
+}
+go() { echo "$LOCAL_GO"; }
+sleep() { return 1; }
+`
+
+func stepsByName(t *testing.T) ([]workflowStep, map[string]int) {
+	t.Helper()
+	w, _ := readDeployWorkflow(t)
+	steps := w.Jobs["deploy"].Steps
+	index := map[string]int{}
+	for i, s := range steps {
+		index[s.Name] = i
+	}
+	return steps, index
+}
+
+func TestTheAppCodeRunsWithoutTheDeployKeyOrAnIDTokenRequest(t *testing.T) {
+	steps, index := stepsByName(t)
+	dir := t.TempDir()
+	testutil.Write(t, filepath.Join(dir, "ssh", "deploy_key"), "key")
+	seen := filepath.Join(dir, "seen")
+	cmd := exec.CommandContext(t.Context(), "bash", "-e", "-c", fakeGateWitness+steps[index[stepGate]].Run)
+	cmd.Env = []string{systemPath, "TOOLCHAIN=" + dir, "SEEN=" + seen, "BUILT=false", appWeb, envRepoWeb, shaABC,
+		envPolicy, envWorkspaceSrc, "RUNNER_TEMP=" + dir,
+		"ACTIONS_ID_TOKEN_REQUEST_TOKEN=request-token", "ACTIONS_ID_TOKEN_REQUEST_URL=https://token.example", "LOCAL_GO=" + hubGo}
+	out, err := cmd.CombinedOutput()
+	testutil.NoErr(t, err)
+	testutil.Equal(t, string(out), "")
+	env, err := os.ReadFile(filepath.Clean(seen))
+	testutil.NoErr(t, err)
+	testutil.Contains(t, string(env), "RUNNER_TEMP="+dir)
+	testutil.Excludes(t, string(env), "ACTIONS_ID_TOKEN_REQUEST", "\nkey\n")
+	again := steps[index["Connect to the VPS after the gate"]]
+	testutil.True(t, index["Connect to the VPS after the gate"] == index[stepGate]+1, "the key comes back right after the gate")
+	testutil.Equal(t, again.If, "always() && env.GATE_ONLY != 'true'")
+	for _, name := range []string{stepUpload, "Report the verdict to the hub", stepPush, stepDeploy} {
+		testutil.True(t, index[name] > index["Connect to the VPS after the gate"], name+" runs before the key is back")
+	}
+}
+
+const fakePushTools = `docker() {
+	if [ "$1 $2" = "image inspect" ]; then echo "$NOW_ID"; return; fi
+	echo "$*" >> "$CALLS"
+}
+`
+
+func pushWith(t *testing.T, builtID, nowID string) (string, error) {
+	t.Helper()
+	steps, index := stepsByName(t)
+	dir := t.TempDir()
+	calls := filepath.Join(dir, "calls")
+	testutil.Write(t, calls, "")
+	cmd := exec.CommandContext(t.Context(), "bash", "-e", "-c", fakePushTools+steps[index[stepPush]].Run)
+	cmd.Env = []string{systemPath, "CALLS=" + calls, "BUILT_ID=" + builtID, "NOW_ID=" + nowID, "IMAGE=ghcr.io/owner/web", "TAG=sha-abc",
+		envGHVar, envActorOwner, "RUNNER_TEMP=" + dir, "GITHUB_OUTPUT=" + filepath.Join(dir, "out")}
+	out, err := cmd.CombinedOutput()
+	got, rerr := os.ReadFile(filepath.Clean(calls))
+	testutil.NoErr(t, rerr)
+	return string(out) + string(got), err
+}
+
+func TestThePushRefusesAnImageThatChangedAfterTheBuild(t *testing.T) {
+	pushed, err := pushWith(t, "sha256:built", "sha256:built")
+	testutil.NoErr(t, err)
+	testutil.Contains(t, pushed, "push ghcr.io/owner/web:sha-abc")
+	for _, ids := range [][2]string{{"sha256:built", "sha256:swapped"}, {"", ""}} {
+		refused, err := pushWith(t, ids[0], ids[1])
+		testutil.True(t, err != nil, "an image changed after the build was pushed")
+		testutil.Contains(t, refused, "nothing is pushed")
+		testutil.Excludes(t, refused, "push ghcr.io", "login")
+	}
+	steps, index := stepsByName(t)
+	testutil.Equal(t, steps[index[stepPush]].Env["BUILT_ID"], "${{ steps.image.outputs.id }}")
+	testutil.Contains(t, steps[index["Build image"]].Run, `echo "id=$id"`)
+}
+
+const fakePullTools = `docker() {
+	echo "$*" >> "$CALLS"
+	if [ "$1" = pull ] && [ -n "$PULL_FAILS" ]; then return 1; fi
+	cat > /dev/null
+}
+`
+
+func pullDeployed(t *testing.T, deployed, fails string) (string, string) {
+	t.Helper()
+	steps, index := stepsByName(t)
+	dir := t.TempDir()
+	calls, out := filepath.Join(dir, "calls"), filepath.Join(dir, "out")
+	testutil.Write(t, calls, "")
+	testutil.Write(t, out, "")
+	cmd := exec.CommandContext(t.Context(), "bash", "-e", "-c", fakePullTools+steps[index["Pull the deployed release for the rollback check"]].Run)
+	cmd.Env = []string{systemPath, "CALLS=" + calls, "DEPLOYED=" + deployed, "PULL_FAILS=" + fails, envGHVar, envActorOwner,
+		"RUNNER_TEMP=" + dir, "GITHUB_OUTPUT=" + out}
+	_, err := cmd.CombinedOutput()
+	testutil.NoErr(t, err)
+	got, err := os.ReadFile(filepath.Clean(calls))
+	testutil.NoErr(t, err)
+	output, err := os.ReadFile(filepath.Clean(out))
+	testutil.NoErr(t, err)
+	return string(got), string(output)
+}
+
+func TestTheDeployedReleaseIsPulledBeforeTheGateForTheRollbackCheck(t *testing.T) {
+	deployed := "ghcr.io/owner/web:sha-0123456789abcdef0123456789abcdef01234567"
+	calls, out := pullDeployed(t, deployed, "")
+	testutil.Contains(t, calls, "login ghcr.io -u owner --password-stdin", "pull --quiet "+deployed, "logout ghcr.io")
+	testutil.Equal(t, out, "image="+deployed+"\n")
+	calls, out = pullDeployed(t, deployed, "yes")
+	testutil.Contains(t, calls, "pull --quiet", "logout ghcr.io")
+	testutil.Equal(t, out, "")
+	for _, odd := range []string{"docker.io/evil/web:sha-0123456", "ghcr.io/owner/web:latest", "ghcr.io/owner/web:sha-1234567;id"} {
+		calls, out = pullDeployed(t, odd, "")
+		testutil.Equal(t, calls+out, "")
+	}
+	steps, index := stepsByName(t)
+	pull := steps[index["Pull the deployed release for the rollback check"]]
+	testutil.Equal(t, pull.If, "env.GATE_ONLY != 'true' && steps.cache.outputs.deployed != ''")
+	testutil.True(t, index["Pull the deployed release for the rollback check"] < index[stepGate], "the image is pulled before the gate")
+	gate := steps[index[stepGate]]
+	testutil.Equal(t, gate.Env["PREVIOUS"], "${{ steps.deployed.outputs.image }}")
+	gate.Run = "PREVIOUS=" + deployed + "\n" + gate.Run
+	testutil.Contains(t, gateArgs(t, gate, "true"), "--previous-image "+deployed)
+	testutil.Excludes(t, gateArgs(t, steps[index[stepGate]], "true"), "--previous-image")
+	testutil.Contains(t, steps[index["Fetch the mutation cache from the hub"]].Run, `deployed="$(sed -n 's/^deployed=//p' "$dir/served")"`)
 }
 
 func TestTheGateSeesTheEnvOfTheFullMutationRunAndOnlyTheHubsGo(t *testing.T) {
@@ -242,7 +386,7 @@ func TestOnlyADeployRunOfMainFeedsTheMutationCacheAndTheFullRun(t *testing.T) {
 	for _, s := range w.Jobs["deploy"].Steps {
 		steps[s.Name] = s
 	}
-	for _, name := range []string{"Upload the mutation verdicts to the hub", "Keep the source for the hub's full mutation run"} {
+	for _, name := range []string{stepUpload, "Keep the source for the hub's full mutation run"} {
 		testutil.Contains(t, steps[name].If, "env.GATE_ONLY != 'true'")
 	}
 	testutil.Contains(t, steps["Keep the source for the hub's full mutation run"].If, "runner.environment == 'self-hosted'")

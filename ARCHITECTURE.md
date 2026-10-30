@@ -104,6 +104,10 @@ not, so search for the name.
    Before it, `mutation-cache-get` fetches the app's mutation verdict cache
    from the hub; after it, pass or fail, `mutation-cache-put` uploads the
    verdicts of this run (README "Verdict cache"). Both only warn on failure.
+   `ui-baseline-get` fetches the screenshots of the deployed version for the
+   `ui` stage to compare with; after a successful deploy `ui-baseline-put`
+   hands the gate's screenshots of the new tag to the hub (README "Screens
+   against the deployed version").
 6. **Report** (pass or fail; skipped only when the workflow inputs were
    invalid): the verdict is sent
    over SSH as `report <app> sha-<commit>` together with a GitHub OIDC token.
@@ -276,6 +280,7 @@ internal/provision/ `provision` and `facts`: prepare /opt/<app>/ as root
 internal/hostsync/  `host-sync`: install an app's host files from its gated image as root
 internal/selfupdate/ `self-update` and `sudoers-sync`: install a gated release of the hub, write the sudoers rule
 internal/onboard/   `onboard` on the operator machine: stub, secrets, provision
+internal/scaffold/  `scaffold`: a new service from templates/service, its policy, catalog and scrape entries
 internal/mcp/       `mcp`: JSON-RPC over stdio, tool schemas, argument checks before SSH
 internal/prune/     keep running image + 2 previous per app
 internal/obs/       slog logger, metric names (names.go), pusher, journal-derived counters
@@ -288,8 +293,8 @@ internal/testutil/  assertions for tests
 internal/gate/      the quality gate (below)
 e2e/                end-to-end tests of the real binary with fake docker/caddy/sudo
 policy/             gate.yaml, tools.yaml, golangci.yml, workflow-audit.yml, per-language tool locks
+templates/service/  the one template of a new service: a Go module of its own, gated with this repo
 server/systemd/     timers: status every minute, prune daily, history-guard every 5 min
-server/vmalert/     alert rules for the hub's metrics
 .github/            ci.yml, deploy.yml (reusable), history-guard.yml, actions/hub
 ```
 
@@ -313,11 +318,13 @@ server/vmalert/     alert rules for the hub's metrics
   letters, forbidden files.
 - `mutation/` (Go, AST based) and `tokmut/` (other languages, token based):
   the mutation engines. `lexis/` is the shared lexer, `dupl/` duplication,
-  `linecov/` and `junit/` report parsers.
+  `growth/` lines added and removed over 30 days of history, `linecov/` and
+  `junit/` report parsers.
 - `scan/`: external scanners (gitleaks, trufflehog, semgrep, osv-scanner,
   syft, zizmor, actionlint, hadolint, trivy).
-- `stage/`: starts the built image in an isolated network for DAST (ZAP) and
-  the load test.
+- `stage/`: starts the built image in an isolated network for DAST (ZAP), the
+  load test and the rollback check (the deployed image on the data this
+  release migrated).
 
 ## 7. How the code is tested
 
@@ -397,12 +404,12 @@ simulator tests (`internal/runner/*_test.go`) and, for anything visible over
 SSH, a scenario in `e2e/scenarios_test.go`. Update README if the interface or
 journal format changes.
 
-**Add a metric.** Declare the name in `internal/obs/names.go`. If it signals a
-problem, add it to the list in `TestEveryProblemSignalHasAnAlert`
-(`internal/obs/alerts_test.go`) and write an alert in
-`server/vmalert/deploy-hub.yml`; the test fails when an alert uses an
-undeclared metric or a problem metric has no alert. Document it in README
-"Observability".
+**Add a metric.** Declare the name in `internal/obs/names.go` and document it in
+README "Observability". If it signals a problem, the alert goes to the
+observability repo, the only home of alert rules: add the name to the list of
+hub signals in its `internal/rulecheck` test, write the alert in
+`rules/deploy-hub.yml` and a unit test that fires it in
+`tests/deploy-hub.test.yaml`.
 
 **Add a gate check.** A repo-wide check is a
 `func(context.Context, gate.Workspace) gate.Outcome` added to

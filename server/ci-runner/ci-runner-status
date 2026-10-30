@@ -1,6 +1,8 @@
 #!/bin/sh
 set -u
 URL=${DEPLOY_HUB_METRICS_URL-http://127.0.0.1:8428/api/v1/import/prometheus}
+DIR=${DEPLOY_HUB_TEXTFILE_DIR-}
+SOURCE=ci-runner
 WANTS=/etc/systemd/system/multi-user.target.wants
 NL=$(printf '\n.')
 NL=${NL%.}
@@ -8,9 +10,9 @@ NL=${NL%.}
 connected() {
 	cg=$(systemctl show -p ControlGroup --value "ci-runner@$1.service")
 	[ -n "${cg}" ] || return 1
-	pids=$(tr '\n' '|' 2>/dev/null <"/sys/fs/cgroup${cg}/cgroup.procs") || return 1
+	pids=$(paste -sd '|' "/sys/fs/cgroup${cg}/cgroup.procs" 2>/dev/null) || return 1
 	[ -n "${pids}" ] || return 1
-	ip netns exec "ci-$1" ss -Htnp state established '( dport = :443 )' | grep -Eq "pid=(${pids%|}),"
+	ip netns exec "ci-$1" ss -Htnp state established '( dport = :443 )' | grep -Eq "pid=(${pids}),"
 }
 
 isolated() {
@@ -91,6 +93,16 @@ metrics() {
 	fi
 }
 
+textfile() {
+	file="${DIR}/deploy-hub-${SOURCE}.prom"
+	now=$(date +%s)
+	{
+		printf '%s\n' "$1" | sed -e "/{/s/{/{source=\"${SOURCE}\",/" -e "/{/!s/ /{source=\"${SOURCE}\"} /"
+		printf 'deploy_hub_textfile_written_timestamp_seconds{source="%s"} %s\n' "${SOURCE}" "${now}"
+	} >"${file}.tmp" && mv "${file}.tmp" "${file}"
+}
+
 body=$(metrics)
 printf '%s\n' "${body}"
+[ -z "${DIR}" ] || textfile "${body}"
 [ -z "${URL}" ] || printf '%s\n' "${body}" | curl -fsS --max-time 10 --data-binary @- "${URL}"

@@ -6,7 +6,9 @@ import (
 	"strings"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/arch"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/dupl"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/growth"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/pack"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/scan"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/source"
@@ -21,6 +23,8 @@ const (
 	checkScenarios     = "scenarios"
 	checkDAST          = "dast"
 	checkLoad          = "load"
+	checkUI            = "ui"
+	checkRollback      = "rollback"
 )
 
 func Checks() []gate.Check {
@@ -30,6 +34,7 @@ func Checks() []gate.Check {
 	}
 	return ordered([]gate.Check{
 		{Name: "registration", Kind: gate.KindSecurity, Run: Registration},
+		{Name: "architecture", Kind: gate.KindSecurity, Run: arch.Check},
 		{Name: "hygiene", Kind: gate.KindSecurity, Run: source.Hygiene},
 		{Name: "comments", Kind: gate.KindQuality, Run: source.Comments},
 		{Name: "markers", Kind: gate.KindQuality, Run: source.Markers},
@@ -40,6 +45,7 @@ func Checks() []gate.Check {
 		byPack(pack.CheckLint),
 		byPack(pack.CheckComplexity),
 		{Name: "duplication", Kind: gate.KindQuality, Run: dupl.Check},
+		{Name: "growth", Kind: gate.KindQuality, Run: growth.Check},
 		byPack(pack.CheckDeadCode),
 		byPack(pack.CheckTests),
 		byPack(pack.CheckLineCoverage),
@@ -48,6 +54,8 @@ func Checks() []gate.Check {
 		byPack(pack.CheckFuzz),
 		{Name: checkDAST, Kind: gate.KindSecurity, Needs: gate.NeedHTTP, Run: stage.DAST},
 		{Name: checkLoad, Kind: gate.KindQuality, Needs: gate.NeedHTTP, Run: stage.Load},
+		{Name: checkUI, Kind: gate.KindQuality, Needs: gate.NeedHTTP, Run: stage.UI},
+		{Name: checkRollback, Kind: gate.KindQuality, Needs: gate.NeedHTTP, Run: stage.Rollback},
 		fullRunsOnly(byPack(pack.CheckMutation)),
 		{Name: "secrets-gitleaks", Kind: gate.KindSecurity, Run: scan.Gitleaks},
 		{Name: "secrets-trufflehog", Kind: gate.KindSecurity, Run: scan.Trufflehog},
@@ -73,7 +81,9 @@ var after = map[string][]string{
 	pack.CheckLineCoverage: {pack.CheckTests},
 	checkScenarios:         {pack.CheckTests},
 	checkLoad:              {checkDAST},
-	pack.CheckMutation:     {pack.CheckTests, pack.CheckLineCoverage, checkDAST, checkLoad},
+	checkUI:                {checkLoad},
+	checkRollback:          {checkUI},
+	pack.CheckMutation:     {pack.CheckTests, pack.CheckLineCoverage, checkDAST, checkLoad, checkUI, checkRollback},
 }
 
 func ordered(checks []gate.Check) []gate.Check {

@@ -1,0 +1,221 @@
+link_budget: 15
+tasks_callers:
+  - runner
+  - caddy
+admins:
+  - user: deploy
+    why: the hub runs as deploy and drives docker for every app (group docker)
+  - user: ubuntu
+    why: the default user of the cloud image (groups sudo and lxd); its authorized_keys is empty
+  - user: ops
+    why: the ops and epics Claude sessions administer the server through /etc/sudoers.d/ops, which the hub cannot read, so the check does not see this entry
+services:
+  deploy-hub:
+    owner: DreamsAreReal
+    critical: high
+    gives: [logs, metrics, events]
+    calls:
+      - to: github
+        why: releases, CI status and the self-update check need the GitHub API
+      - to: observability
+        why: the check of the server against the catalog reads the Caddy access log in VictoriaLogs to see which sites the server itself calls
+      - to: tasks
+        why: gate verdicts and deploys are posted as delivery steps
+        until: "2026-12-31"
+        task: "#786"
+    timers:
+      - name: .github/workflows/history-guard.yml
+        why: every 5 minutes, deletes branches and tags that bring back the history from before the repository was recreated, also when a push was missed
+      - name: deploy-hub-history-guard.timer
+        why: every 5 minutes, dispatches history-guard in deploy-hub and tasks from the server, because the GitHub schedule trigger is best-effort and may never fire (#790 decides the interval)
+      - name: deploy-hub-status.timer
+        why: every minute, app health, journal metrics and this check of the server against the catalog; the hub runs no daemon that could push them
+      - name: deploy-hub-self-update.timer
+        why: every 10 minutes, installs the newest gated release of the hub; GitHub cannot send an event into the server
+      - name: deploy-hub-prune.timer
+        why: daily at 04:10 UTC, removes app images beyond the running one and the two previous, so no deploy waits for it
+      - name: deploy-hub-preempt.timer
+        why: every 30 seconds, cancels pull request gates that a main deploy waits behind; the GitHub queue sends no event to the server
+      - name: ci-runner-status.timer
+        why: every minute, pushes the CI runner connection state and the CI disk fill; a runner that drops off sends no event
+      - name: ci-mutation@.timer
+        why: one chunk of the full mutation run of a repo a minute after the previous chunk, yielding to jobs; the whole run takes hours
+    secrets: [GH_TOKEN, GH_OWNER, RELEASE_TOKEN, VPS_SSH_KEY]
+    isolated:
+      - unit: ci-runner@.service
+        netns: /run/netns/ci-%i
+        why: CI jobs run pull request code; the namespace of each repo has NAT to the internet and no way to the ports of the server
+      - unit: ci-docker@.service
+        netns: /run/netns/ci-%i
+        why: the rootless docker of each CI runner builds and runs pull request images in the same namespace
+      - unit: ci-mutation@.service
+        netns: /run/netns/ci-%i
+        why: mutation chunks run the tests of the repo, pull request code too, in the same namespace
+  tasks:
+    owner: DreamsAreReal
+    critical: high
+    gives: [logs, metrics, errors]
+    exposes:
+      - site: tasks
+      - port: 8787
+    calls:
+      - to: stt
+        why: dictation audio from the browser is passed to the speech service
+      - to: observability
+        why: delivery steps of deploy-hub and the error records the assistant watches are read from VictoriaLogs
+      - to: observability
+        why: errors go to Bugsink through the Sentry SDK
+    timers:
+      - name: .github/workflows/history-guard.yml
+        why: every 5 minutes, deletes branches and tags that bring back the history from before the repository was recreated, also when a push was missed
+      - name: .github/workflows/crawl.yml
+        why: once a day, the full UI crawl of every screen on a GitHub-hosted runner, too long for each release (#810)
+    secrets: [STT_TOKEN, TASKS_AGENT_TOKEN, SENTRY_DSN, SENTRY_DSN_RUNNER, SENTRY_DSN_WEB]
+    config: [HOST, PORT, METRICS_PORT, DB_PATH, REQUIRE_DATA_MOUNT, DEV_LOGIN, PUBLIC_URL, STT_URL, AGENT_BASE_DIR, TASKS_API_URL, TASKS_AGENT_EPIC, AGENT_STATE_DIR, DELIVERY_LOGS_URL, SECRETS_CATALOG]
+    data: [/data]
+  stt:
+    owner: DreamsAreReal
+    critical: low
+    gives: [logs, metrics]
+    exposes:
+      - port: 8790
+    secrets: [STT_TOKENS]
+  runner:
+    owner: DreamsAreReal
+    critical: high
+    external: true
+    gives: [logs, metrics, errors]
+    calls:
+      - to: tasks
+        why: the runner takes tasks, reports runs and collects sources for the tracker
+      - to: github
+        why: agents push task branches
+      - to: anthropic
+        why: Claude Code runs the agents and the assistant on the owner's subscription
+      - to: router-bot
+        why: collects the router source of the assistant and runs the router commands the owner approved
+    timers:
+      - name: runner-obs-ship.timer
+        why: every minute, ships the Claude Code telemetry of the agents to the observability ingest, until a node-exporter textfile replaces it (#792)
+      - name: runner-cache-trim.timer
+        why: hourly, trims the Go build cache of the agents once it passes 20 GB; the cache has no limit of its own
+      - name: runner-tmp-trim.timer
+        why: hourly, removes what interrupted tests and builds leave in the private /tmp of the runner for more than 3 hours
+    secrets: [TASKS_AGENT_TOKEN, TASKS_ASSISTANT_TOKEN, CLAUDE_CREDENTIALS]
+    isolated:
+      - unit: runner.service
+        netns: /run/netns/runner
+        why: agents run code from tasks; their traffic leaves only through the WireGuard tunnel to the home router, and the ports of the server are out of reach
+      - unit: runner-obs-ship.service
+        netns: /run/netns/runner
+        why: ships the telemetry of the agents from their own namespace
+  router-bot:
+    owner: DreamsAreReal
+    critical: normal
+    gives: [logs, metrics, errors]
+    exposes:
+      - site: router-bot
+      - port: 8080
+    calls:
+      - to: router
+        why: reads and changes the home router through its API
+      - to: telegram
+        why: owner chat of the bot
+      - to: observability
+        why: errors go to Bugsink through the Sentry SDK
+      - to: tasks
+        why: posts its own alerts to the tracker instead of vmalert
+        until: "2026-12-31"
+        task: "#785"
+    secrets: [ROUTER_TOKEN, READ_TOKEN, ACTION_TOKEN, TELEGRAM_BOT_TOKEN, SENTRY_DSN, ROUTER_SENTRY_DSN, TASKS_ALERTS_URL]
+    config: [OWNER_CHAT_ID, PUBLIC_URL]
+    data: [/data]
+  observability:
+    owner: DreamsAreReal
+    critical: high
+    gives: [logs, metrics]
+    exposes:
+      - port: 8428
+      - port: 9428
+      - port: 8000
+      - site: observability-ingest
+    calls:
+      - to: tasks
+        why: vmalert posts alerts to the tracker, the only alert channel today
+        until: "2026-12-31"
+        task: "#785"
+    timers:
+      - name: obs-host-metrics.timer
+        why: every minute, host facts node-exporter does not collect (containers, systemd units, sites, certificates, backups) into its textfile
+      - name: app-backup.timer
+        why: daily at 03:30 UTC, backs up the data of every app
+      - name: app-backup-verify.timer
+        why: Sundays at 05:00 UTC, restores the latest backups into a scratch folder to prove they can be restored (#676)
+    secrets: [SECRET_KEY, CREATE_SUPERUSER, INGEST_TOKEN, notifier_url]
+    config: [INGEST_HOST, ALLOWED_HOSTS, BASE_URL, SNAPPEA_NUM_WORKERS, TIME_ZONE]
+  router-ax23:
+    owner: DreamsAreReal
+    critical: high
+    external: true
+    gives: [metrics]
+    calls:
+      - to: moscow-vps
+        why: the WireGuard tunnel for traffic that must leave through Moscow
+    timers:
+      - name: router-backup.timer
+        why: Sundays at 03:00 UTC, saves the router configuration on the server; a change made on the router itself sends no event
+  caddy:
+    owner: DreamsAreReal
+    critical: high
+    external: true
+    gives: [logs]
+    exposes:
+      - port: 80
+        public: true
+        why: plain HTTP, which only redirects to HTTPS and answers ACME challenges
+      - port: 443
+        public: true
+        why: HTTPS and HTTP/3 of every public site
+    calls:
+      - to: tasks
+        why: HTTPS front of every site
+  server-ops:
+    owner: DreamsAreReal
+    critical: normal
+    external: true
+    exposes:
+      - site: preview-p1
+      - site: preview-p2
+      - port: 22
+        public: true
+        why: SSH for the owner, the ops session and deploys; keys only, no passwords
+      - port: 51820
+        public: true
+        why: WireGuard tunnel to the home router, the only way out of the network namespace of the agents
+    timers:
+      - name: kernel-autoreboot.timer
+        why: daily at 01:00 UTC, reboots into a newer kernel when the running one is outdated, in the quietest hour
+      - name: vuln-selfcheck.timer
+        why: daily at 05:30 UTC, the checks of the vulnerability runbook; new advisories come without an event on the server
+      - name: preview-sweep.timer
+        why: hourly, removes expired previews whose own one-off timer was lost, for example in a reboot
+  router:
+    owner: DreamsAreReal
+    critical: high
+    external: true
+  moscow-vps:
+    owner: DreamsAreReal
+    critical: normal
+    external: true
+  github:
+    owner: GitHub
+    critical: high
+    external: true
+  telegram:
+    owner: Telegram
+    critical: low
+    external: true
+  anthropic:
+    owner: Anthropic
+    critical: high
+    external: true

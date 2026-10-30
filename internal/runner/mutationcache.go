@@ -42,6 +42,7 @@ var (
 type cacheCall struct {
 	raw   string
 	entry registry.Entry
+	conf  registry.AppConf
 	repo  string
 	tag   string
 	meta  Meta
@@ -63,7 +64,7 @@ func (s *Service) cacheRequest(ctx context.Context, raw, verb string, entry regi
 	if err != nil {
 		return cacheCall{}, s.refuse(raw, refusalMessage(err)), false
 	}
-	return cacheCall{raw: raw, entry: entry, repo: repo, tag: tag, meta: meta}, ExitOK, true
+	return cacheCall{raw: raw, entry: entry, conf: conf, repo: repo, tag: tag, meta: meta}, ExitOK, true
 }
 
 func repoCache(conf registry.AppConf) (string, error) {
@@ -95,8 +96,16 @@ func (s *Service) cacheGet(ctx context.Context, raw string, entry registry.Entry
 		}
 		name = sessionFile
 	}
+	s.printDeployed(c)
 	s.printLast(st)
 	return s.serve(c.repo, name)
+}
+
+func (s *Service) printDeployed(c cacheCall) {
+	current := registry.LoadState(c.entry.Dir).Current
+	if c.conf.Image != "" && current != "" {
+		s.Out.Printf(msgCacheDeployed, c.conf.Image, current)
+	}
 }
 
 func (s *Service) serve(repo, name string) int {

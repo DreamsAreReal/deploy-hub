@@ -1,8 +1,9 @@
 package runner
 
 const (
-	msgRefused          = "refused: only 'deploy <app> <tag>', 'report <app> <tag>', 'rollback <app> [tag]', 'status', 'history <app>', 'mutation-cache-get <app> <tag>', 'mutation-cache-put <app> <tag>' are accepted"
+	msgRefused          = "refused: only 'deploy <app> <tag>', 'report <app> <tag>', 'rollback <app> [tag]', 'status', 'history <app>', 'mutation-cache-get <app> <tag>', 'mutation-cache-put <app> <tag>', 'ui-baseline-get <app> <tag>', 'ui-baseline-put <app> <tag>' are accepted"
 	msgUnknownApp       = "refused: app not in allowlist"
+	msgOtherApp         = "refused: this deploy key is bound to another app"
 	msgBadTag           = "refused: tag must match ^sha-[0-9a-f]{7,40}$"
 	msgBadMain          = "refused: bad main service"
 	msgBadHPort         = "refused: bad hport"
@@ -39,6 +40,7 @@ const (
 	msgLive             = "%s — %s@%s live (%s)\n"
 	msgNoHistory        = "no journal entries for %s\n"
 	msgRegistryError    = "error: cannot read apps.list"
+	msgNotInCatalog     = "the app is not in policy/architecture.yaml"
 	statusHeader        = "app | sha | health | last deploy"
 	statusNone          = "none"
 	statusNever         = "never"
@@ -67,6 +69,17 @@ const (
 	msgCacheStored      = "mutation cache: %d verdicts received, sha256 %s\n"
 	msgCachePlan        = "plan=%s\n"
 	msgCacheLast        = "last=%s\n"
+	msgCacheDeployed    = "deployed=%s:%s\n"
+	msgBadShots         = "refused: ui baseline shots missing or malformed"
+	msgEnvReadable      = "secrets file %s can be read by group or others (mode %#o)"
+	groupOtherBits      = 0o077
+	msgBaselineStale    = "refused: the ui baseline comes only from the deployed tag"
+	msgBaselineRead     = "error: the stored ui baseline could not be read"
+	msgBaselineWrite    = "error: the ui baseline could not be stored"
+	msgBaselineFrom     = "from=%s\n"
+	msgBaselineKey      = "key=%s\n"
+	msgBaselineShot     = "shot=%s:%s\n"
+	msgBaselineStored   = "ui baseline: %d shots of %s stored\n"
 	msgFullRecorded     = "full mutation run recorded: passed=%t\n"
 	wordPassed          = "passed"
 	wordBlocked         = "blocked"
@@ -77,6 +90,7 @@ const (
 	reasonOther      = "other"
 	reasonBadRequest = "bad-request"
 	reasonUnknownApp = "unknown-app"
+	reasonOtherApp   = "other-app"
 	reasonBadTag     = "bad-tag"
 	reasonBadCompose = "bad-compose"
 	reasonNoIdentity = "no-identity"
@@ -86,6 +100,8 @@ const (
 	reasonBadDigest  = "bad-digest"
 	reasonBadVerdict = "bad-verdict"
 	reasonBadCache   = "bad-cache"
+	reasonBadShots   = "bad-shots"
+	reasonNotLive    = "not-live"
 )
 
 var refusalReasons = map[string]string{
@@ -104,4 +120,7 @@ var refusalReasons = map[string]string{
 	msgBadDigest:      reasonBadDigest,
 	msgBadVerdict:     reasonBadVerdict,
 	msgBadCache:       reasonBadCache,
+	msgBadShots:       reasonBadShots,
+	msgBaselineStale:  reasonNotLive,
+	msgOtherApp:       reasonOtherApp,
 }

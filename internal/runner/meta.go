@@ -16,6 +16,7 @@ const (
 	metaMain      = "main"
 	maxMetaLine   = 8 << 20
 	initialBuffer = 64 << 10
+	metaShot      = "shot"
 )
 
 var (
@@ -39,6 +40,8 @@ type Meta struct {
 	Verdicts string
 	Mode     string
 	Run      string
+	Key      string
+	Shots    []string
 }
 
 func ReadMeta(r io.Reader) (Meta, error) {
@@ -46,14 +49,18 @@ func ReadMeta(r io.Reader) (Meta, error) {
 	fields := map[string]*string{
 		"token": &m.Token, "actor": &m.Actor, "subject": &m.Subject, "start": &m.Start,
 		"compose": &m.Compose, metaMain: &m.Main, "hport": &m.HPort, "hmode": &m.HMode,
-		"oidc": &m.OIDC, "digest": &m.Digest, "verdict": &m.Verdict, "verdicts": &m.Verdicts, "mode": &m.Mode, "run": &m.Run,
+		"oidc": &m.OIDC, "digest": &m.Digest, "verdict": &m.Verdict, "verdicts": &m.Verdicts, "mode": &m.Mode, "run": &m.Run, "key": &m.Key,
 	}
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, initialBuffer), maxMetaLine)
+	shotBytes := 0
 	for sc.Scan() {
 		key, value, ok := strings.Cut(sc.Text(), "=")
 		if dst, known := fields[key]; ok && known {
 			*dst = value
+		}
+		if key == metaShot && ok && addShot(&m, value, &shotBytes) != nil {
+			return m, errBadShots
 		}
 	}
 	m.Subject = journal.Sanitize(m.Subject, subjectLimit)
@@ -61,6 +68,15 @@ func ReadMeta(r io.Reader) (Meta, error) {
 		m.Start = ""
 	}
 	return m, sc.Err()
+}
+
+func addShot(m *Meta, value string, total *int) error {
+	*total += len(value)
+	m.Shots = append(m.Shots, value)
+	if len(m.Shots) > MaxBaselineShots || *total > MaxBaselineBytes {
+		return errBadShots
+	}
+	return nil
 }
 
 func (m Meta) BYOC() bool {

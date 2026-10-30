@@ -1,3 +1,4 @@
 *.pem
 id_*
 .verify/
+node_modules/

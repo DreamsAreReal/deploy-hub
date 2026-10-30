@@ -16,6 +16,8 @@ const (
 	BlueGreenOn  = "on"
 	BlueGreenOff = "off"
 
+	SiteOff = "off"
+
 	ProfileStatic  = "static"
 	ProfileService = "service"
 	ProfileBot     = "bot"
@@ -40,6 +42,7 @@ type AppConf struct {
 	Image      string
 	Repo       string
 	BlueGreen  string
+	Site       string
 }
 
 func LoadAppConf(dir string) (AppConf, error) {
@@ -57,6 +60,7 @@ func LoadAppConf(dir string) (AppConf, error) {
 		Image:      kv["image"],
 		Repo:       kv["repo"],
 		BlueGreen:  kv["bluegreen"],
+		Site:       kv["site"],
 	}, nil
 }
 
@@ -71,6 +75,7 @@ func (c AppConf) Encode() string {
 		{"image", c.Image},
 		{"repo", c.Repo},
 		{"bluegreen", c.BlueGreen},
+		{"site", c.Site},
 	})
 }
 

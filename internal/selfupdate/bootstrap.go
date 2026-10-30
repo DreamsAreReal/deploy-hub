@@ -44,12 +44,16 @@ func (b Bootstrap) Run(ctx context.Context, tag string) (Release, error) {
 	}
 	b.Source.Token = token
 	r, err := b.Source.Find(ctx, tag)
+	var runs []int64
 	if err == nil {
-		err = b.Source.Gated(ctx, r.Commit)
+		runs, err = b.Source.Gated(ctx, r.Commit)
 	}
 	var bin []byte
 	if err == nil {
 		bin, err = b.Source.Fetch(ctx, r)
+	}
+	if err == nil {
+		err = b.Source.Built(ctx, runs, bin)
 	}
 	if err != nil {
 		return r, err

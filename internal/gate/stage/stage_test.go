@@ -33,14 +33,15 @@ const (
 )
 
 type dockerSim struct {
-	addr    string
-	state   string
-	runErr  error
-	portOut string
-	zapOut  string
-	catErr  error
-	logsOut string
-	logsErr error
+	addr     string
+	state    string
+	runErr   error
+	portOut  string
+	zapOut   string
+	catErr   error
+	logsOut  string
+	logsErr  error
+	badImage string
 }
 
 func (d *dockerSim) handle(c procexec.Command) (procexec.Result, error) {
@@ -67,6 +68,8 @@ func (d *dockerSim) run(args []string) (procexec.Result, error) {
 		return procexec.Result{Stdout: d.zapOut}, d.catErr
 	case strings.Contains(joined, zapFullScan) || strings.Contains(joined, zapAPIScan):
 		return procexec.Result{Stdout: "WARN-NEW: 1"}, errExit
+	case d.badImage != "" && strings.HasSuffix(joined, " "+d.badImage):
+		return procexec.Result{}, errExit
 	default:
 		return procexec.Result{}, d.runErr
 	}
@@ -118,7 +121,7 @@ func TestStartRunsTheImageWithProductionLimits(t *testing.T) {
 
 func TestStartMountsAFreshVolumeOnEveryDataDirectory(t *testing.T) {
 	ws, _ := app(t, okHandler())
-	ws.App.Data = []string{"/data", "/cache"}
+	ws.App.Data = []string{dataDir, "/cache"}
 	st, err := Start(context.Background(), ws, "test")
 	testutil.NoErr(t, err)
 	st.Stop(context.Background())

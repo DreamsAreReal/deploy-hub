@@ -104,6 +104,8 @@ type Workspace struct {
 	Log         *slog.Logger
 	MemoryLimit int64
 	Mutation    MutationPlan
+	UIBaseline  string
+	Previous    string
 	wait        func(ctx context.Context, check string) error
 }
 

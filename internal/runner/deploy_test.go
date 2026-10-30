@@ -136,15 +136,16 @@ func TestStatefulBrokenReleaseRollsBack(t *testing.T) {
 	e.expectJournal("web@dead000 deploy fail", "web@aaaaaaa rollback ok")
 }
 
-func TestBYOCDeployKeepsBlueGreenOverride(t *testing.T) {
+func TestBYOCDeployKeepsBlueGreenAndSiteOverrides(t *testing.T) {
 	e := newEnv(t)
 	e.sim.mainName = appName
-	e.conf(registry.AppConf{Port: appPort, Image: image, Repo: appRepo, BlueGreen: registry.BlueGreenOn})
+	e.conf(registry.AppConf{Port: appPort, Image: image, Repo: appRepo, BlueGreen: registry.BlueGreenOn, Site: registry.SiteOff})
 	stdin := meta("compose="+byocCompose(), "main="+byocMain, "hport=9001", "hmode=http")
 	testutil.Equal(t, e.dispatch("deploy web "+goodTag, stdin), ExitOK)
 	conf, err := registry.LoadAppConf(e.appDir)
 	testutil.NoErr(t, err)
 	testutil.Equal(t, conf.BlueGreen, registry.BlueGreenOn)
+	testutil.Equal(t, conf.Site, registry.SiteOff)
 }
 
 func TestTakenStandbyPortMovesToASparePort(t *testing.T) {

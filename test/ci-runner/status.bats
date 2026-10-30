@@ -25,7 +25,7 @@ esac'
   touch "${WORLD}/mounted" "${WORLD}/nft"
   echo rw,relatime,prjquota >"${WORLD}/options"
   export PATH="${STUBS}:${PATH}"
-  unset DEPLOY_HUB_METRICS_URL
+  unset DEPLOY_HUB_METRICS_URL DEPLOY_HUB_TEXTFILE_DIR
 }
 
 proc() {
@@ -69,6 +69,20 @@ stops() {
   grep -qx 'curl -fsS --max-time 10 --data-binary @- http://127.0.0.1:8428/api/v1/import/prometheus' "$CALLS"
   grep -qx 'ip netns exec ci-tasks ss -Htnp state established ( dport = :443 )' "$CALLS"
   [ -z "$(stops)" ]
+}
+
+@test "with a textfile folder the metrics also go to deploy-hub-ci-runner.prom" {
+  runner tasks 1001 100
+  mkdir -p "${WORLD}/textfile"
+  DEPLOY_HUB_TEXTFILE_DIR="${WORLD}/textfile" run bash "$STATUS"
+  [ "$status" -eq 0 ]
+  [ -s "${WORLD}/pushed" ]
+  file="${WORLD}/textfile/deploy-hub-ci-runner.prom"
+  grep -qx 'deploy_hub_ci_isolation_ok{source="ci-runner"} 1' "$file"
+  grep -qx 'deploy_hub_ci_runner_up{source="ci-runner",runner="tasks"} 1' "$file"
+  grep -qx 'deploy_hub_ci_disk_used_ratio{source="ci-runner"} 0.5000' "$file"
+  grep -Eqx 'deploy_hub_textfile_written_timestamp_seconds\{source="ci-runner"\} [0-9]+' "$file"
+  [ ! -e "${file}.tmp" ]
 }
 
 @test "a runner without a connection of its own processes to GitHub is down" {

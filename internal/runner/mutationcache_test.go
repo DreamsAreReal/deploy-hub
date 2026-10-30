@@ -12,6 +12,7 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/mutation"
 	"github.com/DreamsAreReal/deploy-hub/internal/obs"
 	"github.com/DreamsAreReal/deploy-hub/internal/oidc"
+	"github.com/DreamsAreReal/deploy-hub/internal/registry"
 	"github.com/DreamsAreReal/deploy-hub/internal/testutil"
 )
 
@@ -65,6 +66,21 @@ func TestMutationCacheRoundTripAndMerge(t *testing.T) {
 	want := e.ident.wants[len(e.ident.wants)-1]
 	testutil.Equal(t, []string{want.Repository, want.WorkflowRef, want.Commit}, []string{appRepo, hubRef, strings.TrimPrefix(goodTag, "sha-")})
 	e.expectLog("mutation cache served")
+}
+
+func TestMutationCacheGetNamesTheDeployedImageForTheRollbackCheck(t *testing.T) {
+	e := newEnv(t)
+	e.state(registry.DeployState{Current: goodTag, Previous: "sha-bbbbbbb2222"})
+	testutil.Equal(t, e.dispatch(getCmd, ""), ExitOK)
+	testutil.Equal(t, e.out.String(), "deployed="+image+":"+goodTag+"\n")
+	never := newEnv(t)
+	testutil.Equal(t, never.dispatch(getCmd, ""), ExitOK)
+	testutil.Equal(t, never.out.String(), "")
+	unnamed := newEnv(t)
+	unnamed.state(registry.DeployState{Current: goodTag})
+	unnamed.conf(registry.AppConf{Profile: registry.ProfileService, Port: appPort, HealthPath: healthPath})
+	testutil.Equal(t, unnamed.dispatch(getCmd, ""), ExitOK)
+	testutil.Equal(t, unnamed.out.String(), "")
 }
 
 func TestMutationCacheNeedsTheHubWorkflowIdentity(t *testing.T) {

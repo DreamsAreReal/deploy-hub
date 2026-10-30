@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/console"
@@ -91,7 +92,7 @@ func TestRoutesAndRender(t *testing.T) {
 	testutil.Write(t, filepath.Join(f.root, webApp, ".caddy-port"), "19001\n")
 	apps, _ := f.apps.All()
 	routes := Routes(apps, nil)
-	if len(routes) != 2 || routes[0] != (Route{webApp, "9001", "19001"}) || routes[1] != (Route{"api", "9002", "19002"}) {
+	if len(routes) != 2 || routes[0] != (Route{webApp, "9001", "19001", false}) || routes[1] != (Route{"api", "9002", "19002", false}) {
 		t.Fatalf("routes: %+v", routes)
 	}
 	block := "\t\tlb_try_duration 30s\n\t\tlb_try_interval 250ms\n\t\tlb_policy first\n\t\tfail_duration 5s\n\t\tmax_fails 1\n\t}\n}\n\n"
@@ -102,6 +103,16 @@ func TestRoutesAndRender(t *testing.T) {
 	if got := Render(routes, "s", "a@b"); got != want {
 		t.Fatalf("render:\n%s", got)
 	}
+}
+
+func TestAnAppWithItsSiteOffKeepsItsPortsButGetsNoSite(t *testing.T) {
+	f := newFixture(t)
+	testutil.Write(t, filepath.Join(f.root, webApp, "app.conf"), "port=9001\nsite=off\n")
+	apps, _ := f.apps.All()
+	routes := Routes(apps, nil)
+	testutil.True(t, len(routes) == 2 && routes[0].App == webApp && routes[0].Private && routes[0].Standby != "", "the private app keeps its ports")
+	rendered := Render(routes, "s", "a@b")
+	testutil.True(t, !strings.Contains(rendered, "web.s.sslip.io") && strings.Contains(rendered, "api.s.sslip.io"), "only the public app has a site")
 }
 
 func TestStandbyPortNeverPointsAtAnotherAppAndFallsBackToSpare(t *testing.T) {
@@ -254,5 +265,11 @@ func TestConfigValidate(t *testing.T) {
 	}
 	if err := (Config{HostSlug: ok.HostSlug, Email: "no-at\n}"}).Validate(); !errors.Is(err, ErrBadEmail) {
 		t.Fatal("email")
+	}
+}
+
+func TestDomainIsTheSlugUnderSslip(t *testing.T) {
+	if got := Domain("13-140-152-253"); got != "13-140-152-253.sslip.io" {
+		t.Fatalf("domain %q", got)
 	}
 }

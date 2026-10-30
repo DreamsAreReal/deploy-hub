@@ -1,0 +1,16 @@
+{
+  "name": "deploy-hub-crawler",
+  "private": true,
+  "type": "module",
+  "main": "crawl.mjs",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "fast-check": "4.10.2",
+    "happy-dom": "21.0.4"
+  }
+}

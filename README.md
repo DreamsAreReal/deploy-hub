@@ -26,8 +26,10 @@ push to default branch
         toolchain: deploy-hub + pinned scanners (sha256-verified)
         [repo has a compose file] deploy-hub render
         docker build (local, not pushed yet)
-        ssh deploy@vps "mutation-cache-get <app> <tag>"  → mutation verdicts of the app's repo
-        deploy-hub gate  → verdict.json + SBOMs (kept as workflow artifacts)
+        ssh deploy@vps "mutation-cache-get <app> <tag>"  → mutation verdicts of the app's repo and the app's deployed image
+        docker pull <deployed image>  (for the rollback check; GITHUB_TOKEN only in that step)
+        ssh deploy@vps "ui-baseline-get <app> <tag>"  → screenshots of the deployed version
+        deploy-hub gate  → verdict.json + SBOMs + the crawl report with its screenshots of problems and changed screens (kept as workflow artifacts)
         ssh deploy@vps "mutation-cache-put <app> <tag>"  ← always, pass or fail
         ssh deploy@vps "report <app> <tag>"  ← always, pass or fail
         gate failed → stop: nothing is pushed or deployed
@@ -44,6 +46,7 @@ push to default branch
                 (apps with a writable mount are recreated in place instead)
               → ok:   state advanced, journal line, metrics pushed
               → fail: standby discarded, the current version keeps serving
+        ssh deploy@vps "ui-baseline-put <app> <tag>"  ← the gate's screenshots, after a successful deploy
 ```
 
 Images are built only in CI, never by the hub on the VPS. For private app
@@ -112,6 +115,7 @@ versions and checksums: [`policy/tools.yaml`](policy/tools.yaml).
 | Check | What blocks a deploy | Tool |
 |---|---|---|
 | `registration` | app missing from the policy or deployed from another repository | — |
+| `architecture` | the app's entry in [`policy/architecture.yaml`](policy/architecture.yaml) is missing or broken (unknown callee, a link, a timer, a public port, an `isolated` unit or an admin without `why`, a direct call to `tasks` by an app outside `tasks_callers` without an `until` date and the task that removes it, an ended exception), or the repository does something the entry does not declare: an environment variable of a `*.env.example` file or of compose that is in neither `secrets` nor `config`, a port published by compose that is not in `exposes`, a workflow that runs on `schedule` or a timer of the app's `host` spec that is not in `timers`, a host file in `/etc/caddy/extra/` whose name without `.caddy` is not a `site` in `exposes`. Apps sharing one repository are checked against their entries together. The catalog lives in the hub so an app change cannot add its own links; `Catalog.Mermaid` draws the map | — |
 | `hygiene` | state/backup/debug/report files, keys, scanner-suppression files tracked in git, except the exact paths an app lists in `allowed_files` | — |
 | `comments` | any comment or documentation string in source and configuration files of any language (Python docstrings included); prose (`.md`, `.txt`, …) and tool-generated lockfiles are not source, `// indirect` is the only note allowed in `go.mod` | go/scanner, YAML parser, chroma lexers |
 | `markers` | work markers (the four listed in the policy) anywhere in tracked files | — |
@@ -122,6 +126,7 @@ versions and checksums: [`policy/tools.yaml`](policy/tools.yaml).
 | `lint` | any linter finding under the central config (magic numbers/strings, security rules, unused code, …) | per stack |
 | `cognitive-complexity` | a function above 9 | per stack |
 | `duplication` | 2% or more duplicated code lines across every programming-language file (token windows of 50; imports, includes and comments excluded) | built in, chroma lexers |
+| `growth` | the code grew by more net lines than `max_net_growth_lines` over the 30 days of first-parent history before the release, or since the first commit when the history is shorter; `0` sets no limit and the check only reports. Lines of prose, lock files and `testdata` do not count. `added`, `removed` and `net` reach `deploy_hub_gate_check_value` on every release, per app | git |
 | `dead-code` | unreachable functions, including ones reachable only from tests | per stack |
 | `tests` | any failed, skipped or crashed test; unit, integration and e2e together | per stack |
 | `line-coverage` | below 90% of code lines | per stack |
@@ -141,6 +146,43 @@ versions and checksums: [`policy/tools.yaml`](policy/tools.yaml).
 | `image` | any vulnerability, secret or misconfiguration in the built image | trivy |
 | `dast` | any ZAP alert of Low risk or above on the running app | OWASP ZAP full scan |
 | `load` | p95 above the profile, errors above the profile, crash, restart or OOM under load | built in |
+| `ui` | a problem the app's crawl finds in the seeded stage: page or console error, 5xx, hang, dead or covered button, duplicate or ambiguous button, delete without confirmation, cut text, page wider than the screen, unreadable contrast, a screen that looks different from the deployed version without a line in `.gate/visual.yaml` | the app's crawl in the pinned browser image |
+| `rollback` | the deployed release does not start, or answers a `load` path with a 5xx or not at all, on the data this release seeded and migrated: the stage starts this release with the `ui` seed, then replaces its container with the deployed image on the same volumes. Not applicable without a deployed release or without `data` | built in |
+
+What this table covers and what it misses, seen from what an agent could break:
+[docs/gate-map.md](docs/gate-map.md).
+
+`link_budget` at the top of `policy/architecture.yaml` caps the number of links between
+services: a catalog over it still passes, with a finding in every app's verdict, so a new
+link is a visible decision. `deploy-hub arch-report [metrics-file]` prints, from the
+catalog embedded in the binary, the counts (services, links, secrets, public sites, the
+longest call chain) and for every service what it can call if it is hacked and what stops
+if it is down; with a file argument it also writes the same numbers in the Prometheus text
+format (`deploy_hub_arch_*`) for a textfile collector.
+
+Besides the links, the catalog states what the server itself may look like, and
+`runner status` compares it with the server every minute (`deploy_hub_arch_host_drift`):
+
+- `admins` (top level): every user that can act as root, each with a `why`. Members of
+  the groups `root`, `sudo`, `wheel`, `admin`, `docker`, `lxd` and `disk` (also as their
+  primary group) and users with uid 0 are read from `/etc/group` and `/etc/passwd`.
+  Sudo rules in `/etc/sudoers.d` are not readable without root, so an admin who comes
+  from there is listed for the reader only.
+- `exposes` entries with `public: true` and a `why`: every port the host listens on
+  beyond loopback, TCP or UDP, read from `/proc/net/{tcp,tcp6,udp,udp6}` of the host's
+  network namespace.
+- `isolated` (per service): systemd units that must run in a network namespace of their
+  own, `unit`, `netns` (a template unit writes `%i` for the instance) and `why`. The
+  check reads `NetworkNamespacePath=` from the unit in `/etc/systemd/system`, its
+  drop-ins and, for a template, the drop-ins of every instance; a unit that is not
+  installed is skipped.
+- Calls the server makes to its own public sites: the Caddy access log in VictoriaLogs
+  (`DEPLOY_HUB_LOGS_URL`) for the last 10 minutes, requests whose client address is one
+  of the server's own. Every such caller names its service as the first word of its
+  User-Agent (`observability/obs-host-metrics`), and the catalog must link it with the
+  service of the site; a request without such a name is drift. Agents and CI leave
+  through their own namespaces, so their requests come from outside and are not
+  counted.
 
 **Language packs.** The checks marked "per stack" run once per project in the
 repository; a project is the directory of a stack manifest. A repository with
@@ -247,7 +289,7 @@ reported as `n/a`. Checks that need an image or an HTTP surface are `n/a` for
 app kinds without one (`binary`, `worker`). Nothing else is ever skipped, and a
 check that cannot finish (tool crash, timeout) fails. Each check gets
 `check_timeout`; mutation testing gets `long_check_timeout`. The checks run one
-after another, and the isolated stage (`dast`, `load`) runs before mutation
+after another, and the isolated stage (`dast`, `load`, `ui`) runs before mutation
 testing, so a stage that does not come up is reported within minutes of the
 start rather than hours; the order changes no verdict, every check still runs.
 
@@ -453,11 +495,80 @@ apps:
     allowed_files: [docs/STATE.md]             # tracked although forbidden_files matches it
     dast: {target: /api, spider: 1m, max_time: 10m}
     load: {rate: 20, duration: 30s, p95: 300ms, max_error_percent: 0, concurrency: 10, paths: [/health]}
+    ui:                      # only for an app with an interface
+      map: web/appmap.json                  # the app map in the repo the crawler follows
+      seed: [seed, --db, /data/app.db]      # image arguments that fill the stage's volumes first
+      env: [DEV_LOGIN=1]                    # added to env for this stage only
+      chromium: /ms-playwright/chromium-1248/chrome-linux64/chrome
     scenarios:
       - id: invalid-token-is-refused
         category: security
         tests: [internal/auth.TestInvalidToken]
 ```
+
+The `ui` stage seeds fresh volumes with `seed` in a container without a
+network, starts the app with `env` added, then runs the hub's own crawler
+(`internal/gate/crawler/crawl.mjs`, built into the binary) with node in
+`images.browser` on the stage's network, the checkout mounted read-only, and
+`E2E_BASE`, `E2E_OUT`, `E2E_CHROMIUM`, `E2E_APPMAP` and `CRAWL_MODE`: `quick`
+looks at each screen and the assistant chat at the default size and at 360 px
+without clicks, `full` (in a full gate run) presses every safe button and checks
+five screen sizes and the dark theme. The rows of the report's problems table are
+the findings; the whole report and its screenshots stay in `ui-crawl` of the gate
+output. An app needs no crawl code of its own, only to keep this contract:
+
+- `map` is a JSON app map: `screens` with `id`, `route` (`{id}` for values from
+  the data), `kind` (`screen`, `sheet` or `part`) and `elements` with `testid`;
+  an element whose `does` says `Destructive` or `never click` is never pressed;
+- every route opens as `/?open=<route>`, a screen root carries `data-screen` with
+  the screen id, controls carry `data-testid`, links between screens
+  `data-nav="<route>"` and sheets `data-sheet`;
+- `seed` fills the database so that every screen of the map has something to show.
+
+The checks themselves (overlaps, cut text, contrast, tap sizes, near-aligned
+edges, rows of uneven buttons, dead buttons, hangs, console errors and the rest)
+are in the crawler and are the same for every app.
+
+**Screens against the deployed version.** The stage also compares every
+screenshot with the one of the version that is live now:
+
+- the clock stands still: the app gets `GATE_FROZEN_AT=2030-01-15T09:30:00Z`
+  (seed and server) and the crawler fixes `Date` in the browser to the same
+  instant (`E2E_FROZEN_AT`). An app with a clock of its own uses it in its test
+  mode only (tasks: with `DEV_LOGIN`); a cookie that expires by the frozen clock
+  needs `Max-Age`, not `Expires`;
+- before each screenshot animations are finished, the caret is hidden and
+  elements with `data-volatile` (whatever changes by itself) are made invisible;
+- the screenshots of the live version (the UI baseline) live on the hub in
+  `ui-baseline/<app>/` next to `mutation-cache/`, written only by the hub. After
+  a successful deploy CI sends the gate's screenshots of that commit with
+  `ui-baseline-put <app> <tag>`; the hub verifies the job's OIDC token and keeps
+  them only when `<tag>` is the deployed one (a new tag replaces the set, the
+  same tag adds to it). The set carries the render key of the run that took
+  it (sha256 of the crawler, the browser image and the frozen instant, the
+  gate writes it to `ui-crawl/render-key`): when the hub's crawler or the
+  browser image changes, the next gate does not compare and its deploy takes
+  a new set instead of failing every screen. Before the gate CI fetches them with
+  `ui-baseline-get <app> <tag>` and the gate mounts them read-only into the
+  crawler (`--ui-baseline`, `E2E_BASELINE`). Pull request gates do not talk to
+  the hub, so only gates on `main` compare;
+- a screen whose screenshot differs in more than 0.2% of its pixels (at least
+  40) by more than 24 levels of a color channel is the finding `looks-changed`;
+  `visual/` of the report holds `<shot>-before.png` and `<shot>-diff.png`
+  (changed pixels red over a faded page); a screenshot the browser cannot
+  compare is the finding `compare-failed`;
+- an intended change is listed in `.gate/visual.yaml` of the app with its task:
+
+  ```yaml
+  changes:
+    - screen: board    # the screen id of the app map
+      task: 809
+  ```
+
+  Listed screens may differ. Once the change is deployed the baseline shows it,
+  and a listed screen whose every screenshot matches again is the finding
+  `visual-accept-stale`: remove the line. A list with an unknown key, a bad
+  screen id or no task fails the stage.
 
 A `kind: binary` app other than the hub (router-ax23: tools for hosts the hub
 does not deploy to yet) has no image. Its caller stub passes `image: false`
@@ -570,6 +681,7 @@ commands:
 | `provision --app … ` | root (from `onboard`) | prepares `/opt/<app>/` and the allowlist line |
 | `facts <app>` | root (from `onboard`) | reports what already exists on the server |
 | `onboard <repo> …` | operator machine | connects a GitHub repo end-to-end |
+| `scaffold <app> --port N …` | operator machine or agent, in a clone of this repo | writes a new service from `templates/service` and prints its policy, catalog and scrape entries |
 | `mcp` | operator machine | MCP server for AI agents: `status`, `history`, `rollback` over the deploy channel |
 
 `make build` builds it for linux/amd64 into `$TMPDIR/deploy-hub-build/`, outside
@@ -605,6 +717,13 @@ root SSH to. `<vps>` is the server address.
    EOF
    ```
 
+   Better, one key per repository bound to its app: with
+   `command="/opt/deploy-hub/bin/deploy-hub runner --only <app>"` the runner refuses
+   every request for another app (`refused: this deploy key is bound to another app`,
+   reason `other-app`), so a key leaked from one repository deploys nothing else. Put
+   each key into the `VPS_SSH_KEY` secret of its repository and keep one line per key
+   in `authorized_keys`; remove the shared key once every repository has its own.
+
 5. **Hub directory, server config, GitHub token and binary** (`<host-slug>`
    is the address with dashes, as used by sslip.io, e.g. `203-0-113-7`).
    The repo is private, so the hub reads releases and CI runs with a
@@ -636,7 +755,8 @@ root SSH to. `<vps>` is the server address.
    `bootstrap` reads the token over root SSH (`VPS_HOST_ALIAS`, default
    `vpn`), takes the newest release (or the given one) and makes the same
    checks as `self-update`: tag `sha-<40 hex>` targeting that commit, a green
-   `ci.yml` push run on `main` for it, the published sha256. It streams the
+   `ci.yml` push run on `main` for it, the published sha256, the binary that
+   run built. It streams the
    binary to `/opt/deploy-hub/bin/deploy-hub.new`, moves it into place only if
    it prints that commit from `version`, and removes it otherwise. It refuses
    to run when `/opt/deploy-hub/bin/deploy-hub` already exists (the hub
@@ -744,6 +864,13 @@ that passed the full gate on `main`:
      replaces the branch protection the private repo lacks on the free plan.
      A release pinned by tag skips this check (that is how a rollback works);
    - the downloaded binary matches the published sha256;
+   - the binary is byte for byte the one that green run built: its artifact
+     `deploy-hub-linux-amd64` (step `Keep the hub binary`, a zip holding
+     `deploy-hub`) is listed by the run, not expired, and served by the API of
+     this repo. A release token can replace the release assets, but not the
+     artifacts of a run, so a binary built anywhere else is refused even with
+     a matching sha256 file. When the artifact has expired (90 days by default),
+     that release can no longer be installed;
    - the candidate (`/opt/deploy-hub/bin/deploy-hub.new`) reports that commit
      from `version`.
 4. It keeps the current binary as `deploy-hub.prev`, renames the candidate into
@@ -790,6 +917,31 @@ installs one by tag the same way.
 
 The only manual install is the bootstrap (Bootstrap, step 5). Do not copy a
 binary to the server any other way.
+
+## A new service — from the template only
+
+A new service starts from [`templates/service`](templates/service), never from an
+empty repo: it already does every standard thing the one way the hub expects, so the
+first push passes the gate. Deploy goes through this hub, metrics are Prometheus text on
+`METRICS_PORT` scraped over the `shared` network, logs are JSON lines on stdout, errors go
+to Bugsink through the Sentry SDK, secrets come from the store as `.env`, alerts are
+vmalert rules (`TargetDown` already covers a dead service), every answer carries strict
+security headers, and the tests keep coverage, mutation score and a fuzz target above the
+gate's bars. The template is a project of this repository, so the hub's own gate checks
+it on every change and it cannot rot.
+
+```
+go run ./cmd/deploy-hub scaffold <app> --port <free 127.0.0.1 port of the VPS> [--repo OWNER/NAME] [--dir DIR]
+```
+
+writes the service into `./<app>` (an existing non-empty directory is refused) with the
+module, binary, container and published port renamed, adds the same caller stub
+`onboard` would commit, and prints, filled in for the app, the entry for
+`policy/gate.yaml` (with the template's security and business scenarios), the entry for
+`policy/architecture.yaml` and the scrape target file for the observability repo. A
+test feeds those entries to the hub's own policy and catalog parsers and checks the
+generated repository against its catalog entry, so they stay valid. Then push the repo,
+merge the entries, and connect it with `onboard` (below).
 
 ## Connecting a repo — one command
 
@@ -1183,6 +1335,9 @@ GitHub), `deploy_hub_ci_disk_used_ratio`, `deploy_hub_ci_quota_used_ratio{runner
 and `deploy_hub_ci_quota_on{runner}` every minute; the alerts
 `DeployHubCIRunnerOffline`, `DeployHubCIRunnerSilent`, `DeployHubCIDiskFull`,
 `DeployHubCIQuotaHigh` (over 85% of a quota) and `DeployHubCIQuotaOff` watch them, `DeployHubCIIsolationBroken` the fail-safe above.
+With `DEPLOY_HUB_TEXTFILE_DIR` in the unit's environment the script also writes
+the same lines, labelled `source="ci-runner"`, to `deploy-hub-ci-runner.prom` in
+that folder for node-exporter (see «Metrics», tasks #792).
 
 ## Server layout
 
@@ -1200,8 +1355,8 @@ and `deploy_hub_ci_quota_on{runner}` every minute; the alerts
 | `/var/lib/ci/<app>/mutation/` | `stash/` (source, pinned deploy-hub, policy, Go of the last deploy) and `work/` (the current chunk), owned by `ci-<app>` |
 | `/home/deploy/.cache/deploy-hub/jwks.json` | last GitHub OIDC signing keys, used when GitHub is unreachable |
 | `/opt/<app>/docker-compose.yml` | app stack: 127.0.0.1 ports, mem limit, log rotation |
-| `/opt/<app>/app.conf` | `profile=`, `port=`, `health_path=`, `image=`, `repo=`, optional `bluegreen=on\|off` (BYOC: `mode=byoc`, `main=`, `hmode=`) |
-| `/opt/<app>/.env` | app secrets (600), referenced by compose, never in git |
+| `/opt/<app>/app.conf` | `profile=`, `port=`, `health_path=`, `image=`, `repo=`, optional `bluegreen=on\|off` and `site=off` (BYOC: `mode=byoc`, `main=`, `hmode=`) |
+| `/opt/<app>/.env` (and other `*.env` files of the app) | app secrets (600), referenced by compose, never in git; with a secrets store the hub writes the stored keys into them on every deploy |
 | `/opt/<app>/.deploy-state` | `current=`/`previous=` sha tags — rollback source of truth |
 | `/var/lib/deploy-hub/host-backup/<app>/` | root, 700: previous host files replaced by `host-sync`, newest 5 runs |
 
@@ -1219,9 +1374,11 @@ status                  # app | sha | health | last deploy
 history <app>           # last 20 journal lines of the app
 mutation-cache-get <app> <tag>   # the mutation verdict cache of the app's repository
 mutation-cache-put <app> <tag>   # merge new mutation verdicts into it
+ui-baseline-get <app> <tag>      # screenshots of the deployed version
+ui-baseline-put <app> <tag>      # keep the screenshots of the deployed tag
 ```
 
-`deploy`, `report` and the two `mutation-cache` requests read `key=value` lines on stdin. All of them require `oidc` — a
+`deploy`, `report` and the `mutation-cache` and `ui-baseline` requests read `key=value` lines on stdin. All of them require `oidc` — a
 GitHub Actions OIDC token (audience `deploy-hub`) whose signature verifies
 against GitHub's published keys, whose `job_workflow_ref` is
 `<HUB_REPO>/.github/workflows/deploy.yml@refs/heads/main`, whose `repository`
@@ -1243,8 +1400,10 @@ sha256 recorded next to them. Over 100,000 verdicts, only the latest upload is
 kept, and a file over 16 MiB is never written, so a repository's directory under
 `/opt/deploy-hub/mutation-cache` stays within a few tens of MiB. One upload is limited by the 8 MiB stdin line to about 75,000 verdicts.
 `mutation-cache-get` prints `sha256=<hex>` and `verdicts=<base64>`, or nothing
-when there is no cache yet, and `last=<base64>` with the last full mutation run
-(commit, key bases, passed, time) when there is one. With `mode=full` it first
+when there is no cache yet, `deployed=<image>:<tag>` (from `app.conf` and
+`.deploy-state`) when a release of the app is deployed, and `last=<base64>`
+with the last full mutation run (commit, key bases, passed, time) when there
+is one. With `mode=full` it first
 prints `plan=new|continue|skip` and serves the verdicts of the open full run
 session instead. `mutation-cache-put` also takes `mode=full` (the verdicts go to
 the session too) and `run` (base64 of `mutation-run.json`), which records a full
@@ -1261,6 +1420,25 @@ that never passed the gate cannot be started by hand through the runner.
 
 Runner settings: `DEPLOY_HUB_OIDC_AUDIENCE` (default `deploy-hub`),
 `DEPLOY_HUB_JWKS_URL` (default GitHub's), `DEPLOY_HUB_JWKS_CACHE`, `HUB_REPO`.
+
+### Secrets store
+
+With `DEPLOY_HUB_SECRETS_FILE` set, every deploy first lays the app's secrets
+from one JSON file encrypted with age (the store lives in the private
+`server-ops` repository, `secrets/values.json.age`; see its README):
+
+    {"<app>": {".env": {"KEY": "value"}, "ingest.env": {"KEY": "value"}}}
+
+The hub decrypts the file with `age` (`DEPLOY_HUB_AGE`, default `/usr/bin/age`
+from the Ubuntu package) and the key at `DEPLOY_HUB_SECRETS_KEY` (default
+`/run/deploy-hub/age.key`: tmpfs, fetched from the home router at boot, never
+on disk), and writes only that app's keys into those files of the app folder:
+a stored key replaces its line, a new one is appended, every other line (plain
+config) stays, the file is replaced atomically with mode 600. The log line
+`secrets laid` names the files and keys, never values. Without the key the
+deploy stops with `secrets store is locked`: running apps keep their files;
+new deploys wait until the router is back. Apps without a section in the store
+are left alone, so apps move to the store one by one.
 
 `status` columns: `sha` is the sha7 of the running version; `health` is
 `<container state>/<check>` where `<check>` is the container healthcheck, a live
@@ -1349,7 +1527,10 @@ the standby would share that mount with the old instance, so two processes
 would write the same state at once (tasks: SQLite in `/data`). Such apps take
 a few seconds of 502, and a failed gate rolls back to the previous sha.
 `bluegreen=on` in `app.conf` keeps the standby for an app whose mount is only a
-cache; `bluegreen=off` turns it off for any app.
+cache; `bluegreen=off` turns it off for any app. `site=off` keeps an app off the
+internet: caddy-sync writes no `<app>.<slug>.sslip.io` site for it, while it keeps
+its port and standby port, so other apps still reach it over the `shared` network.
+A deploy keeps both settings.
 
 - App with a port: the standby publishes `127.0.0.1:<port+10000>`. While the
   real service is down Caddy sends its requests to the standby by itself (see
@@ -1424,6 +1605,10 @@ to the tasks whose commits it contains and draws their path to prod.
 Metrics — pushed to VictoriaMetrics after every command
 (`DEPLOY_HUB_METRICS_URL`, default
 `http://127.0.0.1:8428/api/v1/import/prometheus`; set it empty to disable).
+`runner status` reads the Caddy access log from VictoriaLogs
+(`DEPLOY_HUB_LOGS_URL`, default `http://127.0.0.1:9428/select/logsql/query`;
+empty turns that part of the host check off); a log store that does not answer is
+logged as `access log unreadable` and the rest of the check goes on.
 `deploy-hub-status.timer` runs `runner status` every minute, so the journal
 counters and the health gauges have a sample every minute and `increase()` over
 a window counts what happened in it. The counters cover only the apps in
@@ -1431,6 +1616,17 @@ a window counts what happened in it. The counters cover only the apps in
 pushed and its series go stale. Change failure rate, deploy frequency and lead
 time quantiles are recording rules in the observability repo
 (`rules/dora.yml`, queries in its README).
+
+With `DEPLOY_HUB_TEXTFILE_DIR` set (empty by default) every command also writes
+the samples of its run for node-exporter's textfile collector, next to the push:
+`deploy-hub-<command>.prom` (the forced `runner` writes one file per verb,
+`deploy-hub-runner-status.prom`, `deploy-hub-runner-deploy.prom` and so on), through a
+temporary file and a rename. Every sample gets the label `source` with that name,
+so two files never carry the same series, and
+`deploy_hub_textfile_written_timestamp_seconds{source}` says when the run ended.
+A file holds the values of the last run of its command; pushed samples carry
+their own time. This is the first step of moving the hub from push to textfile
+(tasks #792): both ways run side by side until the alert rules read the files.
 
 | Metric | Labels | Meaning |
 |---|---|---|
@@ -1463,28 +1659,26 @@ time quantiles are recording rules in the observability repo
 | `deploy_hub_request` | verb, app | one sample per runner request for a registered app (`app="-"` for `status`) |
 | `deploy_hub_request_refused` | verb, reason | one sample per refusal; reason `bad-request`, `unknown-app`, `bad-tag`, `bad-compose`, `no-identity`, `identity-unverified`, `no-repo-binding`, `not-gated`, `bad-digest`, `bad-verdict`, `bad-cache` |
 | `deploy_hub_mutation_cache_intact` | app | 1 when the stored mutation cache matched its recorded sha256 on read, 0 when it did not |
+| `deploy_hub_arch_live_drift` | app | from `status` (every minute): environment variables the running container got beyond its image and published ports that the app's entry in `policy/architecture.yaml` does not declare, every other app whose containers share a docker network with it while the catalog has no call between the two (either way; `observability` may reach an app that `gives` it something), an `.env` that group or others can read, and the public site the hub serves for the app (`app.conf` without `site=off`) when `exposes` has no `site` of the app's name (an app missing from the catalog counts one more); each item is logged as `live drift` |
+| `deploy_hub_arch_host_drift` | — | from `status` (every minute): timers in `/etc/systemd/system` and caddy files in `/etc/caddy/extra` that no service in `policy/architecture.yaml` declares in `timers` or as a `site` in `exposes` (hidden files and units masked to `/dev/null` are skipped, as systemd skips them), ports open beyond loopback without a `public` expose, users who can act as root without an entry in `admins`, `isolated` units outside their network namespace, and calls of the server to its own sites by a caller the catalog does not name or link (see the catalog section above); everything is read as the `deploy` user, without root; each item is logged as `host drift` |
 | `deploy_hub_delivery_success` | — | 1/0 for the tracker post of the run (absent when delivery is off or there was nothing to post) |
 | `deploy_hub_journal_readable` | — | 0 when `deploys.log` could not be read; the journal counters are then not pushed |
 
 ### Alerts
 
-[`server/vmalert/deploy-hub.yml`](server/vmalert/deploy-hub.yml) holds the
-vmalert rules over these metrics: a hub that pushed nothing for 5 minutes, a
-panic, error log records, a failed server command, a failed deploy, redeploy or
-rollback, a gate rejection (per check, `ci-<step>` included), a crashed gate
-check, any refused request, an app unhealthy for 5 minutes, a failed Caddy
-sync, a failed host-sync, a self-update failing for 40 minutes, a deploy waiting over 120 s for the lock, a failed tracker post and an
-unreadable journal, a self-hosted CI runner offline for 10 minutes, its
-state not pushed, broken CI isolation, and the CI disk over 85%. `go test ./internal/obs` fails when a rule uses a metric
-that the code does not declare, or when a problem metric has no rule.
-
-To load them, copy the file into the observability stack's `rules/` directory
-and add `-rule=/etc/vmalert/deploy-hub.yml` to its `vmalert-metrics`
-service. Check a change before shipping it:
-
-```
-docker run --rm -v $PWD/server/vmalert:/r:ro victoriametrics/vmalert:v1.152.0 -dryRun -rule=/r/deploy-hub.yml
-```
+The alerts over these metrics live only in the observability repo
+(DreamsAreReal/observability, `rules/deploy-hub.yml`), which also sends them:
+a hub that pushed nothing for 5 minutes, a panic, error log records, a failed
+server command, a failed deploy, redeploy or rollback, a gate rejection (per
+check, `ci-<step>` included), a crashed gate check, any refused request, an app
+unhealthy for 5 minutes, a failed Caddy sync or host-sync, a self-update failing
+for 40 minutes, a corrupt mutation cache, a deploy waiting over 120 s for the
+lock, an unreadable journal, a self-hosted CI runner offline or silent, broken
+CI isolation, the CI disk or a runner's quota nearly full or the quota off,
+preemption failing or looping, and a running app that drifts from its catalog
+entry. There, `go test ./internal/rulecheck` fails when an alert lacks a
+description or a unit test that fires it, or when a problem signal of the hub
+has no alert.
 
 ### Usage analytics
 
@@ -1500,6 +1694,7 @@ samples over a window counts events. Queries for VictoriaMetrics:
 | Which checks block deploys most | `sort_desc(sum by (check) (count_over_time(deploy_hub_gate_check_passed[30d]) - sum_over_time(deploy_hub_gate_check_passed[30d])))` |
 | Slowest checks | `topk(5, max by (check) (max_over_time(deploy_hub_gate_check_duration_seconds[30d])))` |
 | Coverage, mutation score, duplication trend | `deploy_hub_gate_check_value{check="mutation"}` (and `line-coverage`, `branch-coverage`, `duplication`) |
+| Code growth per app, 30 days | `deploy_hub_gate_check_value{check="growth",name="net"}` (and `added`, `removed`) |
 | CI failures before the gate | `sum by (check) (count_over_time(deploy_hub_gate_check_passed{check=~"ci-.*"}[30d]))` |
 | Failed deploys and rollbacks | `sum by (app, action) (increase_prometheus(deploy_hub_operations_total{result="fail"}[30d]))` |
 | Server command runs and failures | `sum by (command, result) (count_over_time(deploy_hub_command_duration_seconds[30d]))` |
@@ -1605,9 +1800,23 @@ rulesets or required checks: anyone with write access can merge or push to
   gate is gated again on the push and never deployed when it fails.
 - **The hub.** `self-update` installs only a release `sha-<commit>` of a commit
   with a successful `ci.yml` push run on `main` whose binary matches the
-  published sha256, and only one that descends from the installed commit
-  (`TestRefusesReleasesThatAreNotGatedBuilds`). The release is published only
-  by that run after its gate passed.
+  published sha256 and the artifact that run built, and only one that
+  descends from the installed commit (`TestRefusesReleasesThatAreNotGatedBuilds`).
+  The release is published only by that run after its gate passed.
+- **Deploy credentials while the app's code runs.** The gate runs the app's
+  own code (tests, fuzzing, mutants) in the job that later deploys. Before it
+  starts, the `Quality gate` step deletes the deploy key from
+  `$RUNNER_TEMP/ssh` and unsets `ACTIONS_ID_TOKEN_REQUEST_TOKEN` and
+  `ACTIONS_ID_TOKEN_REQUEST_URL`, so that code can neither reach the hub over
+  SSH nor mint an OIDC token; `Connect to the VPS after the gate` writes the
+  key again. `Push the gated image` pushes only the image whose ID
+  `Build image` recorded before the gate (e2e
+  `TestTheAppCodeRunsWithoutTheDeployKeyOrAnIDTokenRequest`,
+  `TestThePushRefusesAnImageThatChangedAfterTheBuild`). A process the app's
+  code leaves running is the same user as the later steps and could still
+  read them: moving the deploy into a job of its own (#812) needs the runner
+  to keep the gated image between jobs, and `ci-runner-clean` removes images
+  after every job today.
 - **Residual risk.** App deploys use `deploy.yml` of the hub's `main` as it is
   at that moment: a change to `deploy.yml` that reaches `main` before its own
   gate applies to the next app deploy. Review changes to `deploy.yml` with that

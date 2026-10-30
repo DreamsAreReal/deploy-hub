@@ -15,3 +15,13 @@ func TestGateIsTheRepositoryPolicy(t *testing.T) {
 		t.Fatal("embedded policy differs from policy/gate.yaml")
 	}
 }
+
+func TestArchitectureIsTheRepositoryCatalog(t *testing.T) {
+	want, err := os.ReadFile("architecture.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(Architecture(), want) {
+		t.Fatal("embedded catalog differs from policy/architecture.yaml")
+	}
+}
