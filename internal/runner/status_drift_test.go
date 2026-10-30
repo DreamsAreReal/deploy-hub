@@ -14,15 +14,26 @@ import (
 )
 
 const (
+	appOther     = "other"
+	bakedPathEnv = "[\"PATH=/bin\"]"
+	backupTimer  = "app-backup.timer"
+)
+
+const (
 	envFormat = "{{json .Config.Env}}"
 	portVar   = "PORT"
 )
+
+func writeMode(t *testing.T, path, body string, mode os.FileMode) {
+	t.Helper()
+	testutil.NoErr(t, os.WriteFile(path, []byte(body), mode))
+}
 
 func driftEnv(t *testing.T, runEnv string, catalog *arch.Catalog) *env {
 	t.Helper()
 	e := newEnv(t)
 	e.sim.startOld(goodTag)
-	e.sim.runEnv, e.sim.bakedEnv = runEnv, `["PATH=/bin"]`
+	e.sim.runEnv, e.sim.bakedEnv = runEnv, bakedPathEnv
 	e.svc.Catalog = catalog
 	testutil.Equal(t, e.dispatch("status", ""), ExitOK)
 	return e
@@ -36,7 +47,7 @@ func TestStatusCountsWhatTheRunningAppDoesNotDeclare(t *testing.T) {
 		"port 8080 is published by the running container but not in exposes")
 	clean := driftEnv(t, `["PATH=/bin","PORT=8080"]`, &arch.Catalog{Services: map[string]arch.Service{appName: {Config: []string{portVar}, Exposes: []arch.Expose{{Port: 8080}, {Site: appName}}}}})
 	testutil.Equal(t, metricFor(clean, obs.MetricArchLiveDrift, appName), 0.0)
-	unknown := driftEnv(t, `["PATH=/bin"]`, &arch.Catalog{Services: map[string]arch.Service{}})
+	unknown := driftEnv(t, bakedPathEnv, &arch.Catalog{Services: map[string]arch.Service{}})
 	testutil.Equal(t, metricFor(unknown, obs.MetricArchLiveDrift, appName), 3.0)
 	testutil.Contains(t, unknown.logs.String(), msgNotInCatalog)
 }
@@ -49,7 +60,7 @@ func TestStatusCountsAPublicSiteTheCatalogDoesNotDeclare(t *testing.T) {
 	off := newEnv(t)
 	off.conf(registry.AppConf{Profile: registry.ProfileService, Port: appPort, HealthPath: healthPath, Image: image, Site: registry.SiteOff})
 	off.sim.startOld(goodTag)
-	off.sim.runEnv, off.sim.bakedEnv = `["PATH=/bin","PORT=8080"]`, `["PATH=/bin"]`
+	off.sim.runEnv, off.sim.bakedEnv = `["PATH=/bin","PORT=8080"]`, bakedPathEnv
 	off.svc.Catalog = internal
 	testutil.Equal(t, off.dispatch("status", ""), ExitOK)
 	testutil.Equal(t, metricFor(off, obs.MetricArchLiveDrift, appName), 0.0)
@@ -59,28 +70,28 @@ func TestStatusCountsNeighboursWithoutACallAndAReadableEnvFile(t *testing.T) {
 	published := []arch.Expose{{Port: 8080}, {Site: appName}}
 	e := newEnv(t)
 	e.sim.startOld(goodTag)
-	e.sim.runEnv, e.sim.bakedEnv = `["PATH=/bin"]`, `["PATH=/bin"]`
+	e.sim.runEnv, e.sim.bakedEnv = bakedPathEnv, bakedPathEnv
 	e.sim.networks = appName + "\tshared," + appName + "_default\nother\tshared\npreview\tshared\n"
-	otherDir := filepath.Join(e.hubDir, "..", "other")
+	otherDir := filepath.Join(e.hubDir, "..", appOther)
 	testutil.Mkdir(t, otherDir)
 	e.write(filepath.Join(e.hubDir, "apps.list"), appName+" "+e.appDir+"\nother "+otherDir+"\n")
-	testutil.NoErr(t, os.WriteFile(filepath.Join(e.appDir, registry.EnvFile), []byte("TOKEN=x\n"), 0o640))
-	e.svc.Catalog = &arch.Catalog{Services: map[string]arch.Service{appName: {Exposes: published}, "other": {}}}
+	writeMode(t, filepath.Join(e.appDir, registry.EnvFile), "TOKEN=x\n", 0o640)
+	e.svc.Catalog = &arch.Catalog{Services: map[string]arch.Service{appName: {Exposes: published}, appOther: {}}}
 	testutil.Equal(t, e.dispatch("status", ""), ExitOK)
 	testutil.Equal(t, metricFor(e, obs.MetricArchLiveDrift, appName), 2.0)
 	testutil.Contains(t, e.logs.String(), "docker network shared also connects other, and the catalog has no call between them",
 		"secrets file .env can be read by group or others (mode 0640)")
 	linked := newEnv(t)
 	linked.sim.startOld(goodTag)
-	linked.sim.runEnv, linked.sim.bakedEnv = `["PATH=/bin"]`, `["PATH=/bin"]`
+	linked.sim.runEnv, linked.sim.bakedEnv = bakedPathEnv, bakedPathEnv
 	linked.sim.networks = e.sim.networks
 	linked.write(filepath.Join(linked.hubDir, "apps.list"), appName+" "+linked.appDir+"\nother "+otherDir+"\n")
-	linked.svc.Catalog = &arch.Catalog{Services: map[string]arch.Service{appName: {Exposes: published, Calls: []arch.Call{{To: "other"}}}, "other": {}}}
+	linked.svc.Catalog = &arch.Catalog{Services: map[string]arch.Service{appName: {Exposes: published, Calls: []arch.Call{{To: appOther}}}, appOther: {}}}
 	testutil.Equal(t, linked.dispatch("status", ""), ExitOK)
 	testutil.Equal(t, metricFor(linked, obs.MetricArchLiveDrift, appName), 0.0)
 	blind := newEnv(t)
 	blind.sim.startOld(goodTag)
-	blind.sim.runEnv, blind.sim.bakedEnv = `["PATH=/bin"]`, `["PATH=/bin"]`
+	blind.sim.runEnv, blind.sim.bakedEnv = bakedPathEnv, bakedPathEnv
 	blind.sim.networksErr = errors.New("docker down")
 	blind.svc.Catalog = &arch.Catalog{Services: map[string]arch.Service{appName: {Exposes: published}}}
 	testutil.Equal(t, blind.dispatch("status", ""), ExitOK)
@@ -101,10 +112,10 @@ func TestStatusSkipsDriftWithoutFactsOrCatalog(t *testing.T) {
 }
 
 func TestStatusCountsTimersAndSitesOnTheHostNoServiceDeclares(t *testing.T) {
-	declared := &arch.Catalog{Services: map[string]arch.Service{appName: {Timers: []arch.Timer{{Name: "app-backup.timer"}}}}}
+	declared := &arch.Catalog{Services: map[string]arch.Service{appName: {Timers: []arch.Timer{{Name: backupTimer}}}}}
 	e := newEnv(t)
 	e.svc.HostDirs, e.svc.Catalog = arch.HostDirs{Units: t.TempDir(), Sites: t.TempDir()}, declared
-	for _, name := range []string{"app-backup.timer", "rogue.timer"} {
+	for _, name := range []string{backupTimer, "rogue.timer"} {
 		e.write(filepath.Join(e.svc.HostDirs.Units, name), "[Timer]\n")
 	}
 	e.write(filepath.Join(e.svc.HostDirs.Sites, "stt.caddy"), "stt {}\n")

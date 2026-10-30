@@ -16,6 +16,10 @@ import (
 )
 
 const (
+	dockerRun = "run"
+)
+
+const (
 	DockerBinary   = "docker"
 	namePrefix     = "deploy-hub-gate-"
 	networkSuffix  = "-net"
@@ -110,7 +114,7 @@ func (s *Stage) Swap(ctx context.Context, image string) error {
 func (s *Stage) runArgs(image string) []string {
 	lim := s.ws.App
 	args := []string{
-		"run", "-d", "--name", s.Name, flagNetwork, s.Network, "--network-alias", s.Name,
+		dockerRun, "-d", "--name", s.Name, flagNetwork, s.Network, "--network-alias", s.Name,
 		"--cpus", lim.CPUs, "--memory", lim.Memory, "--memory-swap", lim.Memory, flagPids, pidsLimit,
 		flagSecurity, noPrivileges, "-p", fmt.Sprintf(publishFormat, loopback, s.ws.App.Port),
 	}
@@ -127,7 +131,7 @@ func (s *Stage) seed(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return nil
 	}
-	run := []string{"run", "--rm", flagNetwork, isolated, flagSecurity, noPrivileges}
+	run := []string{dockerRun, "--rm", flagNetwork, isolated, flagSecurity, noPrivileges}
 	for _, e := range s.ws.App.Env {
 		run = append(run, flagEnv, e)
 	}

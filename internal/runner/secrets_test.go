@@ -44,7 +44,7 @@ func TestDeployWaitsWhenTheSecretsStoreIsLocked(t *testing.T) {
 
 func TestKeyBoundToOneAppCannotTouchAnother(t *testing.T) {
 	e := newEnv(t)
-	e.svc.Only = "other"
+	e.svc.Only = appOther
 	testutil.Equal(t, e.dispatch("deploy web "+goodTag, meta()), ExitFail)
 	e.expectOut(e.err, msgOtherApp)
 	testutil.Equal(t, e.exec.Count("docker pull"), 0)

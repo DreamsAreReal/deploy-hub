@@ -152,8 +152,8 @@ func readShots(root *os.Root) (map[string][]byte, error) {
 
 func (s *Service) storeBaseline(app string, set baselineSet) error {
 	dir := s.Paths.UIBaseline(app)
-	from, tagErr := os.ReadFile(filepath.Join(dir, baselineTagFile))
-	key, keyErr := os.ReadFile(filepath.Join(dir, baselineKeyFile))
+	from, tagErr := os.ReadFile(filepath.Clean(filepath.Join(dir, baselineTagFile)))
+	key, keyErr := os.ReadFile(filepath.Clean(filepath.Join(dir, baselineKeyFile)))
 	if tagErr == nil && keyErr == nil && strings.TrimSpace(string(from)) == set.tag && strings.TrimSpace(string(key)) == set.key {
 		return writeShots(dir, set.shots)
 	}

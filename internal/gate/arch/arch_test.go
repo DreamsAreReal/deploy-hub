@@ -14,6 +14,22 @@ import (
 )
 
 const (
+	tasksNetwork = "tasks_default"
+)
+
+const (
+	otherName            = "other"
+	backupTimer          = "app-backup.timer"
+	sweepTimer           = "sweep.timer"
+	sttName              = "stt"
+	appTimer             = "app.timer"
+	routerBotName        = "router-bot"
+	quietName            = "quiet"
+	sharedName           = "shared"
+	observabilityNetwork = "observability_default"
+)
+
+const (
 	envExample  = ".env.example"
 	appName     = "app"
 	appRepo     = "owner/app"
@@ -59,7 +75,7 @@ func workspace(t *testing.T, catalog, src string) gate.Workspace {
 		testutil.Write(t, filepath.Join(dir, CatalogFile), catalog)
 	}
 	return gate.Workspace{Src: src, PolicyDir: dir, AppName: appName, Repo: appRepo,
-		Policy: policy.Policy{Apps: map[string]policy.App{appName: {Repo: appRepo}, siblingName: {Repo: appRepo}, "other": {Repo: "owner/other"}}}}
+		Policy: policy.Policy{Apps: map[string]policy.App{appName: {Repo: appRepo}, siblingName: {Repo: appRepo}, otherName: {Repo: "owner/other"}}}}
 }
 
 func TestTheShippedCatalogDeclaresTheShippedTimersAndSites(t *testing.T) {
@@ -89,10 +105,10 @@ func TestTheShippedCatalogDeclaresTheHubTimerUnits(t *testing.T) {
 
 func TestHostDriftNamesTimersAndSitesNoServiceDeclares(t *testing.T) {
 	catalog := Catalog{Services: map[string]Service{
-		appName:     {Timers: []Timer{{Name: "app-backup.timer"}}, Exposes: []Expose{{Port: 8080}, {Site: "app-ingest"}}},
-		siblingName: {Timers: []Timer{{Name: "sweep.timer"}}},
+		appName:     {Timers: []Timer{{Name: backupTimer}}, Exposes: []Expose{{Port: 8080}, {Site: hostSite}}},
+		siblingName: {Timers: []Timer{{Name: sweepTimer}}},
 	}}
-	drift := catalog.HostDrift(Facts{Timers: []string{"sweep.timer", "rogue.timer", "app-backup.timer"}, Sites: []string{"app-ingest", "stt"}})
+	drift := catalog.HostDrift(Facts{Timers: []string{sweepTimer, "rogue.timer", backupTimer}, Sites: []string{hostSite, sttName}})
 	testutil.Equal(t, drift, []string{
 		"timer rogue.timer is installed on the host but no service declares it in timers",
 		"public site stt has a caddy file on the host but no service declares it in exposes",
@@ -101,7 +117,7 @@ func TestHostDriftNamesTimersAndSitesNoServiceDeclares(t *testing.T) {
 
 func TestInstalledReadsActiveTimersAndCaddySites(t *testing.T) {
 	units, sites := t.TempDir(), t.TempDir()
-	for _, name := range []string{"app.timer", "app.service", "._app.timer"} {
+	for _, name := range []string{appTimer, "app.service", "._app.timer"} {
 		testutil.Write(t, filepath.Join(units, name), "[Timer]\n")
 	}
 	testutil.Mkdir(t, filepath.Join(units, "dir.timer"))
@@ -111,11 +127,11 @@ func TestInstalledReadsActiveTimersAndCaddySites(t *testing.T) {
 	testutil.Write(t, filepath.Join(sites, "notes.txt"), "stt\n")
 	facts, err := Installed(units, sites)
 	testutil.NoErr(t, err)
-	testutil.Equal(t, facts, Facts{Timers: []string{"app.timer", "linked.timer"}, Sites: []string{"stt"}})
+	testutil.Equal(t, facts, Facts{Timers: []string{appTimer, "linked.timer"}, Sites: []string{sttName}})
 	none, err := Installed(filepath.Join(units, "missing"), filepath.Join(sites, "missing"))
 	testutil.NoErr(t, err)
 	testutil.Equal(t, none, Facts{})
-	file := filepath.Join(units, "app.timer")
+	file := filepath.Join(units, appTimer)
 	for _, dirs := range [][2]string{{file, sites}, {units, file}} {
 		_, err := Installed(dirs[0], dirs[1])
 		testutil.Fails(t, err)
@@ -207,9 +223,9 @@ func TestGatherFindsScheduledWorkflows(t *testing.T) {
 }
 
 func TestHostFactsNameTimersAndCaddySites(t *testing.T) {
-	apps := map[string]policy.App{appName: {Host: appHost}, siblingName: {Host: &policy.Host{Timers: []string{hostTimer}}}, "other": {}}
+	apps := map[string]policy.App{appName: {Host: appHost}, siblingName: {Host: &policy.Host{Timers: []string{hostTimer}}}, otherName: {}}
 	var facts Facts
-	HostFacts(apps, []string{appName, siblingName, "other", "ghost"}, &facts)
+	HostFacts(apps, []string{appName, siblingName, otherName, "ghost"}, &facts)
 	testutil.Equal(t, facts.Timers, []string{hostTimer})
 	testutil.Equal(t, facts.Sites, []string{hostSite})
 }
@@ -290,26 +306,26 @@ func TestMermaidIsStable(t *testing.T) {
 
 func TestNetworkDriftNamesNeighboursWithoutACall(t *testing.T) {
 	catalog := Catalog{Services: map[string]Service{
-		TasksService:         {Calls: []Call{{To: "stt"}, {To: ObservabilityService}}},
-		"stt":                {Gives: []string{"metrics"}},
-		"router-bot":         {Gives: []string{"logs"}, Calls: []Call{{To: TasksService}}},
+		TasksService:         {Calls: []Call{{To: sttName}, {To: ObservabilityService}}},
+		sttName:              {Gives: []string{"metrics"}},
+		routerBotName:        {Gives: []string{"logs"}, Calls: []Call{{To: TasksService}}},
 		ObservabilityService: {},
-		"quiet":              {},
+		quietName:            {},
 	}}
 	drift := catalog.NetworkDrift(map[string][]string{
-		TasksService:         {"shared", "tasks_default"},
-		"stt":                {"shared"},
-		"router-bot":         {"shared"},
-		ObservabilityService: {"shared", "observability_default"},
-		"quiet":              {"observability_default"},
+		TasksService:         {sharedName, tasksNetwork},
+		sttName:              {sharedName},
+		routerBotName:        {sharedName},
+		ObservabilityService: {sharedName, observabilityNetwork},
+		quietName:            {observabilityNetwork},
 	})
 	testutil.Equal(t, drift, map[string][]string{
 		ObservabilityService: {"docker network observability_default also connects quiet, and the catalog has no call between them"},
-		"quiet":              {"docker network observability_default also connects observability, and the catalog has no call between them"},
-		"router-bot":         {"docker network shared also connects stt, and the catalog has no call between them"},
-		"stt":                {"docker network shared also connects router-bot, and the catalog has no call between them"},
+		quietName:            {"docker network observability_default also connects observability, and the catalog has no call between them"},
+		routerBotName:        {"docker network shared also connects stt, and the catalog has no call between them"},
+		sttName:              {"docker network shared also connects router-bot, and the catalog has no call between them"},
 	})
-	testutil.True(t, catalog.Linked("router-bot", TasksService) && catalog.Linked(TasksService, "router-bot"), "a call links both ways")
-	testutil.True(t, catalog.Linked(ObservabilityService, "stt") && !catalog.Linked(ObservabilityService, "quiet"), "observability reaches only what gives it something")
-	testutil.Equal(t, len(catalog.NetworkDrift(map[string][]string{TasksService: {"tasks_default"}})), 0)
+	testutil.True(t, catalog.Linked(routerBotName, TasksService) && catalog.Linked(TasksService, routerBotName), "a call links both ways")
+	testutil.True(t, catalog.Linked(ObservabilityService, sttName) && !catalog.Linked(ObservabilityService, quietName), "observability reaches only what gives it something")
+	testutil.Equal(t, len(catalog.NetworkDrift(map[string][]string{TasksService: {tasksNetwork}})), 0)
 }

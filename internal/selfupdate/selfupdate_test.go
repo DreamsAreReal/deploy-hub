@@ -29,6 +29,14 @@ import (
 )
 
 const (
+	expiredText = "expired"
+)
+
+const (
+	archiveURLKey = "archive_download_url"
+)
+
+const (
 	assetURL    = "url"
 	pat         = "github_pat_good"
 	wrongPAT    = "github_pat_wrong"
@@ -114,8 +122,8 @@ func runsJSON(commit, branch, event, conclusion, path string) string {
 
 func builtJSON(h *hub, name string, expired bool) string {
 	data, _ := json.Marshal(map[string]any{"artifacts": []map[string]any{
-		{"name": "gate-reports", "expired": false, "archive_download_url": h.srv.URL + "/repos/" + repo + "/actions/artifacts/4/zip"},
-		{"name": name, "expired": expired, "archive_download_url": h.srv.URL + zipPath},
+		{assetName: "gate-reports", expiredText: false, archiveURLKey: h.srv.URL + "/repos/" + repo + "/actions/artifacts/4/zip"},
+		{assetName: name, expiredText: expired, archiveURLKey: h.srv.URL + zipPath},
 	}})
 	return string(data)
 }

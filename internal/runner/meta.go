@@ -59,7 +59,7 @@ func ReadMeta(r io.Reader) (Meta, error) {
 		if dst, known := fields[key]; ok && known {
 			*dst = value
 		}
-		if key == metaShot && ok && m.addShot(value, &shotBytes) != nil {
+		if key == metaShot && ok && addShot(&m, value, &shotBytes) != nil {
 			return m, errBadShots
 		}
 	}
@@ -70,7 +70,7 @@ func ReadMeta(r io.Reader) (Meta, error) {
 	return m, sc.Err()
 }
 
-func (m *Meta) addShot(value string, total *int) error {
+func addShot(m *Meta, value string, total *int) error {
 	*total += len(value)
 	m.Shots = append(m.Shots, value)
 	if len(m.Shots) > MaxBaselineShots || *total > MaxBaselineBytes {

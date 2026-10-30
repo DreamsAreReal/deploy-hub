@@ -13,6 +13,18 @@ import (
 )
 
 const (
+	envPolicy = "POLICY=/p.yaml"
+	envGHVar  = "GH_TOKEN=token"
+)
+
+const (
+	envRepoWeb      = "GITHUB_REPOSITORY=Owner/web"
+	envWorkspaceSrc = "GITHUB_WORKSPACE=/src"
+	stepUpload      = "Upload the mutation verdicts to the hub"
+	envActorOwner   = "ACTOR=owner"
+)
+
+const (
 	workflows    = "../.github/workflows"
 	releaseToken = "secrets.RELEASE_TOKEN"
 	stepDeploy   = "Deploy on the VPS"
@@ -184,8 +196,8 @@ func runGate(t *testing.T, gate workflowStep, built, autoGo string) (string, str
 	args := filepath.Join(dir, "args")
 	cmd := exec.CommandContext(t.Context(), "bash", "-e", "-c", fakeGateTools+gate.Run)
 	cmd.Env = []string{systemPath, "TOOLCHAIN=" + dir, "ARGS=" + args, "BUILT=" + built, appWeb,
-		"IMAGE=ghcr.io/owner/web:sha-abc", "GITHUB_REPOSITORY=Owner/web", shaABC, "POLICY=/p.yaml",
-		"GITHUB_WORKSPACE=/src", "RUNNER_TEMP=" + dir, "GOTOOLCHAIN=local", "LOCAL_GO=" + hubGo, "AUTO_GO=" + autoGo}
+		"IMAGE=ghcr.io/owner/web:sha-abc", envRepoWeb, shaABC, envPolicy,
+		envWorkspaceSrc, "RUNNER_TEMP=" + dir, "GOTOOLCHAIN=local", "LOCAL_GO=" + hubGo, "AUTO_GO=" + autoGo}
 	out, err := cmd.CombinedOutput()
 	return args, string(out), err
 }
@@ -225,8 +237,8 @@ func TestTheAppCodeRunsWithoutTheDeployKeyOrAnIDTokenRequest(t *testing.T) {
 	testutil.Write(t, filepath.Join(dir, "ssh", "deploy_key"), "key")
 	seen := filepath.Join(dir, "seen")
 	cmd := exec.CommandContext(t.Context(), "bash", "-e", "-c", fakeGateWitness+steps[index[stepGate]].Run)
-	cmd.Env = []string{systemPath, "TOOLCHAIN=" + dir, "SEEN=" + seen, "BUILT=false", appWeb, "GITHUB_REPOSITORY=Owner/web", shaABC,
-		"POLICY=/p.yaml", "GITHUB_WORKSPACE=/src", "RUNNER_TEMP=" + dir,
+	cmd.Env = []string{systemPath, "TOOLCHAIN=" + dir, "SEEN=" + seen, "BUILT=false", appWeb, envRepoWeb, shaABC,
+		envPolicy, envWorkspaceSrc, "RUNNER_TEMP=" + dir,
 		"ACTIONS_ID_TOKEN_REQUEST_TOKEN=request-token", "ACTIONS_ID_TOKEN_REQUEST_URL=https://token.example", "LOCAL_GO=" + hubGo}
 	out, err := cmd.CombinedOutput()
 	testutil.NoErr(t, err)
@@ -238,7 +250,7 @@ func TestTheAppCodeRunsWithoutTheDeployKeyOrAnIDTokenRequest(t *testing.T) {
 	again := steps[index["Connect to the VPS after the gate"]]
 	testutil.True(t, index["Connect to the VPS after the gate"] == index[stepGate]+1, "the key comes back right after the gate")
 	testutil.Equal(t, again.If, "always() && env.GATE_ONLY != 'true'")
-	for _, name := range []string{"Upload the mutation verdicts to the hub", "Report the verdict to the hub", stepPush, stepDeploy} {
+	for _, name := range []string{stepUpload, "Report the verdict to the hub", stepPush, stepDeploy} {
 		testutil.True(t, index[name] > index["Connect to the VPS after the gate"], name+" runs before the key is back")
 	}
 }
@@ -257,7 +269,7 @@ func pushWith(t *testing.T, builtID, nowID string) (string, error) {
 	testutil.Write(t, calls, "")
 	cmd := exec.CommandContext(t.Context(), "bash", "-e", "-c", fakePushTools+steps[index[stepPush]].Run)
 	cmd.Env = []string{systemPath, "CALLS=" + calls, "BUILT_ID=" + builtID, "NOW_ID=" + nowID, "IMAGE=ghcr.io/owner/web", "TAG=sha-abc",
-		"GH_TOKEN=token", "ACTOR=owner", "RUNNER_TEMP=" + dir, "GITHUB_OUTPUT=" + filepath.Join(dir, "out")}
+		envGHVar, envActorOwner, "RUNNER_TEMP=" + dir, "GITHUB_OUTPUT=" + filepath.Join(dir, "out")}
 	out, err := cmd.CombinedOutput()
 	got, rerr := os.ReadFile(filepath.Clean(calls))
 	testutil.NoErr(t, rerr)
@@ -294,7 +306,7 @@ func pullDeployed(t *testing.T, deployed, fails string) (string, string) {
 	testutil.Write(t, calls, "")
 	testutil.Write(t, out, "")
 	cmd := exec.CommandContext(t.Context(), "bash", "-e", "-c", fakePullTools+steps[index["Pull the deployed release for the rollback check"]].Run)
-	cmd.Env = []string{systemPath, "CALLS=" + calls, "DEPLOYED=" + deployed, "PULL_FAILS=" + fails, "GH_TOKEN=token", "ACTOR=owner",
+	cmd.Env = []string{systemPath, "CALLS=" + calls, "DEPLOYED=" + deployed, "PULL_FAILS=" + fails, envGHVar, envActorOwner,
 		"RUNNER_TEMP=" + dir, "GITHUB_OUTPUT=" + out}
 	_, err := cmd.CombinedOutput()
 	testutil.NoErr(t, err)
@@ -374,7 +386,7 @@ func TestOnlyADeployRunOfMainFeedsTheMutationCacheAndTheFullRun(t *testing.T) {
 	for _, s := range w.Jobs["deploy"].Steps {
 		steps[s.Name] = s
 	}
-	for _, name := range []string{"Upload the mutation verdicts to the hub", "Keep the source for the hub's full mutation run"} {
+	for _, name := range []string{stepUpload, "Keep the source for the hub's full mutation run"} {
 		testutil.Contains(t, steps[name].If, "env.GATE_ONLY != 'true'")
 	}
 	testutil.Contains(t, steps["Keep the source for the hub's full mutation run"].If, "runner.environment == 'self-hosted'")

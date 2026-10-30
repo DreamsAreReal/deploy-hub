@@ -22,6 +22,15 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/testutil"
 )
 
+const (
+	verbStatus = "status"
+)
+
+const (
+	sourcePrune = "prune"
+	runnerOther = "runner-other"
+)
+
 var errSim = errors.New("simulated")
 
 const (
@@ -208,16 +217,17 @@ func TestDefaultsAndMetricsToggle(t *testing.T) {
 	_, off := (&App{}).metrics().(obs.Discard)
 	testutil.True(t, off, "an empty URL disables metrics")
 	dir := t.TempDir()
-	both := &App{Config: Config{MetricsURL: unreachableURL, TextfileDir: dir}, Now: time.Now, source: "prune"}
+	both := &App{Config: Config{MetricsURL: unreachableURL, TextfileDir: dir}, Now: time.Now, source: sourcePrune}
 	fanout, fans := both.metrics().(obs.Fanout)
-	testutil.True(t, fans && len(fanout) == 2 && both.metrics().(obs.Fanout)[1] == fanout[1], "push and one shared textfile for the whole run")
-	only := &App{Config: Config{TextfileDir: dir}, Now: time.Now, source: "prune"}
+	again, _ := both.metrics().(obs.Fanout)
+	testutil.True(t, fans && len(fanout) == 2 && len(again) == 2 && again[1] == fanout[1], "push and one shared textfile for the whole run")
+	only := &App{Config: Config{TextfileDir: dir}, Now: time.Now, source: sourcePrune}
 	file, alone := only.metrics().(*obs.Textfile)
 	testutil.True(t, alone && file.Path() == filepath.Join(dir, "deploy-hub-prune.prom"), "a textfile alone")
-	for request, want := range map[string]string{"status": "runner-status", "  deploy web sha-1": "runner-deploy", "Bad;verb": "runner-other", "": "runner-other"} {
+	for request, want := range map[string]string{verbStatus: "runner-status", "  deploy web sha-1": "runner-deploy", "Bad;verb": runnerOther, "": runnerOther} {
 		testutil.Equal(t, textfileSource(CmdRunner, request), want)
 	}
-	testutil.Equal(t, textfileSource(CmdPrune, "status"), CmdPrune)
+	testutil.Equal(t, textfileSource(CmdPrune, verbStatus), CmdPrune)
 }
 
 func TestRenderCommand(t *testing.T) {
@@ -271,7 +281,7 @@ func TestFactsCommand(t *testing.T) {
 func TestRunnerCommandUsesSSHOriginalCommand(t *testing.T) {
 	h := newHarness(t)
 	h.write(filepath.Join(h.hubDir, "apps.list"), "web\n")
-	h.env[envSSHOriginal] = "status"
+	h.env[envSSHOriginal] = verbStatus
 	if code := h.run(CmdRunner, "ignored"); code != ExitOK {
 		t.Fatalf("exit %d: %s", code, h.err)
 	}
@@ -285,7 +295,7 @@ func TestRunnerCommandUsesSSHOriginalCommand(t *testing.T) {
 	testutil.Contains(t, testutil.Read(t, filepath.Join(h2.hubDir, "deploys.log")), "refuse denied(reboot_now)")
 	h3 := newHarness(t)
 	h3.env[envHubDir] = filepath.Join(t.TempDir(), "absent")
-	if code := h3.run(CmdRunner, "status"); code != ExitFail {
+	if code := h3.run(CmdRunner, verbStatus); code != ExitFail {
 		t.Fatal("status without apps.list must fail")
 	}
 }

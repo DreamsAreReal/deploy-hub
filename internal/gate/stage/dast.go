@@ -75,7 +75,7 @@ func (s *Stage) prepareVolume(ctx context.Context, vol string) error {
 	if err := s.docker(ctx, "volume", "create", vol); err != nil {
 		return err
 	}
-	return s.docker(ctx, "run", "--rm", "-u", zapRootUser, "-v", vol+":"+zapMount, "--entrypoint", "chown", s.ws.Policy.Images.ZAP, zapOwner, zapMount)
+	return s.docker(ctx, dockerRun, "--rm", "-u", zapRootUser, "-v", vol+":"+zapMount, "--entrypoint", "chown", s.ws.Policy.Images.ZAP, zapOwner, zapMount)
 }
 
 func firstNonEmpty(values ...string) string {
@@ -100,7 +100,7 @@ func (s *Stage) zapArgs(vol string) []string {
 	}
 	args := make([]string, 0, zapArgCount+len(extra))
 	args = append(args,
-		"run", "--rm", flagNetwork, s.Network, "-v", vol+":"+zapMount, s.ws.Policy.Images.ZAP,
+		dockerRun, "--rm", flagNetwork, s.Network, "-v", vol+":"+zapMount, s.ws.Policy.Images.ZAP,
 		script, "-t", target, "-J", zapReport, "-I",
 		"-m", strconv.Itoa(minutes(d.Spider)), "-T", strconv.Itoa(minutes(d.MaxTime)),
 		"-z", fmt.Sprintf(zapScanCapFmt, minutes(d.MaxTime)),
@@ -109,7 +109,7 @@ func (s *Stage) zapArgs(vol string) []string {
 }
 
 func (s *Stage) readReport(ctx context.Context, vol string) (zapReportDoc, error) {
-	res, err := s.ws.Run(ctx, DockerBinary, "run", "--rm", "-v", vol+":"+zapMount, "--entrypoint", "cat", s.ws.Policy.Images.ZAP, zapMount+"/"+zapReport)
+	res, err := s.ws.Run(ctx, DockerBinary, dockerRun, "--rm", "-v", vol+":"+zapMount, "--entrypoint", "cat", s.ws.Policy.Images.ZAP, zapMount+"/"+zapReport)
 	if err != nil {
 		return zapReportDoc{}, err
 	}

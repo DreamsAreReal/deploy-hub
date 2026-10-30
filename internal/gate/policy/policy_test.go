@@ -11,6 +11,11 @@ import (
 )
 
 const (
+	dupTokensLine = "duplicate_min_tokens: 50"
+	uiMapLine     = "map: web/appmap.json"
+)
+
+const (
 	ownersLine = "owners: [Owner]"
 	pathsLine  = "paths: [/health]"
 )
@@ -165,8 +170,8 @@ func TestParseRejects(t *testing.T) {
 		"mutation":           {"mutation_score: 90", "mutation_score: -1"},
 		"duplication":        {"max_duplication_percent: 2", "max_duplication_percent: 0"},
 		"cognitive":          {"max_cognitive_complexity: 9", "max_cognitive_complexity: 0"},
-		"tokens":             {"duplicate_min_tokens: 50", "duplicate_min_tokens: 0"},
-		"net growth":         {"duplicate_min_tokens: 50", "duplicate_min_tokens: 50\n  max_net_growth_lines: -1"},
+		"tokens":             {dupTokensLine, "duplicate_min_tokens: 0"},
+		"net growth":         {dupTokensLine, "duplicate_min_tokens: 50\n  max_net_growth_lines: -1"},
 		"check timeout":      {"check_timeout: 30m", "check_timeout: 0s"},
 		"long check timeout": {"long_check_timeout: 3h", "long_check_timeout: 0s"},
 		"fuzz time":          {"fuzz_time: 10s", "fuzz_time: 0s"},
@@ -194,10 +199,10 @@ func TestParseRejects(t *testing.T) {
 		"unpinned zap":       {"zap: ghcr.io/zaproxy/zaproxy" + digest, "zap: ghcr.io/zaproxy/zaproxy:stable"},
 		"unpinned browser":   {"browser: mcr.microsoft.com/playwright" + digest, "browser: mcr.microsoft.com/playwright:v1"},
 		"no browser":         {browserLine, ""},
-		"ui map":             {"map: web/appmap.json", "map: ''"},
-		"ui map outside":     {"map: web/appmap.json", "map: ../appmap.json"},
-		"ui map absolute":    {"map: web/appmap.json", "map: /web/appmap.json"},
-		"ui map unclean":     {"map: web/appmap.json", "map: web/../appmap.json"},
+		"ui map":             {uiMapLine, "map: ''"},
+		"ui map outside":     {uiMapLine, "map: ../appmap.json"},
+		"ui map absolute":    {uiMapLine, "map: /web/appmap.json"},
+		"ui map unclean":     {uiMapLine, "map: web/../appmap.json"},
 		"ui chromium":        {"chromium: /ms/chrome", "chromium: ms/chrome"},
 		"app name":           {"  hub:\n", "  Hub!:\n"},
 		"repo":               {"repo: Owner/hub", "repo: hub"},

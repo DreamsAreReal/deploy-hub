@@ -11,6 +11,10 @@ import (
 )
 
 const (
+	networkShared = "shared"
+)
+
+const (
 	runningEnv = `["PATH=/usr/bin","PORT=8787","SENTRY_DSN=x","SENTRY_DSN=x","LEFTOVER=1"]`
 	bakedEnv   = `["PATH=/usr/bin","PORT=8080"]`
 	imageID    = "sha256:abc"
@@ -69,7 +73,7 @@ func TestProjectNetworksGroupsTheNetworksOfEveryComposeProject(t *testing.T) {
 	c, f := client(reply("tasks\tshared,tasks_default\nobservability\tobservability_default\nobservability\tshared\n\tbridge\nrouter-bot\tshared,shared\n\n", nil))
 	networks, err := c.ProjectNetworks(context.Background())
 	testutil.NoErr(t, err)
-	testutil.Equal(t, networks, map[string][]string{"tasks": {"shared", "tasks_default"}, "observability": {"observability_default", "shared"}, "router-bot": {"shared"}})
+	testutil.Equal(t, networks, map[string][]string{"tasks": {networkShared, "tasks_default"}, "observability": {"observability_default", networkShared}, "router-bot": {networkShared}})
 	testutil.Equal(t, f.Lines(), []string{"docker ps --format " + formatNetworks})
 	broken, _ := client(reply("", errBoom))
 	_, err = broken.ProjectNetworks(context.Background())

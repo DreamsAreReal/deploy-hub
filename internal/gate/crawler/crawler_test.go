@@ -10,6 +10,14 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/testutil"
 )
 
+const (
+	scriptB = "b.mjs"
+)
+
+const (
+	scriptA = "a.mjs"
+)
+
 var relativeImport = regexp.MustCompile(`from '\./([a-z]+\.mjs)'`)
 
 type brokenFS struct{}
@@ -33,9 +41,9 @@ func TestModulesHoldTheEntryAndEveryScriptItImports(t *testing.T) {
 }
 
 func TestReadKeepsOnlyScriptsAndFailsOnAnUnreadableOne(t *testing.T) {
-	modules, err := read(fstest.MapFS{"b.mjs": {Data: []byte("b")}, "a.mjs": {Data: []byte("a")}, "package.json": {Data: []byte("{}")}})
+	modules, err := read(fstest.MapFS{scriptB: {Data: []byte("b")}, scriptA: {Data: []byte("a")}, "package.json": {Data: []byte("{}")}})
 	testutil.NoErr(t, err)
-	testutil.Equal(t, modules, []Module{{Name: "a.mjs", Body: []byte("a")}, {Name: "b.mjs", Body: []byte("b")}})
+	testutil.Equal(t, modules, []Module{{Name: scriptA, Body: []byte("a")}, {Name: scriptB, Body: []byte("b")}})
 	for _, src := range []fs.FS{fstest.MapFS{"dir.mjs": {Mode: fs.ModeDir}}, brokenFS{}} {
 		_, err := read(src)
 		testutil.Fails(t, err)

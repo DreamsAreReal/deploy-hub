@@ -121,7 +121,7 @@ func TestStartRunsTheImageWithProductionLimits(t *testing.T) {
 
 func TestStartMountsAFreshVolumeOnEveryDataDirectory(t *testing.T) {
 	ws, _ := app(t, okHandler())
-	ws.App.Data = []string{"/data", "/cache"}
+	ws.App.Data = []string{dataDir, "/cache"}
 	st, err := Start(context.Background(), ws, "test")
 	testutil.NoErr(t, err)
 	st.Stop(context.Background())

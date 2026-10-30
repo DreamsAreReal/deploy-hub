@@ -143,7 +143,7 @@ func (s *Stage) crawl(ctx context.Context, accepted []string) gate.Outcome {
 	}
 	res, runErr := s.ws.Run(ctx, DockerBinary, s.crawlArgs(name, scripts, accepted)...)
 	dir := filepath.Join(s.ws.Out, crawlDir)
-	if err := s.docker(ctx, "cp", name+":"+crawlOut, dir); err != nil {
+	if err = s.docker(ctx, "cp", name+":"+crawlOut, dir); err != nil {
 		return gate.Fail(reasonNoCrawl, err.Error())
 	}
 	report, err := os.ReadFile(filepath.Clean(filepath.Join(dir, crawlReport)))
@@ -186,7 +186,7 @@ func (s *Stage) crawlArgs(name, scripts string, accepted []string) []string {
 	}
 	args := make([]string, 0, crawlFixedArgs)
 	args = append(args,
-		"run", "--name", name, flagNetwork, s.Network, "--cpus", crawlCPUs, "--memory", crawlMemory, "--memory-swap", crawlMemory,
+		dockerRun, "--name", name, flagNetwork, s.Network, "--cpus", crawlCPUs, "--memory", crawlMemory, "--memory-swap", crawlMemory,
 		"--shm-size", crawlShm, flagPids, crawlPids, flagSecurity, noPrivileges,
 		"-v", s.ws.Src+":"+crawlSrc+readOnly, "-v", scripts+":"+crawlerMount+readOnly, "-w", crawlSrc,
 		flagEnv, "E2E_BASE="+strings.TrimSuffix(s.InternalURL(""), "/"), flagEnv, "E2E_OUT="+crawlOut,

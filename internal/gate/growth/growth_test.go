@@ -15,6 +15,13 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/testutil"
 )
 
+const (
+	gitConfigFlag = "-c"
+	fileA         = "a.go"
+	fileB         = "b.go"
+	fileC         = "c.go"
+)
+
 var start = time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
 
 func lines(n int) string {
@@ -33,13 +40,12 @@ func newRepo(t *testing.T) repo {
 	return r
 }
 
-func (r repo) git(env []string, args ...string) string {
+func (r repo) git(env []string, args ...string) {
 	r.t.Helper()
-	res, err := r.ws.RunEnv(r.t.Context(), env, source.GitBinary, append([]string{"-c", "user.name=gate", "-c", "user.email=gate@example.com"}, args...)...)
+	_, err := r.ws.RunEnv(r.t.Context(), env, source.GitBinary, append([]string{gitConfigFlag, "user.name=gate", gitConfigFlag, "user.email=gate@example.com"}, args...)...)
 	if err != nil {
 		r.t.Fatalf("git %v: %v %s", args, err, procexec.Output(err))
 	}
-	return strings.TrimSpace(res.Stdout)
 }
 
 func (r repo) commit(at time.Time, files map[string]string) {
@@ -60,9 +66,9 @@ func (r repo) check(limit int) gate.Outcome {
 func history(t *testing.T) repo {
 	t.Helper()
 	r := newRepo(t)
-	r.commit(start, map[string]string{"a.go": lines(100), "README.md": lines(3)})
+	r.commit(start, map[string]string{fileA: lines(100), "README.md": lines(3)})
 	r.commit(start.Add(24*time.Hour), map[string]string{
-		"a.go": lines(95), "b.go": lines(10), "docs/guide.md": lines(50), "x/testdata/case.go": lines(20), "go.sum": lines(30), "logo.bin": "\x00\x01",
+		fileA: lines(95), fileB: lines(10), "docs/guide.md": lines(50), "x/testdata/case.go": lines(20), "go.sum": lines(30), "logo.bin": "\x00\x01",
 	})
 	return r
 }
@@ -75,7 +81,7 @@ func TestCountsOnlyCodeSinceTheFirstCommitWhenTheHistoryIsShort(t *testing.T) {
 
 func TestCountsTheLastThirtyDaysAndJudgesTheThreshold(t *testing.T) {
 	r := history(t)
-	r.commit(start.Add(40*24*time.Hour), map[string]string{"b.go": lines(8), "c.go": lines(7)})
+	r.commit(start.Add(40*24*time.Hour), map[string]string{fileB: lines(8), fileC: lines(7)})
 	outcome := r.check(0)
 	testutil.Equal(t, outcome.Values, map[string]float64{ValueAdded: 7, ValueRemoved: 2, ValueNet: 5})
 	testutil.Equal(t, r.check(5).Status, gate.StatusPass)
@@ -86,10 +92,10 @@ func TestCountsTheLastThirtyDaysAndJudgesTheThreshold(t *testing.T) {
 
 func TestTheWindowStartsOnTheMainLine(t *testing.T) {
 	r := newRepo(t)
-	r.commit(start, map[string]string{"a.go": lines(100)})
-	r.commit(start.Add(24*time.Hour), map[string]string{"b.go": lines(10)})
+	r.commit(start, map[string]string{fileA: lines(100)})
+	r.commit(start.Add(24*time.Hour), map[string]string{fileB: lines(10)})
 	r.git(nil, "checkout", "-q", "-b", "side", "HEAD~1")
-	r.commit(start.Add(5*24*time.Hour), map[string]string{"c.go": lines(3)})
+	r.commit(start.Add(5*24*time.Hour), map[string]string{fileC: lines(3)})
 	r.git(nil, "checkout", "-q", "-")
 	stamp := start.Add(40 * 24 * time.Hour).Format(time.RFC3339)
 	r.git([]string{"GIT_AUTHOR_DATE=" + stamp, "GIT_COMMITTER_DATE=" + stamp}, "merge", "-q", "--no-ff", "-m", "merge", "side")

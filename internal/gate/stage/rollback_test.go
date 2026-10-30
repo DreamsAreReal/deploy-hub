@@ -12,11 +12,20 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/testutil"
 )
 
+const (
+	seedCmd = "seed"
+)
+
+const (
+	flagDB  = "--db"
+	goneDir = "/gone"
+)
+
 const deployedImage = "web:deployed"
 
 func withData(ws gate.Workspace) gate.Workspace {
-	ws.App.Data = []string{"/data"}
-	ws.App.UI = &policy.UI{Seed: []string{"seed", "--db", "/data/app.db"}}
+	ws.App.Data = []string{dataDir}
+	ws.App.UI = &policy.UI{Seed: []string{seedCmd, flagDB, "/data/app.db"}}
 	ws.Previous = deployedImage
 	return ws
 }
@@ -64,13 +73,13 @@ func TestRollbackFailsOnServerErrorsOfTheDeployedRelease(t *testing.T) {
 		switch r.URL.Path {
 		case pathAPI:
 			w.WriteHeader(http.StatusInternalServerError)
-		case "/gone":
+		case goneDir:
 			panic(http.ErrAbortHandler)
 		default:
 			w.WriteHeader(http.StatusOK)
 		}
 	}))
-	ws.App.Load.Paths = []string{pathHealth, pathAPI, "/gone", "/missing"}
+	ws.App.Load.Paths = []string{pathHealth, pathAPI, goneDir, "/missing"}
 	outcome := Rollback(context.Background(), withData(ws))
 	testutil.Equal(t, outcome.Status, gate.StatusFail)
 	testutil.Equal(t, outcome.Findings, []string{pathAPI + " answered 500", "/gone answered 0"})

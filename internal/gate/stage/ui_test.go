@@ -40,7 +40,7 @@ func uiApp(t *testing.T, sim *crawlSim) gate.Workspace {
 	ws, docker := app(t, okHandler())
 	ws.Out, ws.Src = t.TempDir(), "/repo"
 	ws.App.Data = []string{dataDir}
-	ws.App.UI = &policy.UI{Map: "web/appmap.json", Seed: []string{"seed", "--db", dataDir + "/app.db"}, Env: []string{"DEV_LOGIN=1"}, Chromium: "/ms/chrome"}
+	ws.App.UI = &policy.UI{Map: "web/appmap.json", Seed: []string{seedCmd, flagDB, dataDir + "/app.db"}, Env: []string{"DEV_LOGIN=1"}, Chromium: "/ms/chrome"}
 	ws.Policy.Images.Browser = "browser@sha256:2"
 	ws.Exec = &procexectest.Fake{Handler: func(c procexec.Command) (procexec.Result, error) {
 		joined := strings.Join(c.Args, " ")
