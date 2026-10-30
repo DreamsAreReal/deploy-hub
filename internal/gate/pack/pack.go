@@ -20,7 +20,7 @@ const (
 	CheckLint         = "lint"
 	CheckComplexity   = "cognitive-complexity"
 	CheckDeadCode     = "dead-code"
-	CheckTests        = "tests"
+	CheckTests        = gate.CheckTests
 	CheckLineCoverage = "line-coverage"
 	CheckBranches     = "branch-coverage"
 	CheckFuzz         = "fuzz"

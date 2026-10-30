@@ -34,6 +34,25 @@ func TestChecksAreUniqueAndOrdered(t *testing.T) {
 	}
 }
 
+func TestChecksWaitOnlyForEarlierChecks(t *testing.T) {
+	checks := Checks()
+	index := map[string]int{}
+	for i, c := range checks {
+		index[c.Name] = i
+	}
+	for i, c := range checks {
+		for _, name := range c.After {
+			j, ok := index[name]
+			testutil.True(t, ok && j < i, c.Name+" waits for an earlier check "+name)
+		}
+	}
+	testutil.Equal(t, len(checks[0].After), 0)
+	testutil.Equal(t, checks[1].After, []string{"registration"})
+	testutil.Equal(t, checks[index[pack.CheckLint]].After, []string{pack.CheckDependencies})
+	testutil.Equal(t, checks[index[pack.CheckLineCoverage]].After, []string{pack.CheckDependencies, pack.CheckTests})
+	testutil.Equal(t, checks[index[checkLoad]].After, []string{pack.CheckDependencies, checkDAST})
+}
+
 func TestMutationRunsOnlyInFullRunsWhenThePolicySkipsDeploys(t *testing.T) {
 	ran := 0
 	check := fullRunsOnly(gate.Check{Name: pack.CheckMutation, Run: func(context.Context, gate.Workspace) gate.Outcome {

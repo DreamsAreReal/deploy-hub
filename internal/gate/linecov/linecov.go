@@ -85,7 +85,10 @@ func BranchOutcome(ws gate.Workspace, covered, total int) gate.Outcome {
 }
 
 func loaded(judge func(gate.Workspace, Report) gate.Outcome) func(context.Context, gate.Workspace) gate.Outcome {
-	return func(_ context.Context, ws gate.Workspace) gate.Outcome {
+	return func(ctx context.Context, ws gate.Workspace) gate.Outcome {
+		if err := ws.WaitFor(ctx, gate.CheckTests); err != nil {
+			return gate.Fail(err.Error())
+		}
 		r, err := Load(ws)
 		if err != nil {
 			return gate.Fail(err.Error())

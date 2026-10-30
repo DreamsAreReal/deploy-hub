@@ -485,7 +485,11 @@ stale; that is intended. Continuous counters depend on
 `deploy-hub-status.timer`; if it stops, `DeployHubSilent` fires.
 
 **The gate is slow and memory hungry.** Mutation testing dominates, which is
-why deploys skip it and the full run every two weeks carries it. Each
+why deploys skip it and the full run every two weeks carries it. The other
+checks run side by side, at most `limits.parallel_checks` at a time: the
+checks up to `dependencies` run in order first, a check that reads another's
+report names it in `After` (or calls `Workspace.WaitFor`, which gives its slot
+back while it waits), and the verdict keeps the catalog order. Each
 mutant runs in its own process group with a memory budget and is killed
 (counted as detected) when it exceeds it. CI has a 120-minute limit for this
 repo, 360 minutes for app deploys.
