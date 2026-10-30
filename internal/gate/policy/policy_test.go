@@ -12,6 +12,7 @@ import (
 
 const (
 	ownersLine = "owners: [Owner]"
+	freeLine   = "mutation_free_gib: 10"
 	pathsLine  = "paths: [/health]"
 )
 
@@ -172,7 +173,9 @@ func TestParseRejects(t *testing.T) {
 		"findings listed":    {"findings_listed: 20", "findings_listed: 0"},
 		"stage ready":        {"stage_ready_timeout: 30s", "stage_ready_timeout: 0s"},
 		"mutation disk":      {"mutation_disk_gib: 20", "mutation_disk_gib: 0"},
-		"mutation free":      {"mutation_free_gib: 10", "mutation_free_gib: 0"},
+		"mutation free":      {freeLine, "mutation_free_gib: 0"},
+		"too many parallel":  {freeLine, freeLine + "\n  parallel_checks: 17"},
+		"negative parallel":  {freeLine, freeLine + "\n  parallel_checks: -1"},
 		"licenses":           {"licenses: [MIT]", "licenses: []"},
 		"declared license":   {declaredLine, `"pkg:pypi/legacy": GPL-3.0-only`},
 		"declared purl":      {declaredLine, `"pypi/legacy": MIT`},

@@ -29,10 +29,11 @@ const (
 	CategorySecurity = "security"
 	CategoryBusiness = "business"
 
-	percentCeiling = 100
-	purlScheme     = "pkg:"
-	policyChecks   = 8
-	appChecks      = 5
+	percentCeiling    = 100
+	maxParallelChecks = 16
+	purlScheme        = "pkg:"
+	policyChecks      = 8
+	appChecks         = 5
 )
 
 var (
@@ -94,6 +95,7 @@ type Limits struct {
 	StageReady     time.Duration `yaml:"stage_ready_timeout"`
 	MutationDisk   int64         `yaml:"mutation_disk_gib"`
 	MutationFree   int64         `yaml:"mutation_free_gib"`
+	ParallelChecks int           `yaml:"parallel_checks"`
 }
 
 type App struct {
@@ -277,7 +279,15 @@ func (l Limits) validate() error {
 		positive("stage_ready_timeout", int64(l.StageReady)),
 		positive("mutation_disk_gib", l.MutationDisk),
 		positive("mutation_free_gib", l.MutationFree),
+		atMost("parallel_checks", int64(l.ParallelChecks), maxParallelChecks),
 	)
+}
+
+func atMost(field string, v, limit int64) error {
+	if v < 0 || v > limit {
+		return fmt.Errorf("%w: %s must be in [0, %d]", ErrPolicy, field, limit)
+	}
+	return nil
 }
 
 func (i Images) validate() error {

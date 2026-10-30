@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"slices"
 	"strings"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
@@ -17,6 +18,9 @@ const (
 	reasonUnregistered = "the app is not registered in the central gate policy"
 	reasonWrongRepo    = "the repository is not the registered source of the app"
 	reasonFullRunsOnly = "mutation testing runs in the hub's full runs every two weeks, not in deploys"
+	checkScenarios     = "scenarios"
+	checkDAST          = "dast"
+	checkLoad          = "load"
 )
 
 func Checks() []gate.Check {
@@ -24,7 +28,7 @@ func Checks() []gate.Check {
 	byPack := func(name string) gate.Check {
 		return gate.Check{Name: name, Kind: kinds[name], Long: name == pack.CheckMutation, Run: pack.Dispatch(packs, name)}
 	}
-	return []gate.Check{
+	return ordered([]gate.Check{
 		{Name: "registration", Kind: gate.KindSecurity, Run: Registration},
 		{Name: "hygiene", Kind: gate.KindSecurity, Run: source.Hygiene},
 		{Name: "comments", Kind: gate.KindQuality, Run: source.Comments},
@@ -40,10 +44,10 @@ func Checks() []gate.Check {
 		byPack(pack.CheckTests),
 		byPack(pack.CheckLineCoverage),
 		byPack(pack.CheckBranches),
-		{Name: "scenarios", Kind: gate.KindQuality, Run: pack.Scenarios(packs)},
+		{Name: checkScenarios, Kind: gate.KindQuality, Run: pack.Scenarios(packs)},
 		byPack(pack.CheckFuzz),
-		{Name: "dast", Kind: gate.KindSecurity, Needs: gate.NeedHTTP, Run: stage.DAST},
-		{Name: "load", Kind: gate.KindQuality, Needs: gate.NeedHTTP, Run: stage.Load},
+		{Name: checkDAST, Kind: gate.KindSecurity, Needs: gate.NeedHTTP, Run: stage.DAST},
+		{Name: checkLoad, Kind: gate.KindQuality, Needs: gate.NeedHTTP, Run: stage.Load},
 		fullRunsOnly(byPack(pack.CheckMutation)),
 		{Name: "secrets-gitleaks", Kind: gate.KindSecurity, Run: scan.Gitleaks},
 		{Name: "secrets-trufflehog", Kind: gate.KindSecurity, Run: scan.Trufflehog},
@@ -55,7 +59,7 @@ func Checks() []gate.Check {
 		{Name: "dockerfile", Kind: gate.KindSecurity, Needs: gate.NeedImage, Run: scan.Dockerfiles},
 		{Name: "iac", Kind: gate.KindSecurity, Run: scan.IaC},
 		{Name: "image", Kind: gate.KindSecurity, Needs: gate.NeedImage, Run: scan.Image},
-	}
+	})
 }
 
 var kinds = map[string]gate.Kind{
@@ -63,6 +67,21 @@ var kinds = map[string]gate.Kind{
 	pack.CheckLint: gate.KindQuality, pack.CheckComplexity: gate.KindQuality, pack.CheckDeadCode: gate.KindQuality,
 	pack.CheckTests: gate.KindQuality, pack.CheckLineCoverage: gate.KindQuality, pack.CheckBranches: gate.KindQuality,
 	pack.CheckFuzz: gate.KindQuality, pack.CheckMutation: gate.KindQuality,
+}
+
+var after = map[string][]string{
+	pack.CheckLineCoverage: {pack.CheckTests},
+	checkScenarios:         {pack.CheckTests},
+	checkLoad:              {checkDAST},
+	pack.CheckMutation:     {pack.CheckTests, pack.CheckLineCoverage, checkDAST, checkLoad},
+}
+
+func ordered(checks []gate.Check) []gate.Check {
+	setup := slices.IndexFunc(checks, func(c gate.Check) bool { return c.Name == pack.CheckDependencies })
+	for i := 1; i < len(checks); i++ {
+		checks[i].After = append([]string{checks[min(i, setup+1)-1].Name}, after[checks[i].Name]...)
+	}
+	return checks
 }
 
 func fullRunsOnly(c gate.Check) gate.Check {
