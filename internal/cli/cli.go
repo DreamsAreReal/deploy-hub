@@ -290,7 +290,10 @@ func textfileSource(command, request string) string {
 }
 
 func (a *App) delivery() delivery.Notifier {
-	return delivery.LogNotifier{Log: a.Log}
+	if a.Config.Delivery == "" {
+		return delivery.Discard{}
+	}
+	return delivery.HTTPNotifier{URL: a.Config.Delivery, Client: &http.Client{}, Log: a.Log}
 }
 
 func (a *App) secrets(ex procexec.Runner) runner.SecretLayer {

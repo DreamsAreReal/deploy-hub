@@ -33,6 +33,7 @@ const (
 	MetricRequestRefused       = "deploy_hub_request_refused"
 	MetricArchLiveDrift        = "deploy_hub_arch_live_drift"
 	MetricArchHostDrift        = "deploy_hub_arch_host_drift"
+	MetricDeliverySuccess      = "deploy_hub_delivery_success"
 	MetricJournalReadable      = "deploy_hub_journal_readable"
 	MetricCIRunnerUp           = "deploy_hub_ci_runner_up"
 	MetricCIDiskUsedRatio      = "deploy_hub_ci_disk_used_ratio"
