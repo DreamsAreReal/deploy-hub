@@ -42,6 +42,7 @@ const (
 	npmPurl           = "pkg:npm/"
 	pyprojectManifest = "pyproject.toml"
 	npmManifest       = "package.json"
+	goManifest        = "go.mod"
 	trackedCopy       = "sbom-src"
 	nugetPurl         = "pkg:nuget/"
 	nuspecExt         = ".nuspec"
@@ -57,6 +58,7 @@ var (
 	}
 	pyprojectName  = regexp.MustCompile(`(?ms)^\[project\][^\[]*?^name\s*=\s*["']([^"']+)["']`)
 	pypiSeparator  = regexp.MustCompile(`[-_.]+`)
+	goModulePath   = regexp.MustCompile(`(?m)^module\s+"?([^\s"]+)`)
 	nuspecLicense  = regexp.MustCompile(`<license type="expression">([^<]+)</license>|<licenseUrl>https://licenses\.nuget\.org/([^<]+)</licenseUrl>`)
 	dotnetProjects = []string{".csproj", ".fsproj", ".vbproj"}
 )
@@ -200,6 +202,15 @@ func manifestPurls(base string, data []byte) []string {
 		if json.Unmarshal(data, &pkg) == nil && pkg.Name != "" {
 			return []string{npmPurl + strings.Replace(pkg.Name, "@", "%40", 1)}
 		}
+	case goManifest:
+		return goModulePurl(data)
+	}
+	return nil
+}
+
+func goModulePurl(data []byte) []string {
+	if m := goModulePath.FindSubmatch(data); m != nil {
+		return []string{golangPurl + string(m[1])}
 	}
 	return nil
 }

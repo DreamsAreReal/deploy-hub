@@ -364,14 +364,16 @@ func TestSBOMAndLicenses(t *testing.T) {
 {"name":"none","purl":"pkg:pypi/none@1"},
 {"name":"own-python","purl":"pkg:pypi/my-app@0.1.0"},
 {"name":"own-web","purl":"pkg:npm/%40scope/web@2.0.0"},
+{"name":"own-template","purl":"pkg:golang/example.com/starter"},
 {"name":"action","purl":"pkg:github/actions/checkout@v4"},
 {"name":"os","purl":"pkg:deb/debian/libc@1"}]}`
 	w := workspace(t, script{
 		SyftBinary + " scan dir:": {Run: writeSBOM(source)}, SyftBinary + " scan docker-archive:": {Run: writeSBOM(`{"components":[{"name":"busybox","purl":"pkg:apk/busybox@1"}]}`)},
-		dockerSave: {Run: saveImage}, gitBinary: ok("pyproject.toml\x00web/package.json\x00README.md\x00"),
+		dockerSave: {Run: saveImage}, gitBinary: ok("pyproject.toml\x00web/package.json\x00templates/service/go.mod\x00README.md\x00"),
 	})
 	testutil.Write(t, filepath.Join(w.Src, "pyproject.toml"), "[tool.x]\nname = \"no\"\n\n[project]\nversion = \"0.1.0\"\nname = \"My_App\"\n")
 	testutil.Write(t, filepath.Join(w.Src, "web", "package.json"), `{"name":"@scope/web"}`)
+	testutil.Write(t, filepath.Join(w.Src, "templates", "service", "go.mod"), "// starter\nmodule \"example.com/starter\" // template\n\ngo 1.24\n")
 	testutil.Write(t, filepath.Join(w.Src, "README.md"), "x")
 	w.Image = gateImage
 	out := SBOM(context.Background(), w)
@@ -380,7 +382,7 @@ func TestSBOMAndLicenses(t *testing.T) {
 		"pkg:golang/both.example/lib@v1: license MIT AND GPL-2.0-only is not approved",
 		"pkg:pypi/none@1: license unknown",
 	})
-	testutil.Equal(t, out.Values[ValueComponents], float64(15))
+	testutil.Equal(t, out.Values[ValueComponents], float64(16))
 	testutil.Contains(t, testutil.Read(t, w.Report(SBOMImage)), "busybox")
 	fake, isFake := w.Exec.(*procexectest.Fake)
 	testutil.True(t, isFake, "fake runner")
@@ -390,6 +392,7 @@ func TestSBOMAndLicenses(t *testing.T) {
 	testutil.Missing(t, w.Report(trackedCopy))
 	testutil.Equal(t, manifestPurls("package.json", []byte("{")), []string(nil))
 	testutil.Equal(t, manifestPurls("pyproject.toml", []byte("[tool]\n")), []string(nil))
+	testutil.Equal(t, manifestPurls("go.mod", []byte("go 1.24\n")), []string(nil))
 	unlisted := workspace(t, script{SyftBinary: {Run: writeSBOM(source)}, gitBinary: {Err: errExit}})
 	testutil.Equal(t, SBOM(context.Background(), unlisted).Status, gate.StatusFail)
 	missing := workspace(t, script{SyftBinary: {Run: writeSBOM(source)}, gitBinary: ok("gone.toml\x00")})
