@@ -225,7 +225,7 @@ func (s Source) runBuilt(ctx context.Context, run int64, bin []byte) (bool, erro
 }
 
 func (s Source) builtBinary(ctx context.Context, raw string) ([]byte, error) {
-	archive, err := s.get(ctx, raw, acceptBinary, maxBinary)
+	archive, err := s.get(ctx, raw, acceptJSON, maxBinary)
 	if err != nil {
 		return nil, err
 	}
