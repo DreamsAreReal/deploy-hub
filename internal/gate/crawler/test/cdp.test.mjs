@@ -51,9 +51,9 @@ test('a message answers its call or reaches the handler of its event', async () 
 });
 
 test('a connection opens on its socket, numbers its calls and routes the answers', async () => {
-  const opening = connect('ws://chrome/devtools', FakeSocket);
+  const opening = connect('wss://chrome/devtools', FakeSocket);
   const socket = made.at(-1);
-  assert.equal(socket.url, 'ws://chrome/devtools');
+  assert.equal(socket.url, 'wss://chrome/devtools');
   socket.dispatchEvent(new Event('open'));
   const cdp = await opening;
   cdp.session = 'S1';
@@ -63,7 +63,7 @@ test('a connection opens on its socket, numbers its calls and routes the answers
   socket.hear({ id: 2, result: { frameId: 'F' } });
   socket.hear({ id: 1, result: {} });
   assert.deepEqual(await Promise.all([first, second]), [{}, { frameId: 'F' }]);
-  const failing = connect('ws://chrome/broken', FakeSocket);
+  const failing = connect('wss://chrome/broken', FakeSocket);
   made.at(-1).dispatchEvent(new Event('error'));
   await assert.rejects(failing);
 });

@@ -4,8 +4,34 @@ const maxTries = 2;
 
 export const placeholder = (part) => part.startsWith('{') || numeric.test(part);
 export const shape = (route) => route.split('?')[0].split('/').map((part) => (placeholder(part) ? 'N' : part)).join('/');
-export const escapeRe = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
-export const testidRe = (testid) => new RegExp(`^${testid.split('-').map((part) => (part.startsWith('{') ? '.+' : escapeRe(part))).join('-')}$`);
+function piecesOf(testid) {
+  const pieces = [''];
+  testid.split('-').forEach((part, at) => {
+    if (at > 0) pieces[pieces.length - 1] += '-';
+    if (part.startsWith('{')) pieces.push('');
+    else pieces[pieces.length - 1] += part;
+  });
+  return pieces;
+}
+
+function fits(pieces, text) {
+  const [first, ...rest] = pieces;
+  if (rest.length === 0) return text === first;
+  const last = rest.pop();
+  if (!text.startsWith(first) || !text.endsWith(last)) return false;
+  let at = first.length;
+  for (const piece of rest) {
+    const found = text.indexOf(piece, at + 1);
+    if (found < 0) return false;
+    at = found + piece.length;
+  }
+  return text.length - last.length > at;
+}
+
+export const testidPattern = (testid) => {
+  const pieces = piecesOf(testid);
+  return { test: (text) => fits(pieces, text) };
+};
 export const skipped = (crawl, target) => target.unsafe || crawl.config.forbidden.some((pattern) => pattern.test(target.testid));
 
 export function schedule(crawl, route) {
@@ -59,7 +85,7 @@ export function seen(crawl, route, testids) {
 
 export function missing(crawl, key, screen) {
   const known = [...(crawl.testids.get(key) ?? [])];
-  return (screen.elements ?? []).filter((element) => !known.some((testid) => testidRe(element.testid).test(testid)));
+  return (screen.elements ?? []).filter((element) => !known.some((testid) => testidPattern(element.testid).test(testid)));
 }
 
 const another = (crawl, key) => [...crawl.found.keys()].find((route) => shape(route) === key && route !== crawl.visited.get(key) && !crawl.extra.has(route));

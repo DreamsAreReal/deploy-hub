@@ -73,8 +73,8 @@ func TestLayRefusesWithoutKeyOrWithABrokenStore(t *testing.T) {
 		_, err = broken.Lay(t.Context(), appName, t.TempDir())
 		testutil.True(t, errors.Is(err, errShape), body)
 	}
-	unsafe, _ := store(t, procexec.Result{Stdout: `{"web": {".env": {"BAD": "it's $HOME"}}}`}, nil)
-	_, err = unsafe.Lay(t.Context(), appName, t.TempDir())
+	risky, _ := store(t, procexec.Result{Stdout: `{"web": {".env": {"BAD": "it's $HOME"}}}`}, nil)
+	_, err = risky.Lay(t.Context(), appName, t.TempDir())
 	testutil.True(t, errors.Is(err, errUnsafe) && strings.HasPrefix(err.Error(), "BAD:"), "unsafe value")
 	for _, file := range []string{"../escape.env", "notes.txt", "Upper.env"} {
 		outside, _ := store(t, procexec.Result{Stdout: `{"web": {"` + file + `": {"A": "1"}}}`}, nil)

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fc from 'fast-check';
 import {
-  discover, escapeRe, fillFirst, guess, guessMissing, keyOf, leadsTo, missing, placeholder, schedule, seen, shape, skipped, testidRe, widen,
+  discover, fillFirst, guess, guessMissing, keyOf, leadsTo, missing, placeholder, schedule, seen, shape, skipped, testidPattern, widen,
 } from '../routes.mjs';
 
 const screen = (id, route, elements = []) => ({ id, route, kind: 'screen', elements });
@@ -31,23 +31,50 @@ test('a shaped route is a fixed point and has no digits-only part', () => {
   }));
 });
 
-test('an escaped text matches only itself', () => {
+test('a testid without placeholders matches only itself', () => {
   fc.assert(fc.property(fc.string(), fc.string(), (text, other) => {
-    const exact = new RegExp(`^${escapeRe(text)}$`);
+    fc.pre(text.split('-').every((part) => !part.startsWith('{')));
+    const exact = testidPattern(text);
     assert.ok(exact.test(text));
     assert.equal(exact.test(other), other === text);
   }));
 });
 
+test('a placeholder takes any value of at least one character between its neighbours', () => {
+  fc.assert(fc.property(fc.stringMatching(/^[a-z]{1,6}$/), fc.string({ minLength: 1 }), fc.stringMatching(/^[a-z]{1,6}$/), (head, value, tail) => {
+    const pattern = testidPattern(`${head}-{id}-${tail}`);
+    assert.ok(pattern.test(`${head}-${value}-${tail}`));
+    assert.ok(!pattern.test(`${head}--${tail}`) && !pattern.test(`${head}-${value}-${tail}x`) && !pattern.test(`x${head}-${value}-${tail}`));
+  }));
+});
+
 test('a testid pattern takes any value for a placeholder and nothing else', () => {
-  const pattern = testidRe('task-{id}-open');
+  const pattern = testidPattern('task-{id}-open');
   assert.ok(pattern.test('task-12-open') && pattern.test('task-a-b-open'));
   assert.ok(!pattern.test('task--open') && !pattern.test('xtask-1-open') && !pattern.test('task-1-open-now'));
-  assert.ok(testidRe('board.add').test('board.add') && !testidRe('board.add').test('boardxadd'));
+  assert.ok(testidPattern('board.add').test('board.add') && !testidPattern('board.add').test('boardxadd'));
+});
+
+test('placeholders may lead, follow each other and end a testid', () => {
+  const alone = testidPattern('{id}');
+  assert.ok(alone.test('x') && !alone.test(''));
+  const leading = testidPattern('{id}-close');
+  assert.ok(leading.test('a-close') && leading.test('a-b-close') && !leading.test('-close') && !leading.test('a-closed'));
+  const pair = testidPattern('{a}-{b}');
+  assert.ok(pair.test('x-y') && pair.test('x-y-z') && !pair.test('-y') && !pair.test('x-') && !pair.test('xy'));
+  const trailing = testidPattern('token-revoke-{id}');
+  assert.ok(trailing.test('token-revoke-3') && !trailing.test('token-revoke-') && !trailing.test('token-revok-3'));
+});
+
+test('the pieces between placeholders keep their order and leave room for each value', () => {
+  const pattern = testidPattern('a-{x}-b-{y}-c');
+  assert.ok(pattern.test('a-1-b-2-c') && pattern.test('a-b-b-b-c') && pattern.test('a-1-b-2-b-3-c'));
+  assert.ok(!pattern.test('a-1-c') && !pattern.test('a-1-b-c') && !pattern.test('a-b-c') && !pattern.test('a--b-2-c'));
+  assert.ok(!testidPattern('a-{x}-a').test('a-a') && testidPattern('a-{x}-a').test('a-x-a'));
 });
 
 test('a target is skipped when the page marks it unsafe or the app map forbids it', () => {
-  const crawl = crawlOf([], [testidRe('token-revoke-{id}')]);
+  const crawl = crawlOf([], [testidPattern('token-revoke-{id}')]);
   assert.ok(skipped(crawl, { unsafe: true, testid: 'board-add' }));
   assert.ok(skipped(crawl, { unsafe: false, testid: 'token-revoke-3' }));
   assert.ok(!skipped(crawl, { unsafe: false, testid: 'token-issue' }));

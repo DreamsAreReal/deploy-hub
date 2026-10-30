@@ -46,7 +46,7 @@ func checkHeaders(t testing.TB, response *httptest.ResponseRecorder) {
 func TestPagesAnswerJSONWithSecurityHeaders(t *testing.T) {
 	service, _ := newService(t, "")
 	handler := service.Handler()
-	for path, body := range map[string]string{HealthPath: healthBody, "/": homeBody} {
+	for path, body := range map[string]string{HealthPath: `{"status":"ok"}` + "\n", "/": `{"service":"` + Name + `"}` + "\n"} {
 		response := serve(t, handler, http.MethodGet, path)
 		if response.Code != http.StatusOK || response.Body.String() != body || response.Header().Get(contentType) != jsonType {
 			t.Fatalf("%s: %d %q %v", path, response.Code, response.Body, response.Header())

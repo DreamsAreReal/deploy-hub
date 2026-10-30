@@ -3,6 +3,7 @@ package accesslog
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -40,7 +41,7 @@ func logStore(t *testing.T, status int, body string) (*httptest.Server, *[]strin
 		}
 		queries = append(queries, r.FormValue("query"))
 		w.WriteHeader(status)
-		_, _ = w.Write([]byte(body))
+		_, _ = io.Copy(w, strings.NewReader(body))
 	}))
 	t.Cleanup(srv.Close)
 	return srv, &queries

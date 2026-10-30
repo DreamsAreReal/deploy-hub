@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { shape, testidRe } from './routes.mjs';
+import { shape, testidPattern } from './routes.mjs';
 
 export const limits = { settle: 300, slow: 3000, hang: 10000, caused: 1500, still: 2000, detail: 300, poll: 100, timings: 100000 };
 export const viewport = { width: 420, height: 860, deviceScaleFactor: 1, mobile: true };
@@ -41,6 +41,6 @@ export function configure(env, read = readText) {
     forbidden: appMap.screens
       .flatMap((screen) => screen.elements ?? [])
       .filter((element) => destructive.test(element.does))
-      .map((element) => testidRe(element.testid)),
+      .map((element) => testidPattern(element.testid)),
   };
 }

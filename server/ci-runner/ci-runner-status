@@ -10,9 +10,9 @@ NL=${NL%.}
 connected() {
 	cg=$(systemctl show -p ControlGroup --value "ci-runner@$1.service")
 	[ -n "${cg}" ] || return 1
-	pids=$(tr '\n' '|' 2>/dev/null <"/sys/fs/cgroup${cg}/cgroup.procs") || return 1
+	pids=$(paste -sd '|' "/sys/fs/cgroup${cg}/cgroup.procs" 2>/dev/null) || return 1
 	[ -n "${pids}" ] || return 1
-	ip netns exec "ci-$1" ss -Htnp state established '( dport = :443 )' | grep -Eq "pid=(${pids%|}),"
+	ip netns exec "ci-$1" ss -Htnp state established '( dport = :443 )' | grep -Eq "pid=(${pids}),"
 }
 
 isolated() {

@@ -1,8 +1,8 @@
 package web
 
 import (
+	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -18,8 +18,6 @@ const (
 	homeRoute      = "GET /{$}"
 	metricsRoute   = "GET /metrics"
 	unmatched      = "unmatched"
-	healthBody     = `{"status":"ok"}` + "\n"
-	homeBody       = `{"service":"` + Name + `"}` + "\n"
 	requestsMetric = `http_requests_total{route=%q,code="%d"}`
 	durationMetric = `http_request_duration_seconds{route=%q}`
 	flushWait      = 2 * time.Second
@@ -60,8 +58,8 @@ func New(log *slog.Logger, hub *sentry.Hub) *Service {
 
 func (s *Service) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc(healthRoute, answer(healthBody))
-	mux.HandleFunc(homeRoute, answer(homeBody))
+	mux.HandleFunc(healthRoute, answer(map[string]string{"status": "ok"}))
+	mux.HandleFunc(homeRoute, answer(map[string]string{"service": Name}))
 	return s.observe(mux)
 }
 
@@ -74,10 +72,10 @@ func (s *Service) Metrics() http.Handler {
 	return mux
 }
 
-func answer(body string) http.HandlerFunc {
+func answer(reply map[string]string) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set(contentType, jsonType)
-		_, _ = io.WriteString(w, body)
+		_ = json.NewEncoder(w).Encode(reply)
 	}
 }
 
