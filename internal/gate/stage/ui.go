@@ -1,6 +1,7 @@
 package stage
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -10,6 +11,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -49,7 +51,9 @@ const (
 	tableHead       = "| kind |"
 	tableRule       = "| --- |"
 	readOnly        = ":ro"
-	crawlFixedArgs  = 40
+	crawlFixedArgs  = 42
+	crawlVolume     = "-out"
+	tarBinary       = "tar"
 	nodeBinary      = "node"
 	nodeTest        = "--test"
 	FrozenAt        = "2030-01-15T09:30:00Z"
@@ -135,15 +139,19 @@ func acceptedScreens(changes []visualChange) ([]string, error) {
 
 func (s *Stage) crawl(ctx context.Context, accepted []string) gate.Outcome {
 	name := s.Name + crawlSuffix
-	_, _ = s.ws.Run(ctx, DockerBinary, "rm", "-f", name)
-	defer func() { _, _ = s.ws.Run(context.WithoutCancel(ctx), DockerBinary, "rm", "-f", name) }()
+	vol := name + crawlVolume
+	s.dropCrawl(ctx, name, vol)
+	defer s.dropCrawl(context.WithoutCancel(ctx), name, vol)
 	scripts, err := s.crawlerScripts()
+	if err == nil {
+		err = s.docker(ctx, "volume", "create", vol)
+	}
 	if err != nil {
 		return gate.Fail(reasonNoCrawl, err.Error())
 	}
-	res, runErr := s.ws.Run(ctx, DockerBinary, s.crawlArgs(name, scripts, accepted)...)
+	res, runErr := s.ws.Run(ctx, DockerBinary, s.crawlArgs(name, vol, scripts, accepted)...)
 	dir := filepath.Join(s.ws.Out, crawlDir)
-	if err = s.docker(ctx, "cp", name+":"+crawlOut, dir); err != nil {
+	if err = s.collectCrawl(ctx, vol, dir); err != nil {
 		return gate.Fail(reasonNoCrawl, err.Error())
 	}
 	report, err := os.ReadFile(filepath.Clean(filepath.Join(dir, crawlReport)))
@@ -158,6 +166,61 @@ func (s *Stage) crawl(ctx context.Context, accepted []string) gate.Outcome {
 		findings = []string{gate.Tail(procexec.Output(runErr) + res.Combined())}
 	}
 	return gate.Judge(len(findings) == 0, reasonUI, map[string]float64{ValueProblems: float64(len(findings))}, findings)
+}
+
+func (s *Stage) dropCrawl(ctx context.Context, name, vol string) {
+	_, _ = s.ws.Run(ctx, DockerBinary, "rm", "-f", name)
+	_, _ = s.ws.Run(ctx, DockerBinary, "volume", "rm", "-f", vol)
+}
+
+func (s *Stage) collectCrawl(ctx context.Context, vol, dir string) error {
+	res, err := s.ws.Run(ctx, DockerBinary, dockerRun, "--rm", "-v", vol+":"+crawlOut+readOnly, "--entrypoint", tarBinary,
+		s.ws.Policy.Images.Browser, "-C", crawlOut, "-cf", "-", ".")
+	if err != nil {
+		return err
+	}
+	return unpack(strings.NewReader(res.Stdout), dir)
+}
+
+func unpack(archive io.Reader, dir string) error {
+	if err := os.MkdirAll(dir, crawlerMode); err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	entries := tar.NewReader(archive)
+	header, err := entries.Next()
+	for ; err == nil; header, err = entries.Next() {
+		if err = unpackEntry(root, entries, header); err != nil {
+			return err
+		}
+	}
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	return err
+}
+
+func unpackEntry(root *os.Root, body io.Reader, header *tar.Header) error {
+	name := path.Clean(header.Name)
+	switch header.Typeflag {
+	case tar.TypeDir:
+		return root.MkdirAll(name, crawlerMode)
+	case tar.TypeReg:
+		if err := root.MkdirAll(path.Dir(name), crawlerMode); err != nil {
+			return err
+		}
+		file, err := root.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, crawlerFileMode)
+		if err != nil {
+			return err
+		}
+		_, err = io.CopyN(file, body, header.Size)
+		return errors.Join(err, file.Close())
+	}
+	return nil
 }
 
 func (s *Stage) crawlerScripts() (string, error) {
@@ -178,7 +241,7 @@ func (s *Stage) crawlerScripts() (string, error) {
 	return dir, nil
 }
 
-func (s *Stage) crawlArgs(name, scripts string, accepted []string) []string {
+func (s *Stage) crawlArgs(name, vol, scripts string, accepted []string) []string {
 	ui := s.ws.App.UI
 	mode := crawlQuick
 	if s.ws.Mutation.Full {
@@ -188,7 +251,7 @@ func (s *Stage) crawlArgs(name, scripts string, accepted []string) []string {
 	args = append(args,
 		dockerRun, "--name", name, flagNetwork, s.Network, "--cpus", crawlCPUs, "--memory", crawlMemory, "--memory-swap", crawlMemory,
 		"--shm-size", crawlShm, flagPids, crawlPids, flagSecurity, noPrivileges,
-		"-v", s.ws.Src+":"+crawlSrc+readOnly, "-v", scripts+":"+crawlerMount+readOnly, "-w", crawlSrc,
+		"-v", s.ws.Src+":"+crawlSrc+readOnly, "-v", scripts+":"+crawlerMount+readOnly, "-v", vol+":"+crawlOut, "-w", crawlSrc,
 		flagEnv, "E2E_BASE="+strings.TrimSuffix(s.InternalURL(""), "/"), flagEnv, "E2E_OUT="+crawlOut,
 		flagEnv, "E2E_CHROMIUM="+ui.Chromium, flagEnv, "CRAWL_MODE="+mode, flagEnv, "E2E_APPMAP="+crawlSrc+"/"+ui.Map,
 		flagEnv, frozenCrawlEnv+FrozenAt,

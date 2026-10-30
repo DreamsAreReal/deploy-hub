@@ -1,6 +1,7 @@
 package stage
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"errors"
@@ -22,6 +23,10 @@ const (
 	cleanReport = "# Crawl of every screen\n\n23 of 25 screens.\n\n## Problems\n\n| kind | steps | detail | screenshot |\n| --- | --- | --- | --- |\n\n## Notes\n\n| kind | steps | detail | screenshot |\n| --- | --- | --- | --- |\n| small-target | open /ui | 2 buttons | |\n"
 	badReport   = "## Problems\n\n| kind | steps | detail | screenshot |\n| --- | --- | --- | --- |\n| js-error | open /ui/x | boom | shots/001.png |\n| cut-text | open /ui/y @360 | 1 — p | |\n\n## Notes\n\n| alert | open /ui | no | |\n"
 	crawlName   = "deploy-hub-gate-web-ui-crawl"
+	crawlVol    = crawlName + crawlVolume
+	tarBlock    = 512
+	tarTop      = "./"
+	shotBody    = "png"
 	dataDir     = "/data"
 	npmRun      = "run"
 	cutRow      = "| cut-text | open /ui/y @360 | 1 — p | |"
@@ -31,8 +36,15 @@ const (
 type crawlSim struct {
 	report   string
 	cpErr    error
+	volErr   error
 	crawlErr error
 	seedErr  error
+}
+
+type tarEntry struct {
+	name string
+	body string
+	kind byte
 }
 
 func uiApp(t *testing.T, sim *crawlSim) gate.Workspace {
@@ -45,8 +57,11 @@ func uiApp(t *testing.T, sim *crawlSim) gate.Workspace {
 	ws.Exec = &procexectest.Fake{Handler: func(c procexec.Command) (procexec.Result, error) {
 		joined := strings.Join(c.Args, " ")
 		switch {
-		case c.Args[0] == "cp":
-			return procexec.Result{}, sim.copy(c.Args[2])
+		case strings.HasPrefix(joined, "volume create"):
+			return procexec.Result{}, sim.volErr
+		case slices.Contains(c.Args, tarBinary):
+			out, err := sim.archive(t)
+			return procexec.Result{Stdout: out}, err
 		case strings.Contains(joined, "--name "+crawlName):
 			return procexec.Result{Stderr: "crawl failed"}, sim.crawlErr
 		case strings.Contains(joined, "seed --db"):
@@ -57,14 +72,30 @@ func uiApp(t *testing.T, sim *crawlSim) gate.Workspace {
 	return ws
 }
 
-func (s *crawlSim) copy(dir string) error {
+func (s *crawlSim) archive(t *testing.T) (string, error) {
 	if s.cpErr != nil {
-		return s.cpErr
+		return "", s.cpErr
 	}
-	if err := os.MkdirAll(dir, 0o750); err != nil || s.report == "" {
-		return err
+	entries := []tarEntry{{name: tarTop, kind: tar.TypeDir}}
+	if s.report != "" {
+		entries = append(entries, tarEntry{tarTop + crawlReport, s.report, tar.TypeReg}, tarEntry{"./shots/", "", tar.TypeDir}, tarEntry{"./shots/001.png", shotBody, tar.TypeReg})
 	}
-	return os.WriteFile(filepath.Join(dir, crawlReport), []byte(s.report), 0o600)
+	return tarOf(t, entries...), nil
+}
+
+func tarOf(t *testing.T, entries ...tarEntry) string {
+	t.Helper()
+	var buf bytes.Buffer
+	w := tar.NewWriter(&buf)
+	for _, e := range entries {
+		testutil.NoErr(t, w.WriteHeader(&tar.Header{Name: e.name, Typeflag: e.kind, Size: int64(len(e.body)), Mode: 0o644, Linkname: e.body}))
+		if e.kind == tar.TypeReg {
+			_, err := w.Write([]byte(e.body))
+			testutil.NoErr(t, err)
+		}
+	}
+	testutil.NoErr(t, w.Close())
+	return buf.String()
 }
 
 func TestUIIsNotApplicableWithoutAnInterfaceAndNeedsAnImage(t *testing.T) {
@@ -89,11 +120,14 @@ func TestUISeedsTheStandAndCrawlsItQuickly(t *testing.T) {
 			" --mount type=volume,src=deploy-hub-gate-web-ui-data-0,dst=/data web:gate seed --db /data/app.db",
 		"-e MODE=test -e DEV_LOGIN=1 -e "+frozenAppEnv+FrozenAt+" --mount type=volume,src=deploy-hub-gate-web-ui-data-0,dst=/data web:gate\n",
 		"docker run --name "+crawlName+" --network deploy-hub-gate-web-ui-net --cpus 2 --memory 2g --memory-swap 2g --shm-size 1g --pids-limit 1024",
-		"-v /repo:/src:ro -v "+filepath.Join(ws.Out, crawlerDir)+":/crawler:ro -w /src -e E2E_BASE=http://deploy-hub-gate-web-ui:8080 -e E2E_OUT=/out "+
+		"-v /repo:/src:ro -v "+filepath.Join(ws.Out, crawlerDir)+":/crawler:ro -v "+crawlVol+":/out -w /src -e E2E_BASE=http://deploy-hub-gate-web-ui:8080 -e E2E_OUT=/out "+
 			"-e E2E_CHROMIUM=/ms/chrome -e CRAWL_MODE=quick -e E2E_APPMAP=/src/web/appmap.json -e "+frozenCrawlEnv+FrozenAt+
 			" browser@sha256:2 node --test /crawler/crawl.mjs",
-		"docker cp "+crawlName+":/out "+filepath.Join(ws.Out, crawlDir))
-	testutil.Equal(t, strings.Count(all, "docker rm -f "+crawlName), 2)
+		"docker volume create "+crawlVol,
+		"docker run --rm -v "+crawlVol+":/out:ro --entrypoint tar browser@sha256:2 -C /out -cf - .")
+	testutil.Equal(t, strings.Count(all, "docker rm -f "+crawlName+"\n"), 2)
+	testutil.Equal(t, strings.Count(all, "docker volume rm -f "+crawlVol), 2)
+	testutil.Equal(t, testutil.Read(t, filepath.Join(ws.Out, crawlDir, "shots", "001.png")), shotBody)
 	seedAt, standAt := -1, -1
 	for i, line := range lines {
 		if strings.Contains(line, "seed --db") {
@@ -155,6 +189,8 @@ func TestUIFailsOnTheProblemsOfTheReportAndCrawlsFullyInAFullGate(t *testing.T) 
 func TestUIFailsWithoutAReportOrWhenTheCrawlBreaks(t *testing.T) {
 	noCopy := UI(context.Background(), uiApp(t, &crawlSim{cpErr: errExit}))
 	testutil.Equal(t, noCopy.Reason, reasonNoCrawl)
+	noVolume := UI(context.Background(), uiApp(t, &crawlSim{report: cleanReport, volErr: errExit}))
+	testutil.Equal(t, noVolume.Reason, reasonNoCrawl)
 	noFile := UI(context.Background(), uiApp(t, &crawlSim{}))
 	testutil.Equal(t, noFile.Reason, reasonNoCrawl)
 	broken := UI(context.Background(), uiApp(t, &crawlSim{report: cleanReport, crawlErr: errExit}))
@@ -250,4 +286,27 @@ func TestStartWithoutASeedRunsNothingBeforeTheStand(t *testing.T) {
 	testutil.NoErr(t, err)
 	st.Stop(context.Background())
 	testutil.True(t, !strings.Contains(strings.Join(procexectest.LinesOf(ws.Exec), "\n"), "--network none"), "no seed container")
+}
+
+func TestUnpackKeepsTheCrawlInsideItsFolder(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "out")
+	good := tarOf(t, tarEntry{tarTop, "", tar.TypeDir}, tarEntry{"./shots/a.png", shotBody, tar.TypeReg}, tarEntry{"./deep/", "", tar.TypeDir},
+		tarEntry{"./deep/b.txt", "b", tar.TypeReg}, tarEntry{"./link", "/etc/passwd", tar.TypeSymlink})
+	testutil.NoErr(t, unpack(strings.NewReader(good), dir))
+	testutil.Equal(t, testutil.Read(t, filepath.Join(dir, "shots", "a.png")), shotBody)
+	testutil.Equal(t, testutil.Read(t, filepath.Join(dir, "deep", "b.txt")), "b")
+	testutil.Missing(t, filepath.Join(dir, "link"))
+	for name, archive := range map[string]string{
+		"an entry outside the folder": tarOf(t, tarEntry{"../escape.txt", "x", tar.TypeReg}),
+		"a folder outside the folder": tarOf(t, tarEntry{"../up/", "", tar.TypeDir}),
+		"a file under a file":         tarOf(t, tarEntry{"./a", "a", tar.TypeReg}, tarEntry{"./a/b", "b", tar.TypeReg}),
+		"a file in place of a folder": tarOf(t, tarEntry{"./d/", "", tar.TypeDir}, tarEntry{"./d", "d", tar.TypeReg}),
+		"a cut file":                  good[:2*tarBlock+2],
+		"text instead of an archive":  strings.Repeat("not a tar archive ", 64),
+	} {
+		testutil.True(t, unpack(strings.NewReader(archive), t.TempDir()) != nil, name+" fails")
+	}
+	blocked := filepath.Join(t.TempDir(), "file")
+	testutil.NoErr(t, os.WriteFile(blocked, nil, 0o600))
+	testutil.True(t, unpack(strings.NewReader(good), filepath.Join(blocked, "sub")) != nil, "a folder that cannot be made fails")
 }
