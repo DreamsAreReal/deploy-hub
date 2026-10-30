@@ -110,7 +110,7 @@ func TestSAST(t *testing.T) {
 	testutil.Equal(t, out.Values[ValueSASTScanned], float64(1))
 	testutil.Equal(t, staged, "")
 	call := procexectest.LinesOf(w.Exec)[1]
-	testutil.Contains(t, call, w.Report(semgrepCopy)+":/src:ro", "semgrep/semgrep@sha256:abc semgrep scan", "--config p/default --config p/golang /src")
+	testutil.Contains(t, call, w.Report(semgrepCopy)+":/src:ro", "semgrep/semgrep@sha256:abc semgrep scan", "--timeout 60", "--config p/default --config p/golang /src")
 	clean := workspace(t, script{gitList: ok(""), dockerRun: ok(`{"results":[],"errors":[],"paths":{"scanned":["a"]}}`)})
 	testutil.Equal(t, SAST(context.Background(), clean).Status, gate.StatusPass)
 	crashed := workspace(t, script{gitList: ok(""), dockerRun: {Res: procexec.Result{Stderr: "pull denied"}, Err: errExit}})
