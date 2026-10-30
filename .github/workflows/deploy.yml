@@ -215,7 +215,7 @@ jobs:
           set -o pipefail
           export PATH="$TOOLCHAIN:$PATH"
           hub_go="$(go env GOVERSION)"
-          unset GOTOOLCHAIN
+          unset GOTOOLCHAIN PWD
           if [ "$(go env GOVERSION)" != "$hub_go" ]; then
             echo "::error::go.mod or go.work asks for another Go than the hub's $hub_go"
             exit 1

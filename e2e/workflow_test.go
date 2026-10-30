@@ -170,7 +170,7 @@ func TestTheImageIsBuiltFromAContextReadableWhateverTheRunnerUmask(t *testing.T)
 	testutil.Equal(t, string(got), "644 web/templates/page.html\n755 run.sh\n755 web\n755 web/templates\n")
 }
 
-const fakeGateTools = `deploy-hub() { printf '%s\n' "$*" > "$ARGS"; printf '%s\n' "${GOTOOLCHAIN-unset}" > "$ARGS.toolchain"; }
+const fakeGateTools = `deploy-hub() { printf '%s\n' "$*" > "$ARGS"; printf '%s\n' "GOTOOLCHAIN=${GOTOOLCHAIN-unset} PWD=${PWD-unset}" > "$ARGS.env"; }
 go() { if [ "${GOTOOLCHAIN-}" = local ]; then echo "$LOCAL_GO"; else echo "$AUTO_GO"; fi; }
 sleep() { return 1; }
 `
@@ -197,7 +197,7 @@ func gateArgs(t *testing.T, gate workflowStep, built string) string {
 	return string(got)
 }
 
-func TestTheGateSeesTheGoEnvOfTheFullMutationRunAndOnlyTheHubsGo(t *testing.T) {
+func TestTheGateSeesTheEnvOfTheFullMutationRunAndOnlyTheHubsGo(t *testing.T) {
 	w, _ := readDeployWorkflow(t)
 	var gate workflowStep
 	for _, s := range w.Jobs["deploy"].Steps {
@@ -208,9 +208,9 @@ func TestTheGateSeesTheGoEnvOfTheFullMutationRunAndOnlyTheHubsGo(t *testing.T) {
 	args, out, err := runGate(t, gate, "false", hubGo)
 	testutil.NoErr(t, err)
 	testutil.Equal(t, out, "")
-	toolchain, err := os.ReadFile(filepath.Clean(args + ".toolchain"))
+	env, err := os.ReadFile(filepath.Clean(args + ".env"))
 	testutil.NoErr(t, err)
-	testutil.Equal(t, string(toolchain), "unset\n")
+	testutil.Equal(t, string(env), "GOTOOLCHAIN=unset PWD=unset\n")
 	args, out, err = runGate(t, gate, "false", "go1.28.0")
 	testutil.True(t, err != nil, "a go.mod asking for another Go stops the gate")
 	testutil.Equal(t, out, "::error::go.mod or go.work asks for another Go than the hub's "+hubGo+"\n")
