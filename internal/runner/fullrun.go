@@ -16,7 +16,7 @@ const (
 	planNew        = "new"
 	planContinue   = "continue"
 	planSkip       = "skip"
-	SessionMaxAge  = 24 * time.Hour
+	SessionMaxAge  = 72 * time.Hour
 	NightlyAge     = 20 * time.Hour
 	NightStartHour = 0
 	NightEndHour   = 6
@@ -28,9 +28,9 @@ type cacheState struct {
 	Last           *gate.FullRun `json:"last,omitempty"`
 }
 
-func (s *Service) loadState(app string) (cacheState, error) {
+func (s *Service) loadState(repo string) (cacheState, error) {
 	var st cacheState
-	data, _, err := s.loadStored(app, stateFile)
+	data, _, err := s.loadStored(repo, stateFile)
 	if errors.Is(err, fs.ErrNotExist) {
 		return st, nil
 	}
@@ -40,10 +40,10 @@ func (s *Service) loadState(app string) (cacheState, error) {
 	return st, err
 }
 
-func (s *Service) saveState(app string, st cacheState) error {
+func (s *Service) saveState(repo string, st cacheState) error {
 	data, err := json.Marshal(st)
 	if err == nil {
-		_, err = s.store(app, stateFile, data)
+		_, err = s.store(repo, stateFile, data)
 	}
 	return err
 }
@@ -65,29 +65,34 @@ func nightlyDue(last, now time.Time) bool {
 	return now.Sub(last) >= NightlyAge && now.Hour() >= NightStartHour && now.Hour() < NightEndHour
 }
 
-func (s *Service) recordRun(app string, c cacheCall, st *cacheState, run mutation.RunSummary) error {
+func (s *Service) recordRun(c cacheCall, st *cacheState, run mutation.RunSummary) error {
 	full := c.meta.Mode == modeFull && st.SessionStarted != nil
+	deployGate := c.meta.Mode != modeFull
 	switch {
-	case run.Complete && (full || (run.Fresh && c.meta.Mode != modeFull)):
+	case run.Complete && (full || (run.Fresh && deployGate)):
 		st.Last = &gate.FullRun{Commit: strings.TrimPrefix(c.tag, registry.TagPrefix), Bases: run.Bases, Passed: run.Passed, Time: s.Now().UTC()}
 		st.SessionStarted, st.Requested = nil, false
-		s.Log.Info("full mutation run recorded", "app", app, "tag", c.tag, "passed", run.Passed, "bases", run.Bases)
+		s.Log.Info("full mutation run recorded", "app", c.entry.Name, "repo", c.repo, "tag", c.tag, "passed", run.Passed, "bases", run.Bases)
 		s.Out.Printf(msgFullRecorded, run.Passed)
-		if err := s.drop(app, sessionFile); err != nil {
+		if err := s.drop(c.repo, sessionFile); err != nil {
 			return err
 		}
-	case run.Stale && st.SessionStarted == nil:
+	case deployGate && st.SessionStarted == nil && (run.Stale || gateAfterFailedFullRun(c, st.Last)):
 		st.Requested = true
-		s.Log.Info("full mutation run requested", "app", app, "tag", c.tag, "bases", run.Bases)
+		s.Log.Info("full mutation run requested", "app", c.entry.Name, "repo", c.repo, "tag", c.tag, "bases", run.Bases)
 	}
-	return s.saveState(app, *st)
+	return s.saveState(c.repo, *st)
 }
 
-func (s *Service) planFull(app string, st *cacheState) (string, error) {
+func gateAfterFailedFullRun(c cacheCall, last *gate.FullRun) bool {
+	return last != nil && !last.Passed && last.Commit != strings.TrimPrefix(c.tag, registry.TagPrefix)
+}
+
+func (s *Service) planFull(repo string, st *cacheState) (string, error) {
 	plan := s.fullPlan(st)
-	err := s.saveState(app, *st)
+	err := s.saveState(repo, *st)
 	if err == nil && plan != planContinue {
-		err = s.drop(app, sessionFile)
+		err = s.drop(repo, sessionFile)
 	}
 	if err == nil {
 		s.Out.Printf(msgCachePlan, plan)

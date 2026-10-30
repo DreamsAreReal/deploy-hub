@@ -19,7 +19,9 @@ const (
 	systemPath   = "PATH=/usr/bin:/bin"
 	appWeb       = "APP=web"
 	stepPush     = "Push the gated image"
+	stepGate     = "Quality gate"
 	shaABC       = "GITHUB_SHA=abc"
+	hubGo        = "go1.27.3"
 )
 
 type workflowStep struct {
@@ -119,7 +121,7 @@ func TestNothingReachesProductionBeforeTheGatePasses(t *testing.T) {
 	gate := -1
 	for i, s := range steps {
 		testutil.Equal(t, s.Continue, nil)
-		if s.Name == "Quality gate" {
+		if s.Name == stepGate {
 			gate = i
 		}
 	}
@@ -171,20 +173,27 @@ func TestTheImageIsBuiltFromAContextReadableWhateverTheRunnerUmask(t *testing.T)
 	testutil.Equal(t, string(got), "644 web/templates/page.html\n755 run.sh\n755 web\n755 web/templates\n")
 }
 
-const fakeGateTools = `deploy-hub() { printf '%s\n' "$*" > "$ARGS"; }
+const fakeGateTools = `deploy-hub() { printf '%s\n' "$*" > "$ARGS"; printf '%s\n' "GOTOOLCHAIN=${GOTOOLCHAIN-unset} PWD=${PWD-unset}" > "$ARGS.env"; }
+go() { if [ "${GOTOOLCHAIN-}" = local ]; then echo "$LOCAL_GO"; else echo "$AUTO_GO"; fi; }
 sleep() { return 1; }
 `
 
-func gateArgs(t *testing.T, gate workflowStep, built string) string {
+func runGate(t *testing.T, gate workflowStep, built, autoGo string) (string, string, error) {
 	t.Helper()
 	dir := t.TempDir()
 	args := filepath.Join(dir, "args")
 	cmd := exec.CommandContext(t.Context(), "bash", "-e", "-c", fakeGateTools+gate.Run)
 	cmd.Env = []string{systemPath, "TOOLCHAIN=" + dir, "ARGS=" + args, "BUILT=" + built, appWeb,
 		"IMAGE=ghcr.io/owner/web:sha-abc", "GITHUB_REPOSITORY=Owner/web", shaABC, "POLICY=/p.yaml",
-		"GITHUB_WORKSPACE=/src", "RUNNER_TEMP=" + dir}
+		"GITHUB_WORKSPACE=/src", "RUNNER_TEMP=" + dir, "GOTOOLCHAIN=local", "LOCAL_GO=" + hubGo, "AUTO_GO=" + autoGo}
 	out, err := cmd.CombinedOutput()
-	testutil.Equal(t, string(out), "")
+	return args, string(out), err
+}
+
+func gateArgs(t *testing.T, gate workflowStep, built string) string {
+	t.Helper()
+	args, out, err := runGate(t, gate, built, hubGo)
+	testutil.Equal(t, out, "")
 	testutil.NoErr(t, err)
 	got, err := os.ReadFile(filepath.Clean(args))
 	testutil.NoErr(t, err)
@@ -195,6 +204,7 @@ const fakeGateWitness = `deploy-hub() {
 	env > "$SEEN"
 	if [ -e "$RUNNER_TEMP/ssh/deploy_key" ]; then echo key >> "$SEEN"; fi
 }
+go() { echo "$LOCAL_GO"; }
 sleep() { return 1; }
 `
 
@@ -214,10 +224,10 @@ func TestTheAppCodeRunsWithoutTheDeployKeyOrAnIDTokenRequest(t *testing.T) {
 	dir := t.TempDir()
 	testutil.Write(t, filepath.Join(dir, "ssh", "deploy_key"), "key")
 	seen := filepath.Join(dir, "seen")
-	cmd := exec.CommandContext(t.Context(), "bash", "-e", "-c", fakeGateWitness+steps[index["Quality gate"]].Run)
+	cmd := exec.CommandContext(t.Context(), "bash", "-e", "-c", fakeGateWitness+steps[index[stepGate]].Run)
 	cmd.Env = []string{systemPath, "TOOLCHAIN=" + dir, "SEEN=" + seen, "BUILT=false", appWeb, "GITHUB_REPOSITORY=Owner/web", shaABC,
 		"POLICY=/p.yaml", "GITHUB_WORKSPACE=/src", "RUNNER_TEMP=" + dir,
-		"ACTIONS_ID_TOKEN_REQUEST_TOKEN=request-token", "ACTIONS_ID_TOKEN_REQUEST_URL=https://token.example"}
+		"ACTIONS_ID_TOKEN_REQUEST_TOKEN=request-token", "ACTIONS_ID_TOKEN_REQUEST_URL=https://token.example", "LOCAL_GO=" + hubGo}
 	out, err := cmd.CombinedOutput()
 	testutil.NoErr(t, err)
 	testutil.Equal(t, string(out), "")
@@ -226,7 +236,7 @@ func TestTheAppCodeRunsWithoutTheDeployKeyOrAnIDTokenRequest(t *testing.T) {
 	testutil.Contains(t, string(env), "RUNNER_TEMP="+dir)
 	testutil.Excludes(t, string(env), "ACTIONS_ID_TOKEN_REQUEST", "\nkey\n")
 	again := steps[index["Connect to the VPS after the gate"]]
-	testutil.True(t, index["Connect to the VPS after the gate"] == index["Quality gate"]+1, "the key comes back right after the gate")
+	testutil.True(t, index["Connect to the VPS after the gate"] == index[stepGate]+1, "the key comes back right after the gate")
 	testutil.Equal(t, again.If, "always() && env.GATE_ONLY != 'true'")
 	for _, name := range []string{"Upload the mutation verdicts to the hub", "Report the verdict to the hub", stepPush, stepDeploy} {
 		testutil.True(t, index[name] > index["Connect to the VPS after the gate"], name+" runs before the key is back")
@@ -310,13 +320,34 @@ func TestTheDeployedReleaseIsPulledBeforeTheGateForTheRollbackCheck(t *testing.T
 	steps, index := stepsByName(t)
 	pull := steps[index["Pull the deployed release for the rollback check"]]
 	testutil.Equal(t, pull.If, "env.GATE_ONLY != 'true' && steps.cache.outputs.deployed != ''")
-	testutil.True(t, index["Pull the deployed release for the rollback check"] < index["Quality gate"], "the image is pulled before the gate")
-	gate := steps[index["Quality gate"]]
+	testutil.True(t, index["Pull the deployed release for the rollback check"] < index[stepGate], "the image is pulled before the gate")
+	gate := steps[index[stepGate]]
 	testutil.Equal(t, gate.Env["PREVIOUS"], "${{ steps.deployed.outputs.image }}")
 	gate.Run = "PREVIOUS=" + deployed + "\n" + gate.Run
 	testutil.Contains(t, gateArgs(t, gate, "true"), "--previous-image "+deployed)
-	testutil.Excludes(t, gateArgs(t, steps[index["Quality gate"]], "true"), "--previous-image")
+	testutil.Excludes(t, gateArgs(t, steps[index[stepGate]], "true"), "--previous-image")
 	testutil.Contains(t, steps[index["Fetch the mutation cache from the hub"]].Run, `deployed="$(sed -n 's/^deployed=//p' "$dir/served")"`)
+}
+
+func TestTheGateSeesTheEnvOfTheFullMutationRunAndOnlyTheHubsGo(t *testing.T) {
+	w, _ := readDeployWorkflow(t)
+	var gate workflowStep
+	for _, s := range w.Jobs["deploy"].Steps {
+		if s.Name == stepGate {
+			gate = s
+		}
+	}
+	args, out, err := runGate(t, gate, "false", hubGo)
+	testutil.NoErr(t, err)
+	testutil.Equal(t, out, "")
+	env, err := os.ReadFile(filepath.Clean(args + ".env"))
+	testutil.NoErr(t, err)
+	testutil.Equal(t, string(env), "GOTOOLCHAIN=unset PWD=unset\n")
+	args, out, err = runGate(t, gate, "false", "go1.28.0")
+	testutil.True(t, err != nil, "a go.mod asking for another Go stops the gate")
+	testutil.Equal(t, out, "::error::go.mod or go.work asks for another Go than the hub's "+hubGo+"\n")
+	_, err = os.Stat(args)
+	testutil.True(t, os.IsNotExist(err), "the gate never ran")
 }
 
 func TestAKindBinaryAppIsGatedWithoutAnImageAndNeverDeployed(t *testing.T) {
@@ -327,7 +358,7 @@ func TestAKindBinaryAppIsGatedWithoutAnImageAndNeverDeployed(t *testing.T) {
 		steps[s.Name] = s
 	}
 	testutil.Equal(t, steps["Build image"].If, "env.HUB != 'true' && inputs.image")
-	gate := steps["Quality gate"]
+	gate := steps[stepGate]
 	testutil.Equal(t, gate.Env["BUILT"], "${{ steps.image.outcome == 'success' }}")
 	testutil.Contains(t, gateArgs(t, gate, "true"), "--image ghcr.io/owner/web:sha-abc")
 	testutil.Excludes(t, gateArgs(t, gate, "false"), "--image")

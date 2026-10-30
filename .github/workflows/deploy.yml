@@ -90,7 +90,7 @@ jobs:
       - name: Toolchain
         id: hub
         if: env.HUB != 'true'
-        uses: DreamsAreReal/deploy-hub/.github/actions/hub@7c540204635ad9cd1bef88f80009cc4013f05ffd
+        uses: DreamsAreReal/deploy-hub/.github/actions/hub@2239a9afcb36f37ed5f69468d37e74a9a6077734
 
       - name: Set up Go for the hub commit under test
         if: env.HUB == 'true'
@@ -277,6 +277,12 @@ jobs:
           unset ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL
           rm -rf "$RUNNER_TEMP/ssh"
           export PATH="$TOOLCHAIN:$PATH"
+          hub_go="$(go env GOVERSION)"
+          unset GOTOOLCHAIN PWD
+          if [ "$(go env GOVERSION)" != "$hub_go" ]; then
+            echo "::error::go.mod or go.work asks for another Go than the hub's $hub_go"
+            exit 1
+          fi
           extra=()
           if [ "$BUILT" = true ]; then extra+=(--image "$IMAGE"); fi
           if [ -n "$CACHE_FILE" ]; then extra+=(--mutation-cache "$CACHE_FILE" --mutation-cache-sha256 "$CACHE_SHA256"); fi
