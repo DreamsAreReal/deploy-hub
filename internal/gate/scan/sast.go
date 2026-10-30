@@ -23,6 +23,7 @@ const (
 	ignorePerm       = 0o600
 	semgrepRoFormat  = "%s:%s:ro"
 	ValueSASTScanned = "files_scanned"
+	semgrepTimeout   = "60"
 )
 
 type semgrepReport struct {
@@ -57,7 +58,7 @@ func SAST(ctx context.Context, ws gate.Workspace) gate.Outcome {
 		return gate.Fail(err.Error())
 	}
 	args := []string{"run", "--rm", "-v", fmt.Sprintf(semgrepRoFormat, copyDir, semgrepMount), "-w", semgrepMount, ws.Policy.Images.Semgrep,
-		"semgrep", "scan", "--metrics=off", "--json", flagQuiet, "--disable-version-check"}
+		"semgrep", "scan", "--metrics=off", "--json", flagQuiet, "--disable-version-check", "--timeout", semgrepTimeout}
 	for _, r := range ws.Policy.SASTRules {
 		args = append(args, "--config", r)
 	}
