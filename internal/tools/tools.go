@@ -29,6 +29,7 @@ const (
 	GoBinary        = "go"
 	TarBinary       = "tar"
 	downloadTimeout = 5 * time.Minute
+	downloadTries   = 3
 	maxDownload     = 512 << 20
 	binPerm         = 0o700
 	dirPerm         = 0o700
@@ -146,6 +147,8 @@ func inside(member string) bool {
 type Installer struct {
 	Client *http.Client
 	Dir    string
+	Cache  string
+	Retry  time.Duration
 	Exec   procexec.Runner
 	Log    *slog.Logger
 }
@@ -199,15 +202,91 @@ func (i Installer) buildSources(ctx context.Context, m Manifest) error {
 }
 
 func (i Installer) verified(ctx context.Context, url, want string) ([]byte, error) {
+	if data, ok := i.cached(want); ok {
+		return data, nil
+	}
+	data, err := i.checked(ctx, url, want)
+	for try := 2; err != nil && try <= downloadTries; try++ {
+		i.Log.Warn("tool download failed, trying again", "url", url, "try", try, "error", err.Error())
+		if err = pause(ctx, i.Retry); err == nil {
+			data, err = i.checked(ctx, url, want)
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	i.keep(want, data)
+	return data, nil
+}
+
+func (i Installer) checked(ctx context.Context, url, want string) ([]byte, error) {
 	data, err := i.download(ctx, url)
 	if err != nil {
 		return nil, err
 	}
-	sum := sha256.Sum256(data)
-	if got := hex.EncodeToString(sum[:]); got != want {
+	if got := digestOf(data); got != want {
 		return nil, fmt.Errorf("%w: got %s", ErrChecksum, got)
 	}
 	return data, nil
+}
+
+func (i Installer) cached(want string) ([]byte, bool) {
+	if i.Cache == "" {
+		return nil, false
+	}
+	root, err := os.OpenRoot(i.Cache)
+	if err != nil {
+		return nil, false
+	}
+	defer func() { _ = root.Close() }()
+	data, err := root.ReadFile(want)
+	return data, err == nil && digestOf(data) == want
+}
+
+func (i Installer) keep(want string, data []byte) {
+	if i.Cache == "" {
+		return
+	}
+	if err := i.store(want, data); err != nil {
+		i.Log.Warn("tool cache not written", "dir", i.Cache, "error", err.Error())
+	}
+}
+
+func (i Installer) store(want string, data []byte) error {
+	if err := os.MkdirAll(i.Cache, dirPerm); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(i.Cache, stagePattern)
+	if err != nil {
+		return err
+	}
+	_, err = tmp.Write(data)
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp.Name(), filepath.Join(i.Cache, want))
+	}
+	if err != nil {
+		_ = os.Remove(tmp.Name())
+	}
+	return err
+}
+
+func digestOf(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+func pause(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (i Installer) fetch(ctx context.Context, b Binary) error {

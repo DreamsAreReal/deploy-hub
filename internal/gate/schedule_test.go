@@ -96,12 +96,14 @@ func TestWaitForIsFreeOutsideTheScheduler(t *testing.T) {
 
 func TestWaitForStopsWithTheContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
+	release := make(chan struct{})
 	var waited error
 	v := runParallel(ctx, t,
-		Check{Name: CheckTests, Run: func(ctx context.Context, _ Workspace) Outcome { <-ctx.Done(); return Pass(nil) }},
+		Check{Name: CheckTests, Run: func(context.Context, Workspace) Outcome { return within(release, "never released") }},
 		Check{Name: checkBranches, Run: func(ctx context.Context, ws Workspace) Outcome {
 			cancel()
 			waited = ws.WaitFor(ctx, CheckTests)
+			close(release)
 			return Pass(nil)
 		}},
 	)

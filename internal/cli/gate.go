@@ -22,24 +22,28 @@ import (
 )
 
 const (
-	VerdictFile    = "verdict.json"
-	goModFile      = "go.mod"
-	gatePrefix     = "gate: "
-	summaryFormat  = "%-22s %-4s %s\n"
-	verdictFormat  = "gate %s: %s@%s (%d checks, %.0fs)\n"
-	verdictPassed  = "PASSED"
-	verdictBlocked = "BLOCKED"
-	valueFormat    = "%s=%g"
-	ownerSeparator = "/"
-	outDirPerm     = 0o700
-	toolsPrefix    = "tools: "
-	pathEnv        = "PATH"
-	usageTools     = "usage: deploy-hub tools --manifest FILE --dir DIR"
-	msgToolsDone   = "tools: %d installed into %s\n"
-	usageEngine    = "usage: deploy-hub engine-version (run in the deploy-hub checkout)"
-	enginePrefix   = "engine-version: "
-	digestPrefix   = "sha256:"
-	msgVerdicts    = "mutation verdicts: %s %s%s\n"
+	VerdictFile       = "verdict.json"
+	toolCacheEnv      = "RUNNER_TOOL_CACHE"
+	toolCacheDir      = "deploy-hub-tools"
+	toolsRetry        = 5 * time.Second
+	toolsTLSHandshake = 30 * time.Second
+	goModFile         = "go.mod"
+	gatePrefix        = "gate: "
+	summaryFormat     = "%-22s %-4s %s\n"
+	verdictFormat     = "gate %s: %s@%s (%d checks, %.0fs)\n"
+	verdictPassed     = "PASSED"
+	verdictBlocked    = "BLOCKED"
+	valueFormat       = "%s=%g"
+	ownerSeparator    = "/"
+	outDirPerm        = 0o700
+	toolsPrefix       = "tools: "
+	pathEnv           = "PATH"
+	usageTools        = "usage: deploy-hub tools --manifest FILE --dir DIR"
+	msgToolsDone      = "tools: %d installed into %s\n"
+	usageEngine       = "usage: deploy-hub engine-version (run in the deploy-hub checkout)"
+	enginePrefix      = "engine-version: "
+	digestPrefix      = "sha256:"
+	msgVerdicts       = "mutation verdicts: %s %s%s\n"
 )
 
 var ErrGateArgs = errors.New("usage: deploy-hub gate --app NAME --repo OWNER/NAME --commit SHA --policy FILE --src DIR --out DIR [--image REF] [--previous-image REF:sha-COMMIT] [--fork] [--mutation-cache FILE --mutation-cache-sha256 sha256:HEX] [--mutation-full] [--mutation-budget DURATION] [--mutation-last FILE] [--mutation-yield FILE]")
@@ -245,12 +249,27 @@ func runTools(ctx context.Context, a *App, ex procexec.Runner, args []string) in
 	if err := os.Setenv(pathEnv, *dir+string(os.PathListSeparator)+os.Getenv(pathEnv)); err != nil {
 		return a.failWith(toolsPrefix, err)
 	}
-	inst := tools.Installer{Client: &http.Client{}, Dir: *dir, Exec: ex, Log: a.Log}
+	inst := tools.Installer{Client: toolsClient(), Dir: *dir, Cache: toolsCache(), Retry: toolsRetry, Exec: ex, Log: a.Log}
 	if err := inst.Install(ctx, m); err != nil {
 		return a.failWith(toolsPrefix, err)
 	}
 	a.Out.Printf(msgToolsDone, m.Count(), *dir)
 	return ExitOK
+}
+
+func toolsClient() *http.Client {
+	return &http.Client{Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, TLSHandshakeTimeout: toolsTLSHandshake, ForceAttemptHTTP2: true}}
+}
+
+func toolsCache() string {
+	if dir := os.Getenv(toolCacheEnv); dir != "" {
+		return filepath.Join(dir, toolCacheDir)
+	}
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, toolCacheDir)
 }
 
 func runEngineVersion(ctx context.Context, a *App, ex procexec.Runner, args []string) int {
