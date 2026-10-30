@@ -1,4 +1,4 @@
-link_budget: 14
+link_budget: 15
 tasks_callers:
   - runner
   - caddy
@@ -17,6 +17,8 @@ services:
     calls:
       - to: github
         why: releases, CI status and the self-update check need the GitHub API
+      - to: observability
+        why: the check of the server against the catalog reads the Caddy access log in VictoriaLogs to see which sites the server itself calls
     timers:
       - name: .github/workflows/history-guard.yml
         why: every 5 minutes, deletes branches and tags that bring back the history from before the repository was recreated, also when a push was missed

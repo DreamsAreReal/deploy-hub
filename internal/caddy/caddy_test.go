@@ -267,3 +267,9 @@ func TestConfigValidate(t *testing.T) {
 		t.Fatal("email")
 	}
 }
+
+func TestDomainIsTheSlugUnderSslip(t *testing.T) {
+	if got := Domain("13-140-152-253"); got != "13-140-152-253.sslip.io" {
+		t.Fatalf("domain %q", got)
+	}
+}

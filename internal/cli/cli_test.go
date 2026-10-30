@@ -56,7 +56,7 @@ func newHarness(t *testing.T) *harness {
 	if err := os.MkdirAll(h.hubDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	h.env = map[string]string{envHubDir: h.hubDir, envMetricsURL: "", envCaddyfile: filepath.Join(root, "Caddyfile"), envHome: root, envHostSlug: testSlug, envVPSAddr: testAddr}
+	h.env = map[string]string{envHubDir: h.hubDir, envMetricsURL: "", envLogsURL: "", envCaddyfile: filepath.Join(root, "Caddyfile"), envHome: root, envHostSlug: testSlug, envVPSAddr: testAddr}
 	return h
 }
 
@@ -125,6 +125,7 @@ func TestConfigValidation(t *testing.T) {
 	cases := map[string]string{
 		envHubDir:      relativeDir,
 		envMetricsURL:  "ftp://x",
+		envLogsURL:     "gopher://logs",
 		envTextfileDir: relativeDir,
 		envDeployUser:  "Bad User",
 		envHostSlug:    "bad slug",
@@ -184,6 +185,7 @@ func TestBlankValuesFallBackToDefaults(t *testing.T) {
 	testutil.Equal(t, cfg.Paths.Dir, hub.DefaultDir)
 	testutil.Equal(t, cfg.DeployUser, defaultDeployUser)
 	testutil.Equal(t, cfg.MetricsURL, "")
+	testutil.Equal(t, cfg.LogsURL, "")
 	emailOnly := map[string]string{envACMEEmail: "ops@example.org"}
 	_, err = LoadConfig(func(k string) (string, bool) { v, ok := emailOnly[k]; return v, ok })
 	testutil.Is(t, err, caddy.ErrBadSlug)
@@ -198,6 +200,7 @@ func TestDefaultsAndMetricsToggle(t *testing.T) {
 		t.Fatalf("defaults %+v", cfg)
 	}
 	testutil.Equal(t, cfg.WorkflowRef(), "DreamsAreReal/deploy-hub/.github/workflows/deploy.yml@refs/heads/main")
+	testutil.Equal(t, cfg.LogsURL, "http://127.0.0.1:9428/select/logsql/query")
 	testutil.Equal(t, cfg.Audience, defaultAudience)
 	a := &App{Config: Config{MetricsURL: unreachableURL}, Now: time.Now}
 	p, ok := a.metrics().(obs.HTTPPusher)
@@ -440,4 +443,21 @@ func TestMainEntry(t *testing.T) {
 	if code := Main(context.Background(), nil, func(string) (string, bool) { return "", false }, IO{Stdin: strings.NewReader(""), Stdout: &out, Stderr: &errb}); code != ExitUsage {
 		t.Fatalf("exit %d", code)
 	}
+}
+
+func TestLogsURLTurnsTheAccessLogCheckOnAndOff(t *testing.T) {
+	_, err := LoadConfig(func(k string) (string, bool) {
+		if k == envLogsURL {
+			return "logs store", true
+		}
+		return "", false
+	})
+	testutil.Is(t, err, ErrLogsURL)
+	off := &App{Config: Config{}}
+	testutil.True(t, off.visits() == nil, "no logs URL, no access log check")
+	on := &App{Config: Config{LogsURL: "http://127.0.0.1:1/select/logsql/query"}}
+	visits := on.visits()
+	testutil.True(t, visits != nil, "a logs URL turns the check on")
+	_, err = visits(context.Background())
+	testutil.Fails(t, err)
 }

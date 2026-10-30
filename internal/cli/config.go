@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/DreamsAreReal/deploy-hub/internal/accesslog"
 	"github.com/DreamsAreReal/deploy-hub/internal/caddy"
 	"github.com/DreamsAreReal/deploy-hub/internal/health"
 	"github.com/DreamsAreReal/deploy-hub/internal/hub"
@@ -23,6 +24,7 @@ const (
 	envCaddyUser   = "CADDY_USER"
 	envDeployUser  = "DEPLOY_USER"
 	envMetricsURL  = "DEPLOY_HUB_METRICS_URL"
+	envLogsURL     = "DEPLOY_HUB_LOGS_URL"
 	envLogLevel    = "DEPLOY_HUB_LOG_LEVEL"
 	envLogFile     = "DEPLOY_HUB_LOG_FILE"
 	envHostAlias   = "VPS_HOST_ALIAS"
@@ -68,6 +70,7 @@ const (
 var (
 	ErrHubDir     = errors.New("invalid HUB_DIR: must be an absolute path")
 	ErrMetricsURL = errors.New("invalid DEPLOY_HUB_METRICS_URL: must be an http(s) URL or empty")
+	ErrLogsURL    = errors.New("invalid DEPLOY_HUB_LOGS_URL: must be an http(s) URL or empty")
 	ErrTextfile   = errors.New("invalid DEPLOY_HUB_TEXTFILE_DIR: must be an absolute path or empty")
 	ErrUser       = errors.New("invalid user name")
 	ErrGate       = errors.New("invalid health gate timing: timeout 60s..10m, interval 1s..30s")
@@ -89,6 +92,7 @@ type Config struct {
 	CaddyUser   string
 	DeployUser  string
 	MetricsURL  string
+	LogsURL     string
 	TextfileDir string
 	LogLevel    string
 	LogFile     string
@@ -127,6 +131,7 @@ func LoadConfig(env Env) (Config, error) {
 		CaddyUser:   env.get(envCaddyUser, caddy.DefaultUser),
 		DeployUser:  env.get(envDeployUser, defaultDeployUser),
 		MetricsURL:  defaultMetricsURL,
+		LogsURL:     accesslog.DefaultURL,
 		LogLevel:    env.get(envLogLevel, ""),
 		LogFile:     env.get(envLogFile, ""),
 		HostAlias:   env.get(envHostAlias, defaultHostAlias),
@@ -144,6 +149,9 @@ func LoadConfig(env Env) (Config, error) {
 	}
 	if v, ok := env(envMetricsURL); ok {
 		c.MetricsURL = v
+	}
+	if v, ok := env(envLogsURL); ok {
+		c.LogsURL = v
 	}
 	c.GateWait = duration(env, envGateTimeout, health.Timeout)
 	c.GateTick = duration(env, envGateTick, health.Interval)
@@ -192,6 +200,9 @@ func (c Config) validateEndpoints() error {
 	}
 	if validMetricsURL(c.JWKSURL) != nil {
 		return ErrJWKSURL
+	}
+	if validMetricsURL(c.LogsURL) != nil {
+		return ErrLogsURL
 	}
 	return nil
 }

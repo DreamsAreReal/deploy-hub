@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -141,4 +142,22 @@ func TestStatusCountsOpenPortsRootUsersAndLostSandboxes(t *testing.T) {
 	testutil.Equal(t, metricFor(e, obs.MetricArchHostDrift, ""), 3.0)
 	testutil.Contains(t, e.logs.String(), "port 8080 listens beyond loopback on the host",
 		"user eve can act as root through group docker", "unit runner.service runs in the host network namespace, and the catalog declares /run/netns/runner")
+}
+
+func TestStatusCountsSitesTheServerCallsWithoutAName(t *testing.T) {
+	declared := &arch.Catalog{Services: map[string]arch.Service{appName: {Exposes: []arch.Expose{{Site: appName}}}}}
+	seen := newEnv(t)
+	seen.svc.HostDirs, seen.svc.Catalog = arch.HostDirs{Units: t.TempDir()}, declared
+	seen.svc.Visits = func(context.Context) ([]arch.Visit, error) {
+		return []arch.Visit{{Site: appName, Agent: "Go-http-client/1.1"}, {Site: appName, Agent: appName + "/1"}}, nil
+	}
+	testutil.Equal(t, seen.dispatch("status", ""), ExitOK)
+	testutil.Equal(t, metricFor(seen, obs.MetricArchHostDrift, ""), 1.0)
+	testutil.Contains(t, seen.logs.String(), `site `+appName+` gets requests from the server itself with User-Agent \"Go-http-client/1.1\"`)
+	blind := newEnv(t)
+	blind.svc.HostDirs, blind.svc.Catalog = seen.svc.HostDirs, declared
+	blind.svc.Visits = func(context.Context) ([]arch.Visit, error) { return nil, errors.New("log store down") }
+	testutil.Equal(t, blind.dispatch("status", ""), ExitOK)
+	testutil.Equal(t, metricFor(blind, obs.MetricArchHostDrift, ""), 0.0)
+	blind.expectLog("access log unreadable")
 }

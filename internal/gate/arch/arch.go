@@ -95,6 +95,7 @@ type Facts struct {
 	Listening  []int
 	Grants     []Grant
 	Namespaces map[string]string
+	Visits     []Visit
 }
 
 func Load(dir string) (Catalog, error) {
@@ -245,7 +246,8 @@ func (c Catalog) HostDrift(facts Facts) []string {
 	drift = append(drift, undeclared(facts.Sites, sites, siteOnHost)...)
 	drift = append(drift, c.listenDrift(facts.Listening)...)
 	drift = append(drift, c.adminDrift(facts.Grants)...)
-	return append(drift, c.netnsDrift(facts.Namespaces)...)
+	drift = append(drift, c.netnsDrift(facts.Namespaces)...)
+	return append(drift, c.visitDrift(facts.Visits)...)
 }
 
 func Installed(unitDir, siteDir string) (Facts, error) {

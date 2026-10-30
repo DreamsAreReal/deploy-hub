@@ -40,6 +40,7 @@ const (
 	msgUpToDate      = "caddy-sync: Caddyfile already up to date (no reload)"
 	msgUpdated       = "caddy-sync: Caddyfile updated and Caddy reloaded"
 	candidateSuffix  = ".new"
+	domainSuffix     = ".sslip.io"
 
 	standbyPortOffset = 10000
 	SpareStandbyFirst = 30000
@@ -112,6 +113,10 @@ func appRoutes(apps []registry.Entry, busy func(int) bool) ([]Route, portPool) {
 		pool.taken[port] = true
 	}
 	return out, pool
+}
+
+func Domain(slug string) string {
+	return slug + domainSuffix
 }
 
 func Public(conf registry.AppConf) bool {

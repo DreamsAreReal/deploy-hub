@@ -3,12 +3,14 @@ package cli
 import (
 	"context"
 	"flag"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/DreamsAreReal/deploy-hub/internal/accesslog"
 	"github.com/DreamsAreReal/deploy-hub/internal/caddy"
 	"github.com/DreamsAreReal/deploy-hub/internal/compose"
 	"github.com/DreamsAreReal/deploy-hub/internal/docker"
@@ -95,6 +97,7 @@ func (a *App) runnerService(ex procexec.Runner) *runner.Service {
 		Host:        runner.SudoHost{Exec: ex, Binary: a.Config.Paths.Binary()},
 		Catalog:     a.catalog(),
 		HostDirs:    arch.HostDirs{Units: policy.UnitDir, Sites: policy.CaddySiteDir, Net: arch.ProcNetDir, Accounts: arch.AccountsDir},
+		Visits:      a.visits(),
 		HostApps:    a.hostApps(),
 	}
 }
@@ -204,6 +207,14 @@ func runOnboard(ctx context.Context, a *App, ex procexec.Runner, args []string) 
 		Exec: ex, Out: a.Out, Err: a.Err, Log: a.Log,
 	}
 	return o.Run(ctx, args)
+}
+
+func (a *App) visits() func(context.Context) ([]arch.Visit, error) {
+	if a.Config.LogsURL == "" {
+		return nil
+	}
+	reader := accesslog.Reader{URL: a.Config.LogsURL, Domain: caddy.Domain(a.Config.Caddy.HostSlug), Client: &http.Client{}, Addresses: net.InterfaceAddrs}
+	return reader.FromServer
 }
 
 func (a *App) catalog() *arch.Catalog {

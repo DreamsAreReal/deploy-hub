@@ -70,6 +70,7 @@ type Service struct {
 	HostApps    []string
 	Catalog     *arch.Catalog
 	HostDirs    arch.HostDirs
+	Visits      func(context.Context) ([]arch.Visit, error)
 	samples     []obs.Sample
 	steps       []delivery.Step
 }

@@ -176,6 +176,13 @@ Besides the links, the catalog states what the server itself may look like, and
   check reads `NetworkNamespacePath=` from the unit in `/etc/systemd/system`, its
   drop-ins and, for a template, the drop-ins of every instance; a unit that is not
   installed is skipped.
+- Calls the server makes to its own public sites: the Caddy access log in VictoriaLogs
+  (`DEPLOY_HUB_LOGS_URL`) for the last 10 minutes, requests whose client address is one
+  of the server's own. Every such caller names its service as the first word of its
+  User-Agent (`observability/obs-host-metrics`), and the catalog must link it with the
+  service of the site; a request without such a name is drift. Agents and CI leave
+  through their own namespaces, so their requests come from outside and are not
+  counted.
 
 **Language packs.** The checks marked "per stack" run once per project in the
 repository; a project is the directory of a stack manifest. A repository with
@@ -1591,6 +1598,10 @@ lost: it catches up from its cursor.
 Metrics — pushed to VictoriaMetrics after every command
 (`DEPLOY_HUB_METRICS_URL`, default
 `http://127.0.0.1:8428/api/v1/import/prometheus`; set it empty to disable).
+`runner status` reads the Caddy access log from VictoriaLogs
+(`DEPLOY_HUB_LOGS_URL`, default `http://127.0.0.1:9428/select/logsql/query`;
+empty turns that part of the host check off); a log store that does not answer is
+logged as `access log unreadable` and the rest of the check goes on.
 `deploy-hub-status.timer` runs `runner status` every minute, so the journal
 counters and the health gauges have a sample every minute and `increase()` over
 a window counts what happened in it. The counters cover only the apps in
@@ -1642,7 +1653,7 @@ their own time. This is the first step of moving the hub from push to textfile
 | `deploy_hub_request_refused` | verb, reason | one sample per refusal; reason `bad-request`, `unknown-app`, `bad-tag`, `bad-compose`, `no-identity`, `identity-unverified`, `no-repo-binding`, `not-gated`, `bad-digest`, `bad-verdict`, `bad-cache` |
 | `deploy_hub_mutation_cache_intact` | app | 1 when the stored mutation cache matched its recorded sha256 on read, 0 when it did not |
 | `deploy_hub_arch_live_drift` | app | from `status` (every minute): environment variables the running container got beyond its image and published ports that the app's entry in `policy/architecture.yaml` does not declare, every other app whose containers share a docker network with it while the catalog has no call between the two (either way; `observability` may reach an app that `gives` it something), an `.env` that group or others can read, and the public site the hub serves for the app (`app.conf` without `site=off`) when `exposes` has no `site` of the app's name (an app missing from the catalog counts one more); each item is logged as `live drift` |
-| `deploy_hub_arch_host_drift` | — | from `status` (every minute): timers in `/etc/systemd/system` and caddy files in `/etc/caddy/extra` that no service in `policy/architecture.yaml` declares in `timers` or as a `site` in `exposes` (hidden files and units masked to `/dev/null` are skipped, as systemd skips them), ports open beyond loopback without a `public` expose, users who can act as root without an entry in `admins`, and `isolated` units outside their network namespace (see the catalog section above); everything is read as the `deploy` user, without root; each item is logged as `host drift` |
+| `deploy_hub_arch_host_drift` | — | from `status` (every minute): timers in `/etc/systemd/system` and caddy files in `/etc/caddy/extra` that no service in `policy/architecture.yaml` declares in `timers` or as a `site` in `exposes` (hidden files and units masked to `/dev/null` are skipped, as systemd skips them), ports open beyond loopback without a `public` expose, users who can act as root without an entry in `admins`, `isolated` units outside their network namespace, and calls of the server to its own sites by a caller the catalog does not name or link (see the catalog section above); everything is read as the `deploy` user, without root; each item is logged as `host drift` |
 | `deploy_hub_journal_readable` | — | 0 when `deploys.log` could not be read; the journal counters are then not pushed |
 
 ### Alerts
