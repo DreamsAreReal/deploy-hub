@@ -170,7 +170,7 @@ func TestTheImageIsBuiltFromAContextReadableWhateverTheRunnerUmask(t *testing.T)
 	testutil.Equal(t, string(got), "644 web/templates/page.html\n755 run.sh\n755 web\n755 web/templates\n")
 }
 
-const fakeGateTools = `deploy-hub() { printf '%s\n' "$*" > "$ARGS"; printf '%s\n' "${GOTOOLCHAIN-unset}" "${PWD-unset}" > "$ARGS.env"; }
+const fakeGateTools = `deploy-hub() { printf '%s\n' "$*" > "$ARGS"; printf '%s\n' "GOTOOLCHAIN=${GOTOOLCHAIN-unset} PWD=${PWD-unset}" > "$ARGS.env"; }
 go() { if [ "${GOTOOLCHAIN-}" = local ]; then echo "$LOCAL_GO"; else echo "$AUTO_GO"; fi; }
 sleep() { return 1; }
 `
@@ -210,7 +210,7 @@ func TestTheGateSeesTheEnvOfTheFullMutationRunAndOnlyTheHubsGo(t *testing.T) {
 	testutil.Equal(t, out, "")
 	env, err := os.ReadFile(filepath.Clean(args + ".env"))
 	testutil.NoErr(t, err)
-	testutil.Equal(t, string(env), "unset\nunset\n")
+	testutil.Equal(t, string(env), "GOTOOLCHAIN=unset PWD=unset\n")
 	args, out, err = runGate(t, gate, "false", "go1.28.0")
 	testutil.True(t, err != nil, "a go.mod asking for another Go stops the gate")
 	testutil.Equal(t, out, "::error::go.mod or go.work asks for another Go than the hub's "+hubGo+"\n")
