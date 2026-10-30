@@ -86,6 +86,7 @@ type Check struct {
 	Kind  Kind
 	Needs Need
 	Long  bool
+	After []string
 	Run   func(ctx context.Context, ws Workspace) Outcome
 }
 
@@ -105,6 +106,7 @@ type Workspace struct {
 	Mutation    MutationPlan
 	UIBaseline  string
 	Previous    string
+	wait        func(ctx context.Context, check string) error
 }
 
 type MutationPlan struct {
@@ -155,9 +157,9 @@ type Runner struct {
 func (r Runner) Run(ctx context.Context, ws Workspace, subj Subject) Verdict {
 	started := r.Now()
 	v := Verdict{Subject: subj, Passed: true}
-	r.Log.Info("gate started", "app", subj.App, "repo", subj.Repo, "commit", subj.Commit, "own", subj.Own, "checks", len(r.Checks))
-	for _, c := range r.Checks {
-		res := r.runOne(ctx, ws, subj, c)
+	r.Log.Info("gate started", "app", subj.App, "repo", subj.Repo, "commit", subj.Commit, "own", subj.Own, "checks", len(r.Checks),
+		"parallel", max(1, ws.Policy.Limits.ParallelChecks))
+	for _, res := range r.runAll(ctx, ws, subj) {
 		v.Passed = v.Passed && res.Status != StatusFail
 		v.Results = append(v.Results, res)
 	}

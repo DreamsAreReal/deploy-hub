@@ -17,6 +17,7 @@ const (
 
 const (
 	ownersLine = "owners: [Owner]"
+	freeLine   = "mutation_free_gib: 10"
 	pathsLine  = "paths: [/health]"
 )
 
@@ -138,16 +139,20 @@ func TestLoadFile(t *testing.T) {
 	testutil.True(t, os.IsNotExist(err), "missing file")
 }
 
-func TestRepositoryPolicyIsValid(t *testing.T) {
-	_, file, _, _ := runtime.Caller(0)
-	_, err := LoadFile(filepath.Join(filepath.Dir(file), "..", "..", "..", "policy", "gate.yaml"))
-	testutil.NoErr(t, err)
-}
-
-func TestRepositoryPolicyAcceptsOneFinding(t *testing.T) {
+func repositoryPolicy(t *testing.T) Policy {
+	t.Helper()
 	_, file, _, _ := runtime.Caller(0)
 	p, err := LoadFile(filepath.Join(filepath.Dir(file), "..", "..", "..", "policy", "gate.yaml"))
 	testutil.NoErr(t, err)
+	return p
+}
+
+func TestRepositoryPolicyIsValid(t *testing.T) {
+	testutil.True(t, repositoryPolicy(t).Mutation.SkipInDeploys, "mutation testing runs only in the full runs")
+}
+
+func TestRepositoryPolicyAcceptsOneFinding(t *testing.T) {
+	p := repositoryPolicy(t)
 	accepted := map[string][]Accepted{}
 	for name, app := range p.Apps {
 		if len(app.Accepted) > 0 {
@@ -181,7 +186,9 @@ func TestParseRejects(t *testing.T) {
 		"findings listed":    {"findings_listed: 20", "findings_listed: 0"},
 		"stage ready":        {"stage_ready_timeout: 30s", "stage_ready_timeout: 0s"},
 		"mutation disk":      {"mutation_disk_gib: 20", "mutation_disk_gib: 0"},
-		"mutation free":      {"mutation_free_gib: 10", "mutation_free_gib: 0"},
+		"mutation free":      {freeLine, "mutation_free_gib: 0"},
+		"too many parallel":  {freeLine, freeLine + "\n  parallel_checks: 17"},
+		"negative parallel":  {freeLine, freeLine + "\n  parallel_checks: -1"},
 		"licenses":           {"licenses: [MIT]", "licenses: []"},
 		"declared license":   {declaredLine, `"pkg:pypi/legacy": GPL-3.0-only`},
 		"declared purl":      {declaredLine, `"pypi/legacy": MIT`},

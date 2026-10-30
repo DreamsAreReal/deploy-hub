@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
+	"github.com/DreamsAreReal/deploy-hub/internal/gate/pack"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/policy"
 	"github.com/DreamsAreReal/deploy-hub/internal/testutil"
 )
@@ -31,6 +32,46 @@ func TestChecksAreUniqueAndOrdered(t *testing.T) {
 		"secrets-gitleaks", "secrets-trufflehog", "sast", "vulnerabilities", "sca", "sbom-licenses", "workflows", "dockerfile", "iac", "image", "dast", "load", "ui"} {
 		testutil.True(t, seen[required], "missing check "+required)
 	}
+}
+
+func TestChecksWaitOnlyForEarlierChecks(t *testing.T) {
+	checks := Checks()
+	index := map[string]int{}
+	for i, c := range checks {
+		index[c.Name] = i
+	}
+	for i, c := range checks {
+		for _, name := range c.After {
+			j, ok := index[name]
+			testutil.True(t, ok && j < i, c.Name+" waits for an earlier check "+name)
+		}
+	}
+	testutil.Equal(t, len(checks[0].After), 0)
+	testutil.Equal(t, checks[1].After, []string{"registration"})
+	testutil.Equal(t, checks[index[pack.CheckLint]].After, []string{pack.CheckDependencies})
+	testutil.Equal(t, checks[index[pack.CheckLineCoverage]].After, []string{pack.CheckDependencies, pack.CheckTests})
+	testutil.Equal(t, checks[index[checkLoad]].After, []string{pack.CheckDependencies, checkDAST})
+	testutil.Equal(t, checks[index[checkUI]].After, []string{pack.CheckDependencies, checkLoad})
+	testutil.Equal(t, checks[index[checkRollback]].After, []string{pack.CheckDependencies, checkUI})
+	testutil.Equal(t, checks[index[pack.CheckMutation]].After, []string{pack.CheckDependencies, pack.CheckTests, pack.CheckLineCoverage, checkDAST, checkLoad, checkUI, checkRollback})
+}
+
+func TestMutationRunsOnlyInFullRunsWhenThePolicySkipsDeploys(t *testing.T) {
+	ran := 0
+	check := fullRunsOnly(gate.Check{Name: pack.CheckMutation, Run: func(context.Context, gate.Workspace) gate.Outcome {
+		ran++
+		return gate.Pass(nil)
+	}})
+	ws := gate.Workspace{}
+	testutil.Equal(t, check.Run(context.Background(), ws).Status, gate.StatusPass)
+	ws.Policy.Mutation.SkipInDeploys = true
+	out := check.Run(context.Background(), ws)
+	testutil.Equal(t, out.Status, gate.StatusNA)
+	testutil.Equal(t, out.Reason, reasonFullRunsOnly)
+	ws.Mutation.Full = true
+	testutil.Equal(t, check.Run(context.Background(), ws).Status, gate.StatusPass)
+	testutil.Equal(t, ran, 2)
+	testutil.Equal(t, check.Name, pack.CheckMutation)
 }
 
 func TestRegistration(t *testing.T) {

@@ -76,7 +76,7 @@ func TestFullRunSessionLifecycle(t *testing.T) {
 }
 
 func TestFullRunPlan(t *testing.T) {
-	passed := &gate.FullRun{Bases: []string{cacheBase}, Passed: true, Time: night.Add(-21 * time.Hour)}
+	passed := &gate.FullRun{Bases: []string{cacheBase}, Passed: true, Time: night.Add(-FullRunAge - time.Hour)}
 	started := night.Add(-time.Hour)
 	twoDays := night.Add(-48 * time.Hour)
 	expired := night.Add(-SessionMaxAge)
