@@ -214,6 +214,12 @@ jobs:
         run: |
           set -o pipefail
           export PATH="$TOOLCHAIN:$PATH"
+          hub_go="$(go env GOVERSION)"
+          unset GOTOOLCHAIN
+          if [ "$(go env GOVERSION)" != "$hub_go" ]; then
+            echo "::error::go.mod or go.work asks for another Go than the hub's $hub_go"
+            exit 1
+          fi
           extra=()
           if [ "$BUILT" = true ]; then extra+=(--image "$IMAGE"); fi
           if [ -n "$CACHE_FILE" ]; then extra+=(--mutation-cache "$CACHE_FILE" --mutation-cache-sha256 "$CACHE_SHA256"); fi
