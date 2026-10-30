@@ -17,7 +17,7 @@ const (
 	planContinue   = "continue"
 	planSkip       = "skip"
 	SessionMaxAge  = 72 * time.Hour
-	NightlyAge     = 20 * time.Hour
+	FullRunAge     = 14 * 24 * time.Hour
 	NightStartHour = 0
 	NightEndHour   = 6
 )
@@ -62,7 +62,7 @@ func (s *Service) fullPlan(st *cacheState) string {
 }
 
 func nightlyDue(last, now time.Time) bool {
-	return now.Sub(last) >= NightlyAge && now.Hour() >= NightStartHour && now.Hour() < NightEndHour
+	return now.Sub(last) >= FullRunAge && now.Hour() >= NightStartHour && now.Hour() < NightEndHour
 }
 
 func (s *Service) recordRun(c cacheCall, st *cacheState, run mutation.RunSummary) error {

@@ -128,8 +128,9 @@ func TestLoadFile(t *testing.T) {
 
 func TestRepositoryPolicyIsValid(t *testing.T) {
 	_, file, _, _ := runtime.Caller(0)
-	_, err := LoadFile(filepath.Join(filepath.Dir(file), "..", "..", "..", "policy", "gate.yaml"))
+	p, err := LoadFile(filepath.Join(filepath.Dir(file), "..", "..", "..", "policy", "gate.yaml"))
 	testutil.NoErr(t, err)
+	testutil.True(t, p.Mutation.SkipInDeploys, "mutation testing runs only in the full runs")
 }
 
 func TestRepositoryPolicyAcceptsOneFinding(t *testing.T) {
