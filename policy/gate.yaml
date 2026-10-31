@@ -492,6 +492,14 @@ apps:
         tests:
           - internal/server.TestHealthReportsCountsWithoutAToken
           - internal/store.TestBackupThenRestoreKeepsData
+      - id: operator-acts-as-the-owner
+        category: business
+        tests:
+          - cmd/tasks-answer.TestAnswerClosesTheQuestionInTheOwnersName
+          - cmd/tasks-answer.TestCommentAndMoveActAsTheOwner
+          - cmd/tasks-answer.TestNewEpicJoinsTheProjectAndNewTaskStartsItsFirstStage
+          - cmd/tasks-answer.TestRefusedChangesLeaveNothingBehind
+          - cmd/tasks-answer.TestAMissingDatabaseIsNotCreated
   stt:
     repo: DreamsAreReal/tasks
     kind: service
