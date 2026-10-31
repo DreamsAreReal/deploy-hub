@@ -19,7 +19,7 @@ const (
 	sudoersPerm    = 0o440
 	noArguments    = `""`
 	anyArguments   = "*"
-	sudoersLine    = "%s ALL=(root) NOPASSWD: %s %s %s\n"
+	sudoersLine    = "%s ALL=(%s) NOPASSWD: %s %s %s\n"
 	sudoersStaging = ".deploy-hub.new"
 )
 
@@ -35,11 +35,14 @@ type Sudoers struct {
 func (s Sudoers) Render() string {
 	var b strings.Builder
 	for _, c := range s.Hub.SudoCommands {
-		args := noArguments
-		if c == policy.SudoHostSync {
+		args, runas := noArguments, policy.RootUser
+		switch c {
+		case policy.SudoHostSync:
 			args = anyArguments
+		case policy.SudoDeliver:
+			args, runas = anyArguments, policy.RemoteUser
 		}
-		fmt.Fprintf(&b, sudoersLine, s.Hub.SudoUser, s.Binary, c, args)
+		fmt.Fprintf(&b, sudoersLine, s.Hub.SudoUser, runas, s.Binary, c, args)
 	}
 	return b.String()
 }

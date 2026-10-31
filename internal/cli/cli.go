@@ -57,6 +57,8 @@ const (
 	CmdTools        = "tools"
 	CmdMCP          = "mcp"
 	CmdHostSync     = "host-sync"
+	CmdRemoteSync   = "remote-sync"
+	CmdDeliver      = "remote-deliver"
 	CmdSelfUpdate   = "self-update"
 	CmdSudoers      = "sudoers-sync"
 	CmdHistorySweep = "history-sweep"
@@ -85,6 +87,8 @@ commands:
   render <app> <in> <out>          render a repo compose into a deploy-ready one
   caddy-sync                       regenerate the Caddyfile from apps.list
   host-sync <app> <tag>            install the app's gated host files as root (policy host spec)
+  remote-sync <app> <tag>          send the app's gated remote files to its target (policy remote spec)
+  remote-deliver <target> <sha7> <engine>  apply a bundle on stdin to the target over SSH (as dh-remote)
   self-update [sha-<commit>]       replace this binary with a released, gated build (root)
   sudoers-sync                     write the sudoers rule of the runner from the policy (root)
   history-sweep                    delete refs of hub.conf history_sweep repos not rooted at their snapshot (root)
@@ -163,6 +167,8 @@ var handlers = map[string]handler{
 	CmdBootstrap:    {run: runBootstrap, binaries: []string{selfupdate.SSHBinary}},
 	CmdPreempt:      {run: runPreempt, onServer: true},
 	CmdHostSync:     {run: runHostSync, binaries: []string{hostsync.DockerBinary, hostsync.SystemctlBinary, hostsync.AnalyzeBinary, hostsync.CaddyBinary}, onServer: true},
+	CmdRemoteSync:   {run: runRemoteSync, binaries: []string{binDocker, binSudo}, onServer: true},
+	CmdDeliver:      {run: runRemoteDeliver, binaries: []string{binSSH}, onServer: true},
 	CmdEngine:       {run: runEngineVersion, binaries: []string{tools.GoBinary}},
 	CmdDispatch:     {run: runMutationDispatch, onServer: true},
 	CmdImport:       {run: runMutationImport, onServer: true},

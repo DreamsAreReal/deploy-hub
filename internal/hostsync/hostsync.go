@@ -2,16 +2,16 @@ package hostsync
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
-	"strings"
+	"path/filepath"
 	"time"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/console"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/policy"
+	"github.com/DreamsAreReal/deploy-hub/internal/gatedimage"
 	"github.com/DreamsAreReal/deploy-hub/internal/journal"
 	"github.com/DreamsAreReal/deploy-hub/internal/obs"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	DockerBinary    = "docker"
+	DockerBinary    = gatedimage.DockerBinary
 	SystemctlBinary = "systemctl"
 	AnalyzeBinary   = "systemd-analyze"
 	CaddyBinary     = "caddy"
@@ -28,13 +28,12 @@ const (
 	tempPattern     = "deploy-hub-host-"
 	bundleDir       = "bundle"
 	changedFormat   = "changed=%d"
-	digestSeparator = "@"
 )
 
 var (
 	ErrNoSpec   = errors.New("app has no host spec in the gate policy")
-	ErrNotGated = errors.New("commit has no passing gate verdict in the journal")
-	ErrNoDigest = errors.New("image was not pulled by digest from the app's registry")
+	ErrNotGated = gatedimage.ErrNotGated
+	ErrNoDigest = gatedimage.ErrNoDigest
 )
 
 type Syncer struct {
@@ -96,7 +95,8 @@ func (s Syncer) sync(ctx context.Context, app, tag string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	ref, err := s.pinned(ctx, t)
+	src := s.source()
+	ref, err := src.Pinned(ctx, t.image, t.tag)
 	if err != nil {
 		return 0, err
 	}
@@ -105,8 +105,8 @@ func (s Syncer) sync(ctx context.Context, app, tag string) (int, error) {
 		return 0, err
 	}
 	defer func() { _ = os.RemoveAll(tmp) }()
-	bundle, err := s.extract(ctx, ref, tmp)
-	if err != nil {
+	bundle := filepath.Join(tmp, bundleDir)
+	if err = src.Extract(ctx, ref, policy.HostBundleDir, bundle); err != nil {
 		return 0, err
 	}
 	files, err := s.plan(t, bundle)
@@ -133,37 +133,9 @@ func (s Syncer) resolve(app, tag string) (target, error) {
 		return target{}, err
 	}
 	t := target{app: app, tag: tag, dir: entry.Dir, image: conf.Image, spec: *pa.Host}
-	return t, s.gated(t)
+	return t, s.source().Gated(app, tag)
 }
 
-func (s Syncer) gated(t target) error {
-	entries, err := s.Journal.Entries()
-	if err != nil {
-		return err
-	}
-	sha7 := registry.Sha7(t.tag)
-	for _, e := range journal.ForApp(entries, t.app) {
-		if e.Sha7 == sha7 && e.Action == journal.ActionGate && e.Result == journal.ResultOK {
-			return nil
-		}
-	}
-	return fmt.Errorf("%w: %s@%s", ErrNotGated, t.app, sha7)
-}
-
-func (s Syncer) pinned(ctx context.Context, t target) (string, error) {
-	res, err := s.Exec.Run(ctx, procexec.Command{Name: DockerBinary, Args: []string{"image", "inspect", "--format", "{{json .RepoDigests}}", t.image + ":" + t.tag}})
-	if err != nil {
-		return "", fmt.Errorf("%w: %s", ErrNoDigest, procexec.Output(err))
-	}
-	var digests []string
-	if jerr := json.Unmarshal([]byte(strings.TrimSpace(res.Stdout)), &digests); jerr != nil {
-		return "", fmt.Errorf("%w: %s", ErrNoDigest, jerr.Error())
-	}
-	for _, d := range digests {
-		repo, digest, _ := strings.Cut(d, digestSeparator)
-		if repo == t.image && validate.Digest(digest) == nil {
-			return d, nil
-		}
-	}
-	return "", fmt.Errorf("%w: %s:%s", ErrNoDigest, t.image, t.tag)
+func (s Syncer) source() gatedimage.Source {
+	return gatedimage.Source{Exec: s.Exec, Journal: s.Journal, Log: s.Log}
 }

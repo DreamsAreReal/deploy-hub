@@ -24,6 +24,7 @@ const (
 	ActionPrune        = "prune"
 	ActionGate         = "gate"
 	ActionHostSync     = "host-sync"
+	ActionRemoteSync   = "remote-sync"
 	ActionHostBack     = "host-restore"
 	ActionSelfUpdate   = "self-update"
 	ActionHistorySweep = "history-sweep"

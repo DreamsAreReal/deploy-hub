@@ -83,7 +83,7 @@ func (s *Service) deployLocked(ctx context.Context, op *operation, conf registry
 		return s.hostFailed(ctx, op, conf, prev, t)
 	}
 	if healthy {
-		return s.deploySucceeded(ctx, op, conf, prev, msgHealthOK)
+		return s.deployedThenRemote(ctx, op, conf, prev)
 	}
 	return s.deployFailed(ctx, op, conf, prev, oldAlive, t)
 }
@@ -149,6 +149,14 @@ func (s *Service) pull(ctx context.Context, op *operation, image string, meta Me
 	}
 	s.Log.Info("image pulled", "app", op.app, "image", ref, "digest", meta.Digest)
 	return true
+}
+
+func (s *Service) deployedThenRemote(ctx context.Context, op *operation, conf registry.AppConf, prev string) int {
+	code := s.deploySucceeded(ctx, op, conf, prev, msgHealthOK)
+	if code == ExitOK {
+		s.syncRemote(ctx, op)
+	}
+	return code
 }
 
 func (s *Service) deploySucceeded(ctx context.Context, op *operation, conf registry.AppConf, prev, verdict string) int {

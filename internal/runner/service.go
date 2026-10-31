@@ -73,6 +73,8 @@ type Service struct {
 	HostDirs    arch.HostDirs
 	Visits      func(context.Context) ([]arch.Visit, error)
 	HostOnly    []string
+	Remote      RemoteSyncer
+	RemoteApps  []string
 	samples     []obs.Sample
 	steps       []delivery.Step
 }

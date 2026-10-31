@@ -10,11 +10,14 @@ const (
 	SudoCaddySync  = "caddy-sync"
 	SudoHostSync   = "host-sync"
 	SudoSelfUpdate = "self-update"
+	SudoDeliver    = "remote-deliver"
+	RemoteUser     = "dh-remote"
+	RootUser       = "root"
 )
 
 var (
 	ErrHub       = errors.New("invalid hub section")
-	sudoCommands = []string{SudoCaddySync, SudoHostSync, SudoSelfUpdate}
+	sudoCommands = []string{SudoCaddySync, SudoHostSync, SudoSelfUpdate, SudoDeliver}
 )
 
 type Hub struct {

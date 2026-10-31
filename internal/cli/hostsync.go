@@ -55,17 +55,17 @@ func LookupAccounts(owner, group string) (int, int, error) {
 }
 
 func (a *App) hostApps() []string {
-	return a.appsWhere(func(app policy.App) bool { return app.Host != nil })
+	return a.appsWhere("host", func(app policy.App) bool { return app.Host != nil })
 }
 
 func (a *App) hostOnlyApps() []string {
-	return a.appsWhere(policy.App.HostOnly)
+	return a.appsWhere("host", policy.App.HostOnly)
 }
 
-func (a *App) appsWhere(keep func(policy.App) bool) []string {
+func (a *App) appsWhere(what string, keep func(policy.App) bool) []string {
 	pol, err := policy.Parse(embedded.Gate())
 	if err != nil {
-		a.Log.Error("embedded gate policy unreadable, host sync disabled", "error", err.Error())
+		a.Log.Error("embedded gate policy unreadable, "+what+" sync disabled", "error", err.Error())
 		return nil
 	}
 	var out []string
