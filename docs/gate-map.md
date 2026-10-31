@@ -8,7 +8,7 @@ none of them is weakened to make a release pass.
 | An agent could… | Caught by | Status |
 |---|---|---|
 | ship code that does not build or fails a test | `tests`, per stack | yes |
-| ship untested code or tests that assert nothing | `line-coverage`, `branch-coverage`, `mutation` (90%) | yes |
+| ship untested code or tests that assert nothing | `line-coverage`, `branch-coverage`, `mutation` (90%) | yes; `mutation` runs in the hub's full runs every two weeks and is `n/a` in deploys (`mutation.skip_in_deploys`) |
 | break a security or business scenario | `scenarios` (registered tests must pass) | yes |
 | commit a secret | `secrets-gitleaks`, `secrets-trufflehog` (whole history), `hygiene` (key files) | yes |
 | add a vulnerable or unknown dependency | `dependencies` (approved list), `sca`, `vulnerabilities`, `sbom-licenses` | yes |
@@ -20,7 +20,7 @@ none of them is weakened to make a release pass.
 | add a link to another service, a port or an env variable nobody declared | `architecture` against `policy/architecture.yaml` | yes |
 | make an app call tasks directly | `architecture` (`tasks_callers`, dated exceptions) | yes |
 | put a secret outside the store | `architecture` (an env variable must be a declared secret or config) + deploy-hub lays only stored keys | partly: a declared secret may still be set by hand on the server until the app moves to the store (#743) |
-| weaken the gate | thresholds and exceptions live only in this repository's `policy/`; app repositories cannot change them | yes, as long as this repository needs the owner's review (#812) |
+| weaken the gate | thresholds and exceptions live only in this repository's `policy/`; app repositories cannot change them | partly: a change to `policy/` has to pass this repository's own gate (`quality gate / gate` is required on `main`, admins included), but no review is required; requiring the owner's review is the owner's call (#813), and a private repository on the free plan would lose branch protection (#679) |
 | ship a broken screen or button | `ui` (the hub's crawler on the seeded stage, driven by the app map: errors, dead or covered buttons, delete without confirmation) | yes for apps with `ui` in the policy; a full gate run presses every button |
 | make the interface unreadable, cramped or confusing | `ui` (cut text or text out of its box, page wider than the screen, contrast, duplicate or ambiguous buttons, near-aligned edges, cramped controls; every screen at 360 px too, five sizes and the dark theme in a full run) | yes for apps with `ui`; text quality and taste are not checked |
 | change UI markup or look by accident | tasks' own screen snapshots and design rules | partly: per app (#808); no screenshot comparison yet (#809) |
@@ -32,6 +32,8 @@ none of them is weakened to make a release pass.
 | deploy without the gate | deploy credentials are used only by the hub workflow after the gate; the deploy key and the OIDC token request are gone while the app's code runs, and only the image built before the gate is pushed | partly: a process the app's code leaves behind shares the job (#812: deploy in its own job), #814: one deploy key per app |
 | replace the hub binary | self-update installs a release only when the binary is byte for byte the artifact its green `ci.yml` run on `main` built; a release token cannot change run artifacts | yes (#813) |
 
-Speed matters as much: the tasks gate takes 3.3–5.4 h today. New checks run on what
-changed and in parallel with the heavy ones; a check that slows every release has to
-pay for itself.
+Speed matters as much. The tasks gate took 3.3–5.4 h in October; since 31.10 its
+deploy runs take 9–16 min (15.8, 14.3 and 9.1 min that day): mutation testing moved
+to the full runs every two weeks, up to three checks run side by side, and Go
+packages are covered side by side. New checks run on what changed and in parallel
+with the heavy ones; a check that slows every release has to pay for itself.
