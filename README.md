@@ -1421,11 +1421,19 @@ event); once no `main` run waits, it re-runs each run it cancelled unless a
 newer run of the same pull request branch replaced it or the run ended
 otherwise. Its state is `/var/lib/deploy-hub/preempt.json`. It uses the token
 of `/etc/deploy-hub/github.token`, which needs **Actions: Read and write** on
-every repo with a runner. Metrics: `deploy_hub_preempt_success`,
+every repo with a runner. Each repo is handled on its own: when GitHub fails or
+refuses the token for one repo, preempt logs a warning `preempt skipped a repo`
+with `repo`, `denied` and the error, and goes on with the others; the run fails
+only when the state cannot be read or written or no repo could be handled.
+Metrics: `deploy_hub_preempt_success` (the run as a whole),
+`deploy_hub_preempt_repo_success{repo}`, `deploy_hub_preempt_repo_denied{repo}`
+(GitHub answered 401, 403 or 404, so the token has no access to the repo),
 `deploy_hub_preempt_cancelled{repo}`, `deploy_hub_preempt_rerun{repo}` and
 `deploy_hub_preempt_reruns_max{repo}` (most re-runs of one gate in the last
-24 h); alerts `DeployHubPreemptFailing` and `DeployHubPreemptRerunLoop` (one
-gate re-run more than 3 times).
+24 h); alerts `DeployHubPreemptFailing`, `DeployHubPreemptRepoDenied` (fires on
+the first refused pass), `DeployHubPreemptRepoFailing` (a repo failed for
+10 minutes for another reason) and `DeployHubPreemptRerunLoop` (one gate re-run
+more than 3 times).
 
 Moving from the shared user `ci` of the first version: `host` stops every runner,
 removes the user `ci`, its drop-ins and its files on the CI disk, then each

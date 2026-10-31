@@ -3,6 +3,7 @@ package preempt
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"path/filepath"
 	"time"
@@ -72,20 +73,27 @@ func (p Preempter) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	samples := make([]obs.Sample, 0, 3*len(p.Repos)+1)
-	var errs []error
+	samples := make([]obs.Sample, 0, 5*len(p.Repos)+1)
+	var failed []error
 	for _, repo := range p.Repos {
 		t, rerr := p.repo(ctx, repo, &st)
-		errs = append(errs, rerr)
+		if rerr != nil {
+			failed = append(failed, fmt.Errorf("%s: %w", repo, rerr))
+			p.Log.Warn("preempt skipped a repo", "repo", repo, "denied", Denied(rerr), "error", rerr.Error())
+		}
 		labels := obs.Labels{labelRepo: repo}
 		samples = append(samples,
 			obs.Sample{Name: obs.MetricPreemptCancelled, Labels: labels, Value: float64(t.cancelled)},
 			obs.Sample{Name: obs.MetricPreemptRerun, Labels: labels, Value: float64(t.rerun)},
-			obs.Sample{Name: obs.MetricPreemptRerunsMax, Labels: labels, Value: float64(st.maxReruns(repo))})
+			obs.Sample{Name: obs.MetricPreemptRerunsMax, Labels: labels, Value: float64(st.maxReruns(repo))},
+			obs.Sample{Name: obs.MetricPreemptRepoSuccess, Labels: labels, Value: obs.Bool(rerr == nil)},
+			obs.Sample{Name: obs.MetricPreemptRepoDenied, Labels: labels, Value: obs.Bool(Denied(rerr))})
 	}
 	st.prune(p.Now().Add(-p.Keep))
-	errs = append(errs, st.Save(p.State))
-	err = errors.Join(errs...)
+	err = st.Save(p.State)
+	if len(failed) == len(p.Repos) {
+		err = errors.Join(append(failed, err)...)
+	}
 	p.Metrics.Push(context.WithoutCancel(ctx), append(samples,
 		obs.Sample{Name: obs.MetricPreemptSuccess, Labels: obs.Labels{}, Value: obs.Bool(err == nil)}))
 	return err

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -322,13 +323,12 @@ func TestFailuresAreReportedAndKeepTheState(t *testing.T) {
 	f.gh.add(repoA, push(1, queued))
 	f.gh.add(repoA, pr(2, prBranch, running))
 	f.gh.failPost = true
-	testutil.Is(t, f.p.Run(context.Background()), ErrHTTP)
-	testutil.Equal(t, f.metrics.value(obs.MetricPreemptSuccess, ""), 0.0)
+	onlyFails(t, f, repoA)
 	f.gh.failPost = false
 	testutil.NoErr(t, f.p.Run(context.Background()))
 	f.gh.set(1, done)
 	f.gh.failPost = true
-	testutil.Is(t, f.p.Run(context.Background()), ErrHTTP)
+	onlyFails(t, f, repoA)
 	f.gh.failPost = false
 	testutil.NoErr(t, f.p.Run(context.Background()))
 	testutil.Equal(t, len(f.gh.reruns), 1)
@@ -425,11 +425,11 @@ func TestAFailedLookupOrCancelCountsNothing(t *testing.T) {
 	f.gh.add(repoA, push(1, queued))
 	f.gh.add(repoA, pr(2, prBranch, running))
 	f.gh.failRun = 2
-	testutil.Is(t, f.p.Run(context.Background()), ErrHTTP)
+	onlyFails(t, f, repoA)
 	testutil.Equal(t, f.metrics.value(obs.MetricPreemptCancelled, repoA), 0.0)
 	f.gh.failRun = 0
 	f.gh.failPost = true
-	testutil.Is(t, f.p.Run(context.Background()), ErrHTTP)
+	onlyFails(t, f, repoA)
 	testutil.Equal(t, f.metrics.value(obs.MetricPreemptCancelled, repoA), 0.0)
 	st, err := Load(f.p.State)
 	testutil.NoErr(t, err)
@@ -449,11 +449,11 @@ func TestRequeueCountsOnlyRealReruns(t *testing.T) {
 	testutil.Equal(t, f.metrics.value(obs.MetricPreemptRerun, repoA), 0.0)
 	f.gh.failRun = 2
 	f.gh.set(2, done)
-	testutil.Is(t, f.p.Run(context.Background()), ErrHTTP)
+	onlyFails(t, f, repoA)
 	testutil.Equal(t, f.metrics.value(obs.MetricPreemptRerun, repoA), 0.0)
 	f.gh.failRun = 0
 	f.gh.failPost = true
-	testutil.Is(t, f.p.Run(context.Background()), ErrHTTP)
+	onlyFails(t, f, repoA)
 	testutil.Equal(t, f.metrics.value(obs.MetricPreemptRerun, repoA), 0.0)
 	f.gh.failPost = false
 	log := logged(f)
@@ -527,4 +527,48 @@ func TestStateFileErrors(t *testing.T) {
 	st := State{}
 	testutil.Fails(t, st.Save(path))
 	testutil.Missing(t, path)
+}
+
+func onlyFails(t *testing.T, f *fixture, repo string) {
+	t.Helper()
+	testutil.NoErr(t, f.p.Run(context.Background()))
+	testutil.Equal(t, f.metrics.value(obs.MetricPreemptRepoSuccess, repo), 0.0)
+	testutil.Equal(t, f.metrics.value(obs.MetricPreemptRepoDenied, repo), 0.0)
+	testutil.Equal(t, f.metrics.value(obs.MetricPreemptSuccess, ""), 1.0)
+}
+
+func TestARepoWithoutAccessDoesNotStopTheOthers(t *testing.T) {
+	f := newFixture(t)
+	f.p.Repos = []string{"server-ops", repoA, repoB}
+	f.gh.add(repoA, push(1, queued))
+	f.gh.add(repoA, pr(2, prBranch, running))
+	log := logged(f)
+	testutil.NoErr(t, f.p.Run(context.Background()))
+	testutil.Equal(t, strings.Join(f.gh.cancelled, " "), "tasks/2")
+	testutil.Equal(t, f.metrics.value(obs.MetricPreemptRepoSuccess, "server-ops"), 0.0)
+	testutil.Equal(t, f.metrics.value(obs.MetricPreemptRepoDenied, "server-ops"), 1.0)
+	testutil.Equal(t, f.metrics.value(obs.MetricPreemptRepoSuccess, repoA), 1.0)
+	testutil.Equal(t, f.metrics.value(obs.MetricPreemptRepoDenied, repoA), 0.0)
+	testutil.Equal(t, f.metrics.value(obs.MetricPreemptRepoSuccess, repoB), 1.0)
+	testutil.Equal(t, f.metrics.value(obs.MetricPreemptSuccess, ""), 1.0)
+	testutil.Contains(t, log.String(), "level=WARN", "preempt skipped a repo", "repo=server-ops", "denied=true", "404 Not Found")
+}
+
+func TestAPassFailsWhenNoRepoCanBeHandled(t *testing.T) {
+	f := newFixture(t)
+	f.p.GitHub.Token = "github_pat_wrong"
+	err := f.p.Run(context.Background())
+	testutil.Contains(t, err.Error(), "tasks: ", "router-bot: ", "401")
+	testutil.Equal(t, f.metrics.value(obs.MetricPreemptRepoDenied, repoA), 1.0)
+	testutil.Equal(t, f.metrics.value(obs.MetricPreemptRepoDenied, repoB), 1.0)
+	testutil.Equal(t, f.metrics.value(obs.MetricPreemptSuccess, ""), 0.0)
+}
+
+func TestOnlyRefusalsCountAsDenied(t *testing.T) {
+	for code, want := range map[int]bool{401: true, 403: true, 404: true, 500: false, 502: false} {
+		testutil.Equal(t, Denied(fmt.Errorf("wrapped: %w", &StatusError{Code: code})), want)
+	}
+	testutil.Equal(t, Denied(errors.New("dial tcp: refused")), false)
+	testutil.Equal(t, Denied(nil), false)
+	testutil.Is(t, &StatusError{Code: 404}, ErrHTTP)
 }
