@@ -25,7 +25,7 @@ type Request struct {
 
 func ValidProfile(p string) bool {
 	switch p {
-	case registry.ProfileStatic, registry.ProfileService, registry.ProfileBot:
+	case registry.ProfileStatic, registry.ProfileService, registry.ProfileBot, registry.ProfileHost:
 		return true
 	default:
 		return false
@@ -48,7 +48,7 @@ func (r Request) Validate() error {
 	if errs != nil {
 		return errs
 	}
-	if r.Profile != registry.ProfileBot && (r.Port == "" || r.CPort == "") {
+	if !registry.Containerless(r.Profile) && (r.Port == "" || r.CPort == "") {
 		return ErrPortNeeded
 	}
 	return nil
@@ -70,11 +70,12 @@ func (r Request) Args() []string {
 }
 
 func (r Request) conf() registry.AppConf {
+	r = r.templateData()
 	return registry.AppConf{Profile: r.Profile, Port: r.Port, HealthPath: r.HealthPath, Image: r.Image, Repo: r.Repo}
 }
 
 func (r Request) templateData() Request {
-	if r.Profile == registry.ProfileBot {
+	if registry.Containerless(r.Profile) {
 		r.Port, r.CPort = "", ""
 	}
 	return r

@@ -35,10 +35,7 @@ func (s *Service) rollback(ctx context.Context, raw string, entry registry.Entry
 		return ExitFail
 	}
 	defer release()
-	ref := conf.Image + ":" + tag
-	s.upSidecars(ctx, op.dir, conf, ref)
-	s.Out.Println(msgWaitingGate)
-	healthy, _ := s.blueGreen(ctx, op, conf, ref, targetFor(conf))
+	healthy := s.restore(ctx, op, conf)
 	s.record(journal.Entry{App: op.app, Sha7: op.sha7, Action: action, Result: resultOf(healthy), Seconds: s.since(op.t0)})
 	if !healthy {
 		s.Err.Printf(msgTargetUnhealthy, action)
@@ -47,10 +44,21 @@ func (s *Service) rollback(ctx context.Context, raw string, entry registry.Entry
 	}
 	s.advanceState(op)
 	s.reportRollback(action, op.sha7)
-	if !s.syncHost(ctx, op) {
+	if !s.hostOnly(op.app) && !s.syncHost(ctx, op) {
 		return ExitFail
 	}
 	return ExitOK
+}
+
+func (s *Service) restore(ctx context.Context, op *operation, conf registry.AppConf) bool {
+	if s.hostOnly(op.app) {
+		return s.installHost(ctx, op)
+	}
+	ref := conf.Image + ":" + op.tag
+	s.upSidecars(ctx, op.dir, conf, ref)
+	s.Out.Println(msgWaitingGate)
+	healthy, _ := s.blueGreen(ctx, op, conf, ref, targetFor(conf))
+	return healthy
 }
 
 func (s *Service) advanceState(op *operation) {

@@ -21,6 +21,7 @@ const (
 	ProfileStatic  = "static"
 	ProfileService = "service"
 	ProfileBot     = "bot"
+	ProfileHost    = "host"
 
 	HealthHTTP    = "http"
 	HealthCompose = "compose"
@@ -81,6 +82,10 @@ func (c AppConf) Encode() string {
 
 func (c AppConf) Save(dir string) error {
 	return WriteFile(filepath.Join(dir, AppConfFile), c.Encode())
+}
+
+func Containerless(profile string) bool {
+	return profile == ProfileBot || profile == ProfileHost
 }
 
 func (c AppConf) IsBYOC() bool {

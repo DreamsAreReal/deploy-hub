@@ -286,7 +286,7 @@ are ignored: the Go toolchain never builds those directories.
 check. Forks and other code get only the security checks (secrets, SAST,
 dependencies, licenses, workflows, image, DAST); the quality checks are
 reported as `n/a`. Checks that need an image or an HTTP surface are `n/a` for
-app kinds without one (`binary`, `worker`). Nothing else is ever skipped, and a
+app kinds without one (`binary`, `worker`, `host`). Nothing else is ever skipped, and a
 check that cannot finish (tool crash, timeout) fails. Each check gets
 `check_timeout`; mutation testing gets `long_check_timeout`. Up to
 `limits.parallel_checks` checks run side by side, and the isolated stage (`dast`,
@@ -490,7 +490,7 @@ renaming a test does not remove the requirement — the scenario fails.
 apps:
   myapp:
     repo: DreamsAreReal/myapp
-    kind: service            # service | worker | binary
+    kind: service            # service | worker | binary | host
     port: 8080               # container port
     health: /health
     cpus: "0.5"              # production limits used by the stage
@@ -989,7 +989,7 @@ The app repo needs a `Dockerfile` (one built image per app) and an entry in
 rejected by the `registration` check. Run from a clone of this repo:
 
 ```
-VPS_ADDR=<vps> go run ./cmd/deploy-hub onboard <repo> [--profile static|bot|service] [--port N] [--dry-run]
+VPS_ADDR=<vps> go run ./cmd/deploy-hub onboard <repo> [--profile static|bot|service|host] [--port N] [--dry-run]
 ```
 
 `--dry-run` prints the exact plan (stub commit, secrets, `/opt/<app>/` files,
@@ -1167,6 +1167,21 @@ the previous tag (or stops a first deploy). Every run writes `<app>@<sha7>
 host-sync ok|fail Ns changed=<n>` to the journal and pushes
 `deploy_hub_host_sync_success{app}` and `deploy_hub_host_files_changed{app}`.
 
+**Apps that ship only host files** (`kind: host`, for example `server-ops`:
+the weekly self-check, kernel auto-reboot and the agent runner units) have an
+image like any app: CI builds it, the gate checks it, it is pushed and pulled
+by digest. It is never started. Such an app needs a `host:` spec (the policy
+loader refuses `kind: host` without one) and is onboarded with
+`--profile host`: `/opt/<app>/` gets only `app.conf` (`profile=host`,
+`image=`, `repo=`), no compose and no `.env`, and no HTTPS route. A deploy is
+the identity check, the lock, the pull by digest and `host-sync`. If host-sync
+fails, it has already put the previous files back, so the deploy fails and
+the previous tag stays current. A rollback or redeploy runs `host-sync` for
+an earlier tag that passed a deploy. `status` reports such an app as
+`installed/healthy` after a successful last `host-sync`, otherwise as
+`not-installed/unhealthy` (`missing/-` before the first one), and pushes
+`deploy_hub_app_up` and `deploy_hub_app_healthy` from that.
+
 The host spec ships with the binary (`policy/gate.yaml` is embedded), so a
 change to it reaches the server only with a new binary release.
 
@@ -1207,7 +1222,7 @@ Isolation, all in [`server/ci-runner`](server/ci-runner):
 | which jobs | job-started hook `ci-job-started`: workflows of the repo's own `main` (push, `workflow_dispatch` or `schedule`) and pull requests into `main` from the repo itself (`refs/pull/<n>/merge`, head repo checked in the event payload); other branches, fork pull requests and other events fail before their first step. Pull request jobs get no deploy secrets, and a main deploy cancels them ([Pull request gate](#pull-request-gate)) |
 | CPU, memory | every repo has its slice `user-<uid of ci-<repo>>.slice` (its runner, its `dockerd` and its user manager with the containers), each with `ci-limits.conf`: 6 of 8 CPUs, CPU and IO weight 20 (production keeps priority), `MemoryMax` 9G and no `MemoryHigh` (above it the kernel throttles every process of the slice, and the page cache of builds keeps it there), no swap. Two jobs at once take at most 18G of the host's 23G; the gate sizes its mutation workers from the cgroup limit |
 | disk | `/var/lib/ci` is the ext4 image `/srv/ci.img` (280G, 276 GiB of ext4; `CI_DISK_SIZE` for a new one): CI can never fill `/`; mounted with `discard`, so blocks freed inside go back to `/` (the sparse image does not grow to its full size) |
-| disk quota | each repo has a hard ext4 project quota on `/var/lib/ci` (project id = uid of `ci-<repo>`, limits in GiB in `server/ci-runner/ci-disk-quota`: tasks 140, router-bot 40, observability 20, deploy-hub 35, router-ax23 20), so one repo cannot fill the disk of the others; `register` refuses a repo without a line there. Writes over the quota fail with `Disk quota exceeded`; the job hook prints an error with the usage, and `ci-job-started` refuses jobs while the quota is 95% full |
+| disk quota | each repo has a hard ext4 project quota on `/var/lib/ci` (project id = uid of `ci-<repo>`, limits in GiB in `server/ci-runner/ci-disk-quota`: tasks 140, router-bot 40, observability 20, deploy-hub 35, router-ax23 20, server-ops 20), so one repo cannot fill the disk of the others; `register` refuses a repo without a line there. Writes over the quota fail with `Disk quota exceeded`; the job hook prints an error with the usage, and `ci-job-started` refuses jobs while the quota is 95% full |
 | leftover processes | `ci-runner-reap`, run by both job hooks: SIGKILL to every process in the runner's cgroup that is not a descendant of the runner itself (`runsvc.sh` → `RunnerService.js` → `Runner.Listener` → `Runner.Worker` → steps). A step that forks into the background or daemonizes is reparented away from the runner and dies when the job ends, and again before the first step of the next job, so it cannot read the environment (`SSH_KEY`, `GH_TOKEN`) of a later job. A stop or restart of `ci-runner@<repo>` kills the whole cgroup (`KillMode=control-group`) |
 | cleanup | job-completed hook `ci-runner-clean`: removes the job's containers, networks, volumes and pushed images, trims the build cache to 15 GB, empties the workspace, `RUNNER_TEMP`, `TMPDIR`, the tool cache and the downloaded actions; above 70% disk it drops all images and the language caches |
 | fail-safe | `ci-runner-status` stops every runner when the CI disk is not mounted or the nftables table is missing, and stops the runner of a repo whose namespace is gone, whose veth is down or whose runner, `dockerd` or user manager runs outside `/run/netns/ci-<repo>` (`deploy_hub_ci_isolation_ok` 0) |

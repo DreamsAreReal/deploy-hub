@@ -62,9 +62,13 @@ func (p Provisioner) Run(ctx context.Context, r Request) error {
 	dir := p.Apps.DirFor(r.App)
 	steps := []step{
 		{path: dir, msg: msgDirCreated, create: p.mkdir},
-		{path: filepath.Join(dir, registry.ComposeFile), msg: msgWritten, create: writer(RenderCompose(r))},
 		{path: filepath.Join(dir, registry.AppConfFile), msg: msgWritten, create: writer([]byte(r.conf().Encode()))},
-		{path: filepath.Join(dir, registry.EnvFile), msg: msgEnvCreated, create: writer(nil)},
+	}
+	if r.Profile != registry.ProfileHost {
+		steps = append(steps,
+			step{path: filepath.Join(dir, registry.ComposeFile), msg: msgWritten, create: writer(RenderCompose(r))},
+			step{path: filepath.Join(dir, registry.EnvFile), msg: msgEnvCreated, create: writer(nil)},
+		)
 	}
 	var created []string
 	for _, s := range steps {

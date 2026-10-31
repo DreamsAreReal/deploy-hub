@@ -30,6 +30,8 @@ func TestEmbeddedPolicyListsTheHostApps(t *testing.T) {
 	a := &App{Log: slog.New(slog.DiscardHandler)}
 	testutil.True(t, slices.Contains(a.hostApps(), "observability"), "observability installs host files")
 	testutil.True(t, !slices.Contains(a.hostApps(), "tasks"), "tasks has no host spec")
+	testutil.True(t, slices.Contains(a.hostOnlyApps(), "server-ops") && slices.Contains(a.hostApps(), "server-ops"), "server-ops ships only host files")
+	testutil.True(t, !slices.Contains(a.hostOnlyApps(), "observability"), "observability runs containers too")
 	testutil.Equal(t, h.run(CmdHostSync, "Bad", "sha-abcdef1"), ExitFail)
 }
 

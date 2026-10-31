@@ -21,6 +21,7 @@ const (
 	KindBinary  = "binary"
 	KindService = "service"
 	KindWorker  = "worker"
+	KindHost    = "host"
 
 	NotALicense = "NONE"
 	exprAnd     = "AND"
@@ -404,6 +405,11 @@ func (a App) validateKind(name string) error {
 	switch a.Kind {
 	case KindBinary, KindWorker:
 		return nil
+	case KindHost:
+		if a.Host == nil {
+			return fmt.Errorf("%w: app %s: kind host needs a host spec, it ships nothing else", ErrPolicy, name)
+		}
+		return nil
 	case KindService:
 		return errors.Join(
 			validate.Port(fmt.Sprint(a.Port)), validate.HealthPath(a.Health), validate.MemLimit(a.Memory),
@@ -469,6 +475,10 @@ func (a App) HasImage() bool {
 
 func (a App) HasHTTP() bool {
 	return a.Kind == KindService
+}
+
+func (a App) HostOnly() bool {
+	return a.Kind == KindHost
 }
 
 func validData(app string, dirs []string) error {

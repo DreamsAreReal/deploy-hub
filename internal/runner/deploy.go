@@ -72,6 +72,9 @@ func (s *Service) deployLocked(ctx context.Context, op *operation, conf registry
 		return ExitFail
 	}
 	prev := registry.LoadState(op.dir).Current
+	if s.hostOnly(op.app) {
+		return s.deployHost(ctx, op, conf, prev)
+	}
 	s.Out.Printf(msgStarting, op.app, op.tag)
 	s.upSidecars(ctx, op.dir, conf, ref)
 	t := targetFor(conf)
@@ -80,7 +83,7 @@ func (s *Service) deployLocked(ctx context.Context, op *operation, conf registry
 		return s.hostFailed(ctx, op, conf, prev, t)
 	}
 	if healthy {
-		return s.deploySucceeded(ctx, op, conf, prev)
+		return s.deploySucceeded(ctx, op, conf, prev, msgHealthOK)
 	}
 	return s.deployFailed(ctx, op, conf, prev, oldAlive, t)
 }
@@ -148,7 +151,7 @@ func (s *Service) pull(ctx context.Context, op *operation, image string, meta Me
 	return true
 }
 
-func (s *Service) deploySucceeded(ctx context.Context, op *operation, conf registry.AppConf, prev string) int {
+func (s *Service) deploySucceeded(ctx context.Context, op *operation, conf registry.AppConf, prev, verdict string) int {
 	if prev != op.tag {
 		if err := (registry.DeployState{Current: op.tag, Previous: prev}).Save(op.dir); err != nil {
 			s.Log.Error("deploy state not saved", "app", op.app, "error", err.Error())
@@ -157,7 +160,7 @@ func (s *Service) deploySucceeded(ctx context.Context, op *operation, conf regis
 	s.record(journal.Entry{App: op.app, Sha7: op.sha7, Action: journal.ActionDeploy, Result: journal.ResultOK, Seconds: s.since(op.t0)})
 	lead := s.Now().Sub(op.start)
 	s.samples = append(s.samples, obs.Sample{Name: obs.MetricLeadTime, Labels: obs.Labels{obs.LabelApp: op.app}, Value: lead.Seconds()})
-	s.Out.Printf(msgLive, msgHealthOK, op.app, op.sha7, FormatDuration(lead))
+	s.Out.Printf(msgLive, verdict, op.app, op.sha7, FormatDuration(lead))
 	if conf.IsBYOC() {
 		s.Router.Sync(ctx)
 	}
