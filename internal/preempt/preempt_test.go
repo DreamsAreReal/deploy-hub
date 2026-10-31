@@ -27,6 +27,7 @@ const (
 	repoA    = "tasks"
 	repoB    = "router-bot"
 	pat      = "github_pat_hub"
+	wrongPAT = "github_pat_wrong"
 	queued   = "queued"
 	running  = "in_progress"
 	done     = "completed"
@@ -323,12 +324,12 @@ func TestFailuresAreReportedAndKeepTheState(t *testing.T) {
 	f.gh.add(repoA, push(1, queued))
 	f.gh.add(repoA, pr(2, prBranch, running))
 	f.gh.failPost = true
-	onlyFails(t, f, repoA)
+	onlyTasksFails(t, f)
 	f.gh.failPost = false
 	testutil.NoErr(t, f.p.Run(context.Background()))
 	f.gh.set(1, done)
 	f.gh.failPost = true
-	onlyFails(t, f, repoA)
+	onlyTasksFails(t, f)
 	f.gh.failPost = false
 	testutil.NoErr(t, f.p.Run(context.Background()))
 	testutil.Equal(t, len(f.gh.reruns), 1)
@@ -338,7 +339,7 @@ func TestFailuresAreReportedAndKeepTheState(t *testing.T) {
 
 func TestAWrongTokenFails(t *testing.T) {
 	f := newFixture(t)
-	f.p.GitHub.Token = "github_pat_wrong"
+	f.p.GitHub.Token = wrongPAT
 	err := f.p.Run(context.Background())
 	testutil.Is(t, err, ErrHTTP)
 	testutil.Contains(t, err.Error(), "401")
@@ -425,11 +426,11 @@ func TestAFailedLookupOrCancelCountsNothing(t *testing.T) {
 	f.gh.add(repoA, push(1, queued))
 	f.gh.add(repoA, pr(2, prBranch, running))
 	f.gh.failRun = 2
-	onlyFails(t, f, repoA)
+	onlyTasksFails(t, f)
 	testutil.Equal(t, f.metrics.value(obs.MetricPreemptCancelled, repoA), 0.0)
 	f.gh.failRun = 0
 	f.gh.failPost = true
-	onlyFails(t, f, repoA)
+	onlyTasksFails(t, f)
 	testutil.Equal(t, f.metrics.value(obs.MetricPreemptCancelled, repoA), 0.0)
 	st, err := Load(f.p.State)
 	testutil.NoErr(t, err)
@@ -449,11 +450,11 @@ func TestRequeueCountsOnlyRealReruns(t *testing.T) {
 	testutil.Equal(t, f.metrics.value(obs.MetricPreemptRerun, repoA), 0.0)
 	f.gh.failRun = 2
 	f.gh.set(2, done)
-	onlyFails(t, f, repoA)
+	onlyTasksFails(t, f)
 	testutil.Equal(t, f.metrics.value(obs.MetricPreemptRerun, repoA), 0.0)
 	f.gh.failRun = 0
 	f.gh.failPost = true
-	onlyFails(t, f, repoA)
+	onlyTasksFails(t, f)
 	testutil.Equal(t, f.metrics.value(obs.MetricPreemptRerun, repoA), 0.0)
 	f.gh.failPost = false
 	log := logged(f)
@@ -529,11 +530,12 @@ func TestStateFileErrors(t *testing.T) {
 	testutil.Missing(t, path)
 }
 
-func onlyFails(t *testing.T, f *fixture, repo string) {
+func onlyTasksFails(t *testing.T, f *fixture) {
 	t.Helper()
 	testutil.NoErr(t, f.p.Run(context.Background()))
-	testutil.Equal(t, f.metrics.value(obs.MetricPreemptRepoSuccess, repo), 0.0)
-	testutil.Equal(t, f.metrics.value(obs.MetricPreemptRepoDenied, repo), 0.0)
+	testutil.Equal(t, f.metrics.value(obs.MetricPreemptRepoSuccess, repoA), 0.0)
+	testutil.Equal(t, f.metrics.value(obs.MetricPreemptRepoDenied, repoA), 0.0)
+	testutil.Equal(t, f.metrics.value(obs.MetricPreemptRepoSuccess, repoB), 1.0)
 	testutil.Equal(t, f.metrics.value(obs.MetricPreemptSuccess, ""), 1.0)
 }
 
@@ -556,7 +558,7 @@ func TestARepoWithoutAccessDoesNotStopTheOthers(t *testing.T) {
 
 func TestAPassFailsWhenNoRepoCanBeHandled(t *testing.T) {
 	f := newFixture(t)
-	f.p.GitHub.Token = "github_pat_wrong"
+	f.p.GitHub.Token = wrongPAT
 	err := f.p.Run(context.Background())
 	testutil.Contains(t, err.Error(), "tasks: ", "router-bot: ", "401")
 	testutil.Equal(t, f.metrics.value(obs.MetricPreemptRepoDenied, repoA), 1.0)
