@@ -47,6 +47,8 @@ const (
 	MetricPreemptCancelled     = "deploy_hub_preempt_cancelled"
 	MetricPreemptRerun         = "deploy_hub_preempt_rerun"
 	MetricPreemptRerunsMax     = "deploy_hub_preempt_reruns_max"
+	MetricPreemptRepoSuccess   = "deploy_hub_preempt_repo_success"
+	MetricPreemptRepoDenied    = "deploy_hub_preempt_repo_denied"
 	MetricMutationCacheIntact  = "deploy_hub_mutation_cache_intact"
 	MetricTextfileWritten      = "deploy_hub_textfile_written_timestamp_seconds"
 	MetricHistorySweepSuccess  = "deploy_hub_history_sweep_success"

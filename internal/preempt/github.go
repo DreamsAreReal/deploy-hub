@@ -22,6 +22,27 @@ const (
 
 var ErrHTTP = errors.New("unexpected HTTP status")
 
+type StatusError struct {
+	Method string
+	Path   string
+	Status string
+	Code   int
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("%s: %s %s: %s", ErrHTTP, e.Method, e.Path, e.Status)
+}
+
+func (e *StatusError) Is(target error) bool { return target == ErrHTTP }
+
+func Denied(err error) bool {
+	var se *StatusError
+	if !errors.As(err, &se) {
+		return false
+	}
+	return se.Code == http.StatusUnauthorized || se.Code == http.StatusForbidden || se.Code == http.StatusNotFound
+}
+
 type Run struct {
 	ID         int64  `json:"id"`
 	WorkflowID int64  `json:"workflow_id"`
@@ -55,7 +76,7 @@ func (g GitHub) do(ctx context.Context, method, path string, ok int, out any) er
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != ok {
-		return fmt.Errorf("%w: %s %s: %s", ErrHTTP, method, path, resp.Status)
+		return &StatusError{Method: method, Path: path, Status: resp.Status, Code: resp.StatusCode}
 	}
 	if out == nil {
 		return nil
