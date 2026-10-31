@@ -2,10 +2,7 @@ package delivery_test
 
 import (
 	"encoding/json"
-	"io"
 	"log/slog"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -59,36 +56,18 @@ func TestFromEntryMapsJournalActions(t *testing.T) {
 	testutil.Equal(t, len(delivery.FromEntry(journal.Entry{Sha7: journal.NoValue, Action: journal.ActionRefuse}, "Owner/web")), 0)
 }
 
-func TestHTTPNotifierPostsAJSONArray(t *testing.T) {
-	var got []delivery.Step
-	tracker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		raw, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(raw, &got)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer tracker.Close()
-	n := delivery.HTTPNotifier{URL: tracker.URL, Client: tracker.Client(), Log: slog.New(slog.DiscardHandler)}
-	testutil.NoErr(t, n.Notify(t.Context(), delivery.FromEntry(entry(journal.ActionDeploy, journal.ResultOK), "Owner/web")))
-	testutil.Equal(t, len(got), 2)
-	testutil.Equal(t, got[1].Step, delivery.StepLive)
-}
-
-func TestFailedPostKeepsTheSecretOutOfTheLog(t *testing.T) {
+func TestLogNotifierWritesOneStructuredLinePerStep(t *testing.T) {
 	var logs strings.Builder
-	n := delivery.HTTPNotifier{URL: "http://127.0.0.1:1/api/deliveries/dl_secret", Client: &http.Client{},
-		Log: slog.New(slog.NewTextHandler(&logs, nil))}
-	testutil.Fails(t, n.Notify(t.Context(), delivery.FromEntry(entry(journal.ActionDeploy, journal.ResultOK), "Owner/web")))
-	testutil.True(t, strings.Contains(logs.String(), "delivery steps not sent"), "failure logged: "+logs.String())
-	testutil.True(t, !strings.Contains(logs.String(), "dl_secret"), "secret leaked: "+logs.String())
-}
-
-func TestNotifierOutcomeWithoutAPostOrAURL(t *testing.T) {
-	calls := 0
-	tracker := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls++ }))
-	defer tracker.Close()
-	steps := delivery.FromEntry(entry(journal.ActionDeploy, journal.ResultOK), "Owner/web")
-	testutil.NoErr(t, delivery.HTTPNotifier{URL: tracker.URL, Client: tracker.Client(), Log: slog.New(slog.DiscardHandler)}.Notify(t.Context(), nil))
-	testutil.Is(t, delivery.HTTPNotifier{Client: tracker.Client(), Log: slog.New(slog.DiscardHandler)}.Notify(t.Context(), steps), delivery.ErrDisabled)
-	testutil.Is(t, delivery.Discard{}.Notify(t.Context(), steps), delivery.ErrDisabled)
-	testutil.Equal(t, calls, 0)
+	n := delivery.LogNotifier{Log: slog.New(slog.NewJSONHandler(&logs, nil))}
+	n.Notify(t.Context(), delivery.FromEntry(entry(journal.ActionDeploy, journal.ResultOK), "Owner/web"))
+	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
+	testutil.Equal(t, len(lines), 2)
+	var live map[string]any
+	testutil.NoErr(t, json.Unmarshal([]byte(lines[1]), &live))
+	testutil.Equal(t, live["event"], delivery.EventStep)
+	testutil.Equal(t, live["repo"], label)
+	testutil.Equal(t, live["step"], delivery.StepLive)
+	testutil.Equal(t, live["sha"], sha7)
+	n.Notify(t.Context(), nil)
+	testutil.Equal(t, len(strings.Split(strings.TrimSpace(logs.String()), "\n")), 2)
 }

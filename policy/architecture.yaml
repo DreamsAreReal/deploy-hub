@@ -19,10 +19,6 @@ services:
         why: releases, CI status and the self-update check need the GitHub API
       - to: observability
         why: the check of the server against the catalog reads the Caddy access log in VictoriaLogs to see which sites the server itself calls
-      - to: tasks
-        why: gate verdicts and deploys are posted as delivery steps
-        until: "2026-12-31"
-        task: "#786"
     timers:
       - name: .github/workflows/history-guard.yml
         why: every 5 minutes, deletes branches and tags that bring back the history from before the repository was recreated, also when a push was missed
