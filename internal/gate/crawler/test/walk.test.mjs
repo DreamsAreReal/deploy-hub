@@ -163,6 +163,7 @@ test('a full crawl presses every safe button, looks into every sheet and reports
   assert.deepEqual(browser.seen.uploads, [1, 1]);
   assert.deepEqual(browser.seen.viewports.map((size) => [size.width, size.height, size.deviceScaleFactor, size.mobile]), [[420, 860, 1, true], [360, 740, 1, true],
     [390, 844, 1, true], [430, 932, 1, true], [768, 1024, 1, false], [1280, 800, 1, false], [390, 844, 1, true]]);
+  assert.deepEqual(browser.seen.scrollbars, browser.seen.viewports.map((size) => size.mobile));
   assert.deepEqual(browser.seen.media, ['light', 'light', 'light', 'light', 'light', 'dark']);
   assert.deepEqual(['home-360', 'broken-360', 'settings-1280'].map((file) => existsSync(join(out, 'screens', `${file}.png`))), [true, false, true]);
   assert.deepEqual(browser.seen.clicks, ['root-home', 'back', 'tasks-open', 'refresh', 'notify', 'store', 'doc-1', 'reveal', 'assistant-open', 'assistant-open', 'chat-close',

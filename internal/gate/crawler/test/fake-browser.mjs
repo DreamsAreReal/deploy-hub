@@ -21,7 +21,7 @@ export function shellOf(screen, { menu = true, assistant = true, chat = '<p>Chat
 export function fakeApp(app) {
   const env = pageEnv('', { url: 'https://app/' });
   env.document.documentElement.dataset.bg = 'rgb(255, 255, 255)';
-  const seen = { navigations: [], clicks: [], uploads: [], metrics: [], viewports: [], media: [], scripts: [], evaluations: 0, requests: 0 };
+  const seen = { navigations: [], clicks: [], uploads: [], metrics: [], viewports: [], scrollbars: [], media: [], scripts: [], evaluations: 0, requests: 0 };
   const scripts = [];
   let socket = null;
   const emit = (method, params) => socket.hear({ method, params });
@@ -136,6 +136,10 @@ export function fakeApp(app) {
       seen.metrics.push(params.width);
       seen.viewports.push(params);
       env.window.happyDOM.setViewport({ width: params.width, height: params.height });
+      return {};
+    },
+    'Emulation.setScrollbarsHidden': ({ hidden }) => {
+      seen.scrollbars.push(hidden);
       return {};
     },
     'Emulation.setEmulatedMedia': (params) => {
