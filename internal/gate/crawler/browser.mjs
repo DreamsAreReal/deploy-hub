@@ -18,7 +18,7 @@ export async function start(crawl, launch = spawn, Socket = WebSocket) {
     crawl.cdp.session = (await call(crawl, 'Target.attachToTarget', { targetId, flatten: true })).sessionId;
     listen(crawl);
     for (const domain of ['Page', 'Runtime', 'Network', 'Log']) await call(crawl, `${domain}.enable`);
-    await call(crawl, 'Emulation.setDeviceMetricsOverride', viewport);
+    await emulate(crawl, viewport);
     if (Number.isFinite(crawl.config.frozenAt)) await call(crawl, 'Page.addScriptToEvaluateOnNewDocument', { source: `(${frozenClock})(${crawl.config.frozenAt})` });
     await call(crawl, 'Page.addScriptToEvaluateOnNewDocument', { source: `(${helpers})()` });
     await call(crawl, 'Page.addScriptToEvaluateOnNewDocument', { source: `(${checks})()` });
@@ -28,4 +28,12 @@ export async function start(crawl, launch = spawn, Socket = WebSocket) {
     chrome.kill();
     throw error;
   }
+}
+
+// A mobile viewport draws overlay scrollbars that fade out a moment after the page loads or scrolls,
+// so whether a shot catches one depends on timing. They take no room, so hiding them changes no layout;
+// a desktop scrollbar takes room and is always drawn, so it stays.
+export async function emulate(crawl, size) {
+  await call(crawl, 'Emulation.setDeviceMetricsOverride', { width: size.width, height: size.height, deviceScaleFactor: 1, mobile: size.mobile });
+  await call(crawl, 'Emulation.setScrollbarsHidden', { hidden: size.mobile });
 }

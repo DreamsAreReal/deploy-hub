@@ -545,6 +545,9 @@ screenshot with the one of the version that is live now:
   needs `Max-Age`, not `Expires`;
 - before each screenshot animations are finished, the caret is hidden and
   elements with `data-volatile` (whatever changes by itself) are made invisible;
+- mobile sizes hide the scrollbar: it is an overlay that takes no room and fades
+  out a moment after a load or a scroll, so a shot caught it or not by timing.
+  Desktop sizes keep theirs: it takes room and is always drawn;
 - the screenshots of the live version (the UI baseline) live on the hub in
   `ui-baseline/<app>/` next to `mutation-cache/`, written only by the hub. After
   a successful deploy CI sends the gate's screenshots of that commit with

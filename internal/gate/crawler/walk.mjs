@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { attached, deepLink, limits, sizes } from './config.mjs';
-import { start } from './browser.mjs';
+import { emulate, start } from './browser.mjs';
 import { alive, call, goto, inPage, tap } from './cdp.mjs';
 import { stuck } from './network.mjs';
 import { firstLine, nameOf, newCrawl, note, problem, report, serverErrors, tell } from './record.mjs';
@@ -182,7 +182,7 @@ function mixedWords(crawl) {
 }
 
 async function present(crawl, size) {
-  await call(crawl, 'Emulation.setDeviceMetricsOverride', { width: size.width, height: size.height, deviceScaleFactor: 1, mobile: size.mobile });
+  await emulate(crawl, size);
   await call(crawl, 'Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: size.dark ? 'dark' : 'light' }] });
 }
 

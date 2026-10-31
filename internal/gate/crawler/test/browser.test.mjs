@@ -7,7 +7,7 @@ import { fakeCrawl, fakeLaunch, socketClass } from './fake.mjs';
 
 const answers = (message) => ({ 'Target.createTarget': { targetId: 'T1' }, 'Target.attachToTarget': { sessionId: 'S1' } })[message.method] ?? {};
 
-test('chrome starts headless with its own profile, denies what the crawl must not use and loads the page helpers', async () => {
+test('chrome starts headless with its own profile, denies what the crawl must not use, hides the fading mobile scrollbar and loads the page helpers', async () => {
   const { crawl, out } = fakeCrawl(undefined, { chromium: '/opt/chrome', netLog: '/out/net.json', frozenAt: 1893490200000, base: 'https://web:8080/app' });
   const { launch, launched } = fakeLaunch();
   const Socket = socketClass(answers);
@@ -22,14 +22,16 @@ test('chrome starts headless with its own profile, denies what the crawl must no
   const sent = crawl.cdp.socket.sent;
   assert.deepEqual(sent.map((message) => message.method), ['Browser.setDownloadBehavior', 'Browser.setPermission', 'Browser.setPermission', 'Target.createTarget',
     'Target.attachToTarget', 'Page.enable', 'Runtime.enable', 'Network.enable', 'Log.enable', 'Emulation.setDeviceMetricsOverride',
-    'Page.addScriptToEvaluateOnNewDocument', 'Page.addScriptToEvaluateOnNewDocument', 'Page.addScriptToEvaluateOnNewDocument', 'Page.addScriptToEvaluateOnNewDocument']);
+    'Emulation.setScrollbarsHidden', 'Page.addScriptToEvaluateOnNewDocument', 'Page.addScriptToEvaluateOnNewDocument', 'Page.addScriptToEvaluateOnNewDocument',
+    'Page.addScriptToEvaluateOnNewDocument']);
   assert.deepEqual(sent[0].params, { behavior: 'deny' });
   assert.deepEqual(sent.slice(1, 3).map((message) => message.params), ['notifications', 'microphone'].map((name) => ({ permission: { name }, setting: 'denied', origin: 'https://web:8080' })));
   assert.deepEqual(sent[4].params, { targetId: 'T1', flatten: true });
   assert.equal(sent[4].sessionId, undefined);
   assert.equal(sent[5].sessionId, 'S1');
   assert.deepEqual(sent[9].params, { width: 420, height: 860, deviceScaleFactor: 1, mobile: true });
-  assert.deepEqual(sent.slice(10).map((message) => message.params.source), [`(${frozenClock})(1893490200000)`, `(${helpers})()`, `(${checks})()`,
+  assert.deepEqual(sent[10].params, { hidden: true });
+  assert.deepEqual(sent.slice(11).map((message) => message.params.source), [`(${frozenClock})(1893490200000)`, `(${helpers})()`, `(${checks})()`,
     `performance.setResourceTimingBufferSize(${limits.timings})`]);
   assert.ok(crawl.cdp.handlers.has('Network.requestWillBeSent'));
   assert.equal(chrome.killed, 0);
