@@ -547,6 +547,23 @@ apps:
       - ROUTER_TOKEN=gate-stage-only-router-token-000000
       - PUBLIC_URL=http://localhost:8080
     data: [/data]
+    remote:
+      target: ax23
+      files:
+        - {src: routerbot-agent, dst: /usr/bin/routerbot-agent, mode: "0755"}
+        - {src: routerbot-apply, dst: /usr/bin/routerbot-apply, mode: "0755"}
+        - {src: routerbot-guard, dst: /usr/bin/routerbot-guard, mode: "0755"}
+        - {src: routerbot-heal, dst: /usr/bin/routerbot-heal, mode: "0755"}
+        - {src: routerbot-health, dst: /usr/bin/routerbot-health, mode: "0755"}
+        - {src: routerbot-logs, dst: /usr/bin/routerbot-logs, mode: "0755"}
+        - {src: routerbot-nightly, dst: /usr/bin/routerbot-nightly, mode: "0755"}
+        - {src: routerbot-probe, dst: /usr/bin/routerbot-probe, mode: "0755"}
+        - {src: routerbot-radio, dst: /usr/bin/routerbot-radio, mode: "0755"}
+        - {src: routerbot-sites, dst: /usr/bin/routerbot-sites, mode: "0755"}
+        - {src: routerbot-uci, dst: /usr/bin/routerbot-uci, mode: "0755"}
+        - {src: routerbot-wifiguard, dst: /usr/bin/routerbot-wifiguard, mode: "0755"}
+        - {src: routerbot.init, dst: /etc/init.d/routerbot, mode: "0755"}
+      restart: [routerbot]
     dast: {target: /, spider: 1m, max_time: 10m}
     load: {rate: 20, duration: 30s, p95: 300ms, max_error_percent: 0, concurrency: 10, paths: [/healthz, /login]}
     localized:
@@ -821,4 +838,4 @@ apps:
 
 hub:
   sudo_user: deploy
-  sudo_commands: [caddy-sync, host-sync, self-update]
+  sudo_commands: [caddy-sync, host-sync, self-update, remote-deliver]

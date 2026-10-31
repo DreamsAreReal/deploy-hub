@@ -100,6 +100,8 @@ func (a *App) runnerService(ex procexec.Runner) *runner.Service {
 		Visits:      a.visits(),
 		HostApps:    a.hostApps(),
 		HostOnly:    a.hostOnlyApps(),
+		Remote:      a.remote(ex),
+		RemoteApps:  a.remoteApps(),
 	}
 }
 

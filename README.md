@@ -679,6 +679,8 @@ commands:
 | `mutation-import <app>` | root (`ci-mutation@<app>`) | takes the chunk's verdicts into the hub |
 | `caddy-sync` | root (via a narrow sudoers rule) | regenerates the Caddyfile from `apps.list` |
 | `host-sync <app> <tag>` | root (via a narrow sudoers rule, called by `runner`) | installs the host files of an app's gated image, as listed in the policy (see [Host files](#host-files-host-sync)) |
+| `remote-sync <app> <tag>` | `deploy` (called by `runner`) | packs the remote files of an app's gated image and hands them to `remote-deliver` (see [Delivery to the router](#delivery-to-the-router-remote-sync)) |
+| `remote-deliver <target> <sha7> <engine>` | `dh-remote` (via a narrow sudoers rule) | backs the target up and applies the bundle on stdin there over SSH, with rollback on the target |
 | `self-update [sha-<commit>]` | root (systemd timer every 10 minutes) | replaces the binary with the newest gated release of this repo (see [Releases and self-update](#releases-and-self-update)) |
 | `sudoers-sync` | root (called by `self-update`) | writes `/etc/sudoers.d/deploy-hub` from `hub:` in the policy |
 | `ci-runner-sync` | root (called by `self-update`) | installs the embedded `server/ci-runner` into `/opt/deploy-hub/ci-runner` and runs `ci-runner-setup host` when it changed; restarts the idle runners after a change and the busy ones after their job |
@@ -1184,6 +1186,75 @@ an earlier tag that passed a deploy. `status` reports such an app as
 
 The host spec ships with the binary (`policy/gate.yaml` is embedded), so a
 change to it reaches the server only with a new binary release.
+
+### Delivery to the router (remote-sync)
+
+Code that runs on the home router (OpenWrt) is delivered the same way as host
+files: only from the **gated image** of the app, only the files the **policy
+of this repo** lists, and only by the hub.
+
+```yaml
+apps:
+  router-bot:
+    remote:
+      target: ax23
+      files:
+        - {src: agent/routerbot-agent, dst: /usr/bin/routerbot-agent, mode: "0755"}
+        - {src: agent/routerbot-apply, dst: /usr/bin/routerbot-apply, mode: "0755"}
+        - {src: agent/routerbot.init, dst: /etc/init.d/routerbot, mode: "0755"}
+      restart: [routerbot]
+```
+
+- `src` is a path inside `/deploy-hub/remote/` of the image; the image must
+  hold exactly the listed files there, as for host files.
+- `dst` must be under one of the router roots in code (`policy.RemoteRoots`:
+  `/usr/bin/routerbot-*`, `/usr/bin/wgru-watchdog`, `/usr/bin/wifi-neighbors`,
+  `/etc/init.d/routerbot`, `/etc/routerbot/uci.d/`, `/etc/routerbot/nft/`), the
+  same list `routerbot-apply` checks on the router. `mode` follows the host
+  rules. `restart` may name only init scripts the spec installs.
+
+When it runs: after the containers of a deploy, rollback or redeploy passed
+the health gate, `runner` runs `remote-sync <app> <tag>` for apps with a
+`remote:` spec. A target that cannot be reached does not fail the deploy: the
+runner prints a warning, the journal gets `remote-sync fail` and the router
+keeps the version it has.
+
+1. `remote-sync` (as `deploy`) refuses unless `deploys.log` has
+   `<app>@<sha7> gate ok` and the image was pulled by digest; it copies
+   `/deploy-hub/remote` out of the image (the container never starts), checks
+   it against the spec and packs a bundle: `MANIFEST` (`<sha256> <mode> <dst>`
+   per file), the files under `root/` and `RESTART`.
+2. It starts `sudo -n -u dh-remote deploy-hub remote-deliver <target> <sha7>
+   <bundled|installed>` with the bundle on stdin. `dh-remote` holds the router
+   key and has no Docker access; the runner user has Docker but no key.
+3. `remote-deliver` reads `/opt/deploy-hub/remotes/<target>/target.conf`
+   (`hosts=ax23 ax23-oob`: SSH aliases tried in order) and `ssh_config` next
+   to it, and uses the first path that answers. It refuses a target with a
+   pending change, under 2× the bundle plus 512 KiB free on `/overlay` or
+   under 4 MiB on `/tmp`.
+4. Backup first: `sysupgrade -b` of the router goes to
+   `/var/lib/deploy-hub/remotes/<target>/<time>-<sha7>.tar.gz` (the last ten).
+   No backup, no change.
+5. The bundle is unpacked into `/tmp/dh-release/<sha7>` and
+   `routerbot-apply --release` runs there: from the bundle when the release
+   ships `routerbot-apply`, otherwise the installed one. It checks every
+   path, mode and sha256 again, snapshots the files and the config, installs,
+   runs new UCI migrations, restarts and waits for a confirmation.
+6. Once `routerbot-apply status` says `(healthy)` (Wi-Fi, LAN, SSH, internet,
+   DNS and a report the agent delivered to the server after the change),
+   `remote-deliver` sends `confirm` over a **new** SSH connection, so a
+   change that cut the way in from the server is never confirmed and the
+   router rolls back by itself after 180 s. Not healthy in 170 s: it asks for
+   a rollback. The verdict is read back for the journal (`remote-sync ok` /
+   `fail` with `target=… via=…: <result>`). When no verdict can be read the
+   release directory stays on the router, since its rollback may still run
+   from there.
+
+Setting up a target (once, by the owner): an account `dh-remote` without
+Docker access, `/opt/deploy-hub/remotes/<target>/` with `target.conf`,
+`ssh_config`, the key and `known_hosts` (owner `dh-remote`, mode 600), its
+public key in the router's `authorized_keys`, and `remote-deliver` in
+`hub.sudo_commands` (written by `sudoers-sync`).
 
 ## Self-hosted CI runner
 

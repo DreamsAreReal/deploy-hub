@@ -47,6 +47,7 @@ func (s *Service) rollback(ctx context.Context, raw string, entry registry.Entry
 	if !s.hostOnly(op.app) && !s.syncHost(ctx, op) {
 		return ExitFail
 	}
+	s.syncRemote(ctx, op)
 	return ExitOK
 }
 

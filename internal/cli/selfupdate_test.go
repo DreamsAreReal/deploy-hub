@@ -44,7 +44,8 @@ func TestSudoersSyncWritesTheRuleFromThePolicy(t *testing.T) {
 	testutil.Mkdir(t, filepath.Join(h.hubDir, "sudoers.d"))
 	testutil.Equal(t, h.run(CmdSudoers), ExitOK)
 	rule := testutil.Read(t, filepath.Join(h.hubDir, "sudoers.d", "deploy-hub"))
-	testutil.Contains(t, rule, "deploy ALL=(root) NOPASSWD: /opt/deploy-hub/bin/deploy-hub host-sync *\n", "self-update \"\"\n", "caddy-sync \"\"\n")
+	testutil.Contains(t, rule, "deploy ALL=(root) NOPASSWD: /opt/deploy-hub/bin/deploy-hub host-sync *\n", "self-update \"\"\n", "caddy-sync \"\"\n",
+		"deploy ALL=(dh-remote) NOPASSWD: /opt/deploy-hub/bin/deploy-hub remote-deliver *\n")
 	testutil.Equal(t, h.exec.Count("visudo -cf"), 1)
 }
 

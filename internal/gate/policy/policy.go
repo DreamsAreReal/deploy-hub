@@ -118,6 +118,7 @@ type App struct {
 	Allowed   []string    `yaml:"allowed_files"`
 	Accepted  []Accepted  `yaml:"accepted_workflow_findings"`
 	Host      *Host       `yaml:"host"`
+	Remote    *Remote     `yaml:"remote"`
 	Shell     string      `yaml:"shell_utilities"`
 	UI        *UI         `yaml:"ui"`
 }
@@ -333,7 +334,7 @@ func pinned(field, ref string) error {
 
 func (a App) validate(name string) error {
 	errs := make([]error, 0, len(a.Scenarios)+appChecks)
-	errs = append(errs, validate.AppName(name), validate.RepoSlug(a.Repo), a.validateKind(name), validateHost(name, a.Host), a.validateShell(name), a.UI.validate(name))
+	errs = append(errs, validate.AppName(name), validate.RepoSlug(a.Repo), a.validateKind(name), validateHost(name, a.Host), validateRemote(name, a.Remote), a.validateShell(name), a.UI.validate(name))
 	seen := map[string]bool{}
 	for _, s := range a.Scenarios {
 		errs = append(errs, s.validate(name, seen))

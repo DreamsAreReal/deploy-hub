@@ -61,6 +61,7 @@ const (
 	msgBadVerdict       = "refused: gate verdict missing, malformed or for another commit"
 	msgGateRecorded     = "gate %s@%s: %s %s\n"
 	msgHostSyncFail     = "error: host files not installed, previous ones kept: %s\n"
+	msgRemoteSyncFail   = "warning: remote files not delivered, the target keeps its version: %s\n"
 	msgBadCache         = "refused: mutation verdicts missing or malformed"
 	msgCacheCorrupt     = "error: the stored mutation cache does not match its sha256"
 	msgCacheBusy        = "error: another upload holds the mutation cache lock"
