@@ -150,22 +150,30 @@ func (s *Stage) crawl(ctx context.Context, accepted []string) gate.Outcome {
 		return gate.Fail(reasonNoCrawl, err.Error())
 	}
 	res, runErr := s.ws.Run(ctx, DockerBinary, s.crawlArgs(name, vol, scripts, accepted)...)
+	said := gate.Tail(procexec.Output(runErr) + res.Combined())
 	dir := filepath.Join(s.ws.Out, crawlDir)
 	if err = s.collectCrawl(ctx, vol, dir); err != nil {
-		return gate.Fail(reasonNoCrawl, err.Error())
+		return noCrawl(err, said)
 	}
 	report, err := os.ReadFile(filepath.Clean(filepath.Join(dir, crawlReport)))
 	if err == nil {
 		err = os.WriteFile(filepath.Join(dir, RenderKeyFile), []byte(s.renderKey()+"\n"), crawlerFileMode)
 	}
 	if err != nil {
-		return gate.Fail(reasonNoCrawl, err.Error())
+		return noCrawl(err, said)
 	}
 	findings := problemRows(string(report))
 	if runErr != nil && len(findings) == 0 {
-		findings = []string{gate.Tail(procexec.Output(runErr) + res.Combined())}
+		findings = []string{said}
 	}
 	return gate.Judge(len(findings) == 0, reasonUI, map[string]float64{ValueProblems: float64(len(findings))}, findings)
+}
+
+func noCrawl(err error, said string) gate.Outcome {
+	if said == "" {
+		return gate.Fail(reasonNoCrawl, err.Error())
+	}
+	return gate.Fail(reasonNoCrawl, err.Error(), said)
 }
 
 func (s *Stage) dropCrawl(ctx context.Context, name, vol string) {

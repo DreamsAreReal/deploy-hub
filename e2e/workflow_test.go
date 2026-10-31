@@ -258,6 +258,7 @@ func TestTheAppCodeRunsWithoutTheDeployKeyOrAnIDTokenRequest(t *testing.T) {
 const fakePushTools = `docker() {
 	if [ "$1 $2" = "image inspect" ]; then echo "$NOW_ID"; return; fi
 	echo "$*" >> "$CALLS"
+	cat > /dev/null
 }
 `
 
