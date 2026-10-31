@@ -14,7 +14,7 @@ export function deliver(cdp, message) {
   const waiting = cdp.calls.get(message.id);
   if (!waiting) return cdp.handlers.get(message.method)?.(message.params);
   cdp.calls.delete(message.id);
-  if (message.error) waiting.reject(new Error(message.error.message));
+  if (message.error) waiting.reject(new Error(`${waiting.method}: ${message.error.message}`));
   else waiting.resolve(message.result);
 }
 
@@ -33,7 +33,7 @@ export function send(cdp, method, params = {}) {
   cdp.next += 1;
   const id = cdp.next;
   return new Promise((resolve, reject) => {
-    cdp.calls.set(id, { resolve, reject });
+    cdp.calls.set(id, { resolve, reject, method });
     cdp.socket.send(JSON.stringify({ id, method, params, sessionId: cdp.session }));
   });
 }

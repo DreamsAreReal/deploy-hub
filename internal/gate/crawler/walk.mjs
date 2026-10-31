@@ -17,6 +17,7 @@ const heavyScreen = 3000;
 const shift = { problem: 0.25, note: 0.1 };
 
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+const guarded = (crawl, step) => step().catch((error) => problem(crawl, 'crawler-error', firstLine(error)));
 const fill = (crawl) => inPage(crawl, (value) => window.crawl.fill(value), crawl.config.typed);
 const routesOn = async (crawl) => (await inPage(crawl, () => window.crawl.routes())) ?? [];
 const targetsOn = async (crawl) => (await inPage(crawl, () => window.crawl.targets())) ?? [];
@@ -197,25 +198,29 @@ async function lookAt(crawl, route, size) {
 
 async function sizesPass(crawl) {
   for (const size of sizes) {
-    await present(crawl, size);
-    for (const route of crawl.visited.values()) if (alive(crawl)) await lookAt(crawl, route, size);
-    if (alive(crawl)) await chatAt(crawl, size);
+    await guarded(crawl, () => present(crawl, size));
+    for (const route of crawl.visited.values()) if (alive(crawl)) await guarded(crawl, () => lookAt(crawl, route, size));
+    if (alive(crawl)) await guarded(crawl, () => chatAt(crawl, size));
   }
 }
 
+async function lookNarrow(crawl, route, narrowest) {
+  const opened = await open(crawl, route);
+  crawl.steps.push(`at ${narrowest.name}`);
+  const before = crawl.problems.length;
+  if (opened.ok) await lookOver(crawl, `${route} @${narrowest.name}`);
+  await shoot(crawl, before);
+}
+
 async function narrowPass(crawl) {
-  await chatAt(crawl, { name: 'default' });
+  await guarded(crawl, () => chatAt(crawl, { name: 'default' }));
   const narrowest = sizes[0];
-  await present(crawl, narrowest);
+  await guarded(crawl, () => present(crawl, narrowest));
   for (const route of crawl.visited.values()) {
     if (!alive(crawl)) return;
-    const opened = await open(crawl, route);
-    crawl.steps.push(`at ${narrowest.name}`);
-    const before = crawl.problems.length;
-    if (opened.ok) await lookOver(crawl, `${route} @${narrowest.name}`);
-    await shoot(crawl, before);
+    await guarded(crawl, () => lookNarrow(crawl, route, narrowest));
   }
-  if (alive(crawl)) await chatAt(crawl, narrowest);
+  if (alive(crawl)) await guarded(crawl, () => chatAt(crawl, narrowest));
 }
 
 async function chatAt(crawl, size) {
@@ -335,25 +340,30 @@ function unreached(crawl) {
 async function crawlAll(crawl) {
   for (const screen of crawl.config.screens.values()) if (!screen.route.includes('{')) schedule(crawl, screen.route);
   while (crawl.queue.length > 0 && alive(crawl)) {
-    await visit(crawl, crawl.queue.shift());
+    const route = crawl.queue.shift();
+    await guarded(crawl, () => visit(crawl, route));
     if (crawl.queue.length === 0) guessMissing(crawl);
     if (crawl.queue.length === 0) widen(crawl);
   }
   unreached(crawl);
 }
 
-export async function run(config, launch, Socket) {
-  const crawl = newCrawl(config);
+async function crawlWith(crawl, launch, Socket) {
   const chrome = await start(crawl, launch, Socket);
   try {
     await crawlAll(crawl);
-    await (config.quick ? narrowPass(crawl) : sizesPass(crawl));
+    await (crawl.config.quick ? narrowPass(crawl) : sizesPass(crawl));
     mixedWords(crawl);
     titleGaps(crawl);
     await compareShots(crawl);
   } finally {
     chrome.kill();
   }
+}
+
+export async function run(config, launch, Socket) {
+  const crawl = newCrawl(config);
+  await guarded(crawl, () => crawlWith(crawl, launch, Socket));
   serverErrors(crawl, config.serverLog);
   const summary = report(crawl);
   crawl.log.end();

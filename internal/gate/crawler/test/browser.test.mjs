@@ -14,7 +14,8 @@ test('chrome starts headless with its own profile, denies what the crawl must no
   const chrome = await start(crawl, launch, Socket);
   assert.equal(chrome, launched[0].chrome);
   assert.equal(launched[0].file, '/opt/chrome');
-  assert.deepEqual(launched[0].args, [...chromeFlags, '--log-net-log=/out/net.json', '--net-log-capture-mode=Default', `--user-data-dir=${out}/profile`, 'about:blank']);
+  assert.deepEqual(launched[0].args, [...chromeFlags, '--unsafely-treat-insecure-origin-as-secure=https://web:8080', '--log-net-log=/out/net.json', '--net-log-capture-mode=Default',
+    `--user-data-dir=${out}/profile`, 'about:blank']);
   assert.deepEqual(launched[0].options, { stdio: ['ignore', 'ignore', 'pipe'] });
   assert.equal(crawl.cdp.socket.url, 'ws://127.0.0.1:9222/devtools/browser/x');
   assert.equal(crawl.cdp.session, 'S1');
@@ -48,7 +49,7 @@ test('chrome is killed when it cannot be driven', async () => {
   const { crawl } = fakeCrawl(undefined, { chromium: 'chrome' });
   const { launch, launched } = fakeLaunch();
   const refusing = socketClass((message) => (message.method === 'Target.createTarget' ? Promise.reject(new Error('no targets')) : {}));
-  await assert.rejects(start(crawl, launch, refusing), { message: 'no targets' });
+  await assert.rejects(start(crawl, launch, refusing), { message: 'Target.createTarget: no targets' });
   assert.equal(launched[0].chrome.killed, 1);
   const silent = fakeLaunch('starting\n');
   const pending = start(fakeCrawl(undefined, { chromium: 'chrome' }).crawl, silent.launch, socketClass(answers));
