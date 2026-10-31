@@ -259,7 +259,7 @@ func TestDAST(t *testing.T) {
 	})
 	all := strings.Join(procexectest.LinesOf(ws.Exec), "\n")
 	testutil.Contains(t, all, "docker volume create deploy-hub-gate-web-dast-zap",
-		"run --rm --network deploy-hub-gate-web-dast-net -v deploy-hub-gate-web-dast-zap:/zap/wrk zap@sha256:1 zap-full-scan.py -t http://deploy-hub-gate-web-dast:8080/health -J zap.json -I -m 2 -T 5 -z -config scanner.maxScanDurationInMins=5",
+		"run --rm --network deploy-hub-gate-web-dast-net -v deploy-hub-gate-web-dast-zap:/zap/wrk zap@sha256:1 zap-full-scan.py -t http://deploy-hub-gate-web-dast:8080/health -J zap.json -I -m 2 -T 5 -z -config scanner.maxScanDurationInMins=5 -config scanner.threadPerHost=4",
 		"run --rm -u 0 -v deploy-hub-gate-web-dast-zap:/zap/wrk --entrypoint chown zap@sha256:1 zap:zap /zap/wrk",
 		"docker volume rm -f deploy-hub-gate-web-dast-zap")
 	sim.zapOut = `{"site":[{"alerts":[]}]}`

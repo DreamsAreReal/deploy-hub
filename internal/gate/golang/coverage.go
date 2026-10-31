@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
@@ -181,23 +182,45 @@ func Branches(ctx context.Context, ws gate.Workspace) gate.Outcome {
 	if err != nil {
 		return gate.Fail(err.Error())
 	}
+	runs := branchRuns(ctx, ws, pkgs.Production())
 	covered, total := 0, 0
 	var findings []string
-	for _, p := range pkgs.Production() {
-		rel, rerr := filepath.Rel(ws.Src, p.Dir)
-		if rerr != nil {
-			return gate.Fail(rerr.Error())
+	for _, r := range runs {
+		if r.err != nil {
+			return gate.Fail(r.err.Error())
 		}
-		bc, misses, err := runGobco(ctx, ws, rel)
-		if err != nil {
-			return gate.Fail(err.Error())
-		}
-		covered, total = covered+bc.covered, total+bc.total
-		findings = append(findings, misses...)
+		covered, total = covered+r.count.covered, total+r.count.total
+		findings = append(findings, r.misses...)
 	}
 	pct := ratio(covered, total)
 	values := map[string]float64{ValueBranchCover: pct, ValueBranches: float64(total)}
 	return gate.Judge(pct >= ws.Policy.Thresholds.BranchCoverage, reasonBranchCover, values, findings)
+}
+
+type branchRun struct {
+	count  branchCount
+	misses []string
+	err    error
+}
+
+func branchRuns(ctx context.Context, ws gate.Workspace, pkgs Packages) []branchRun {
+	runs := make([]branchRun, len(pkgs))
+	slots := make(chan struct{}, max(1, ws.Policy.Limits.ParallelPackages))
+	var wg sync.WaitGroup
+	for i, p := range pkgs {
+		wg.Go(func() {
+			slots <- struct{}{}
+			defer func() { <-slots }()
+			rel, err := filepath.Rel(ws.Src, p.Dir)
+			if err != nil {
+				runs[i].err = err
+				return
+			}
+			runs[i].count, runs[i].misses, runs[i].err = runGobco(ctx, ws, rel)
+		})
+	}
+	wg.Wait()
+	return runs
 }
 
 func runGobco(ctx context.Context, ws gate.Workspace, rel string) (branchCount, []string, error) {

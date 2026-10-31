@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,6 +33,10 @@ const (
 	fileMain    = "m.go"
 	fileLibTest = "lib_test.go"
 	testA       = "lib.TestA"
+	meetLimit   = 5 * time.Second
+	cmdGobco    = GobcoBinary + " -branch ./"
+	pkgAlpha    = "alpha"
+	pkgBeta     = "beta"
 )
 
 var errExit = errors.New("exit status 1")
@@ -314,6 +319,36 @@ func TestBranches(t *testing.T) {
 	testutil.Contains(t, Branches(context.Background(), ws(t, script{cmdList: {Err: errExit}})).Reason, cmdList)
 	outside := ws(t, script{cmdListJSON: ok(pkgJSON(t, Package{ImportPath: module, Dir: "relative", GoFiles: []string{fileMain}}))})
 	testutil.Contains(t, Branches(context.Background(), outside).Reason, "Rel: can't make relative")
+}
+
+func TestBranchesCoverPackagesSideBySide(t *testing.T) {
+	w := ws(t, nil)
+	pkg := func(name string) Package {
+		return Package{ImportPath: module + "/" + name, Dir: filepath.Join(w.Src, name), Name: name, GoFiles: []string{name + ".go"}}
+	}
+	pkgs := Packages{pkg(pkgAlpha), pkg(pkgBeta)}
+	a, b := make(chan struct{}), make(chan struct{})
+	var met atomic.Int32
+	meet := func(mine, other chan struct{}) func(procexec.Command) {
+		return func(procexec.Command) {
+			close(mine)
+			select {
+			case <-other:
+				met.Add(1)
+			case <-time.After(meetLimit):
+			}
+		}
+	}
+	w.Exec = &procexectest.Fake{Handler: script{
+		cmdListJSON:         ok(pkgJSON(t, pkgs...)),
+		cmdGobco + pkgAlpha: {Res: procexec.Result{Stdout: "Branch coverage: 1/2\n"}, Run: meet(a, b)},
+		cmdGobco + pkgBeta:  {Res: procexec.Result{Stdout: "Branch coverage: 2/2\n"}, Run: meet(b, a)},
+	}.Handle}
+	w.Policy.Limits.ParallelPackages = 2
+	out := Branches(context.Background(), w)
+	testutil.Equal(t, met.Load(), int32(2))
+	testutil.Equal(t, out.Values[ValueBranches], float64(4))
+	testutil.Equal(t, out.Values[ValueBranchCover], float64(3)*100/4)
 }
 
 func TestPassedTestsUseRegistryNames(t *testing.T) {

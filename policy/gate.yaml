@@ -20,6 +20,7 @@ limits:
   mutation_disk_gib: 20
   mutation_free_gib: 10
   parallel_checks: 3
+  parallel_packages: 3
 mutation:
   skip_in_deploys: true
 licenses:

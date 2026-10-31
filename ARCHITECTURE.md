@@ -496,7 +496,10 @@ why deploys skip it and the full run every two weeks carries it. The other
 checks run side by side, at most `limits.parallel_checks` at a time: the
 checks up to `dependencies` run in order first, a check that reads another's
 report names it in `After` (or calls `Workspace.WaitFor`, which gives its slot
-back while it waits), and the verdict keeps the catalog order. Each
+back while it waits), and the verdict keeps the catalog order. Inside
+`branch-coverage`, gobco covers up to `limits.parallel_packages` Go packages at
+a time, and the scan of `dast` uses four ZAP threads, since every thread of
+its DOM XSS rule holds a headless Firefox. Each
 mutant runs in its own process group with a memory budget and is killed
 (counted as detected) when it exceeds it. CI has a 120-minute limit for this
 repo, 360 minutes for app deploys.

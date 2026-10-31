@@ -189,6 +189,8 @@ func TestParseRejects(t *testing.T) {
 		"mutation free":      {freeLine, "mutation_free_gib: 0"},
 		"too many parallel":  {freeLine, freeLine + "\n  parallel_checks: 17"},
 		"negative parallel":  {freeLine, freeLine + "\n  parallel_checks: -1"},
+		"too many packages":  {freeLine, freeLine + "\n  parallel_packages: 17"},
+		"negative packages":  {freeLine, freeLine + "\n  parallel_packages: -1"},
 		"licenses":           {"licenses: [MIT]", "licenses: []"},
 		"declared license":   {declaredLine, `"pkg:pypi/legacy": GPL-3.0-only`},
 		"declared purl":      {declaredLine, `"pypi/legacy": MIT`},

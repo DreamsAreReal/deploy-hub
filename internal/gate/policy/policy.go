@@ -87,17 +87,18 @@ type Thresholds struct {
 }
 
 type Limits struct {
-	Check          time.Duration `yaml:"check_timeout"`
-	LongCheck      time.Duration `yaml:"long_check_timeout"`
-	FuzzTime       time.Duration `yaml:"fuzz_time"`
-	FuzzExamples   int           `yaml:"fuzz_examples"`
-	MutantFloor    time.Duration `yaml:"mutant_timeout_floor"`
-	MutantFactor   int           `yaml:"mutant_timeout_factor"`
-	FindingsListed int           `yaml:"findings_listed"`
-	StageReady     time.Duration `yaml:"stage_ready_timeout"`
-	MutationDisk   int64         `yaml:"mutation_disk_gib"`
-	MutationFree   int64         `yaml:"mutation_free_gib"`
-	ParallelChecks int           `yaml:"parallel_checks"`
+	Check            time.Duration `yaml:"check_timeout"`
+	LongCheck        time.Duration `yaml:"long_check_timeout"`
+	FuzzTime         time.Duration `yaml:"fuzz_time"`
+	FuzzExamples     int           `yaml:"fuzz_examples"`
+	MutantFloor      time.Duration `yaml:"mutant_timeout_floor"`
+	MutantFactor     int           `yaml:"mutant_timeout_factor"`
+	FindingsListed   int           `yaml:"findings_listed"`
+	StageReady       time.Duration `yaml:"stage_ready_timeout"`
+	MutationDisk     int64         `yaml:"mutation_disk_gib"`
+	MutationFree     int64         `yaml:"mutation_free_gib"`
+	ParallelChecks   int           `yaml:"parallel_checks"`
+	ParallelPackages int           `yaml:"parallel_packages"`
 }
 
 type App struct {
@@ -298,6 +299,7 @@ func (l Limits) validate() error {
 		positive("mutation_disk_gib", l.MutationDisk),
 		positive("mutation_free_gib", l.MutationFree),
 		atMost("parallel_checks", int64(l.ParallelChecks), maxParallelChecks),
+		atMost("parallel_packages", int64(l.ParallelPackages), maxParallelChecks),
 	)
 }
 

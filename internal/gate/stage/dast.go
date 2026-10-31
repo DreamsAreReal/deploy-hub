@@ -21,7 +21,8 @@ const (
 	zapRootUser     = "0"
 	zapOwner        = "zap:zap"
 	zapFormatOpenAP = "openapi"
-	zapScanCapFmt   = "-config scanner.maxScanDurationInMins=%d"
+	zapConfigFmt    = "-config scanner.maxScanDurationInMins=%d -config scanner.threadPerHost=%d"
+	zapThreads      = 4
 	reasonDAST      = "dynamic scanning found vulnerabilities"
 	reasonCrashed   = "the app stopped during the scan"
 	alertFormat     = "%s %s (plugin %s, %s instances) %s"
@@ -103,7 +104,7 @@ func (s *Stage) zapArgs(vol string) []string {
 		dockerRun, "--rm", flagNetwork, s.Network, "-v", vol+":"+zapMount, s.ws.Policy.Images.ZAP,
 		script, "-t", target, "-J", zapReport, "-I",
 		"-m", strconv.Itoa(minutes(d.Spider)), "-T", strconv.Itoa(minutes(d.MaxTime)),
-		"-z", fmt.Sprintf(zapScanCapFmt, minutes(d.MaxTime)),
+		"-z", fmt.Sprintf(zapConfigFmt, minutes(d.MaxTime), zapThreads),
 	)
 	return append(args, extra...)
 }
