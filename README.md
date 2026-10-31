@@ -288,10 +288,13 @@ dependencies, licenses, workflows, image, DAST); the quality checks are
 reported as `n/a`. Checks that need an image or an HTTP surface are `n/a` for
 app kinds without one (`binary`, `worker`). Nothing else is ever skipped, and a
 check that cannot finish (tool crash, timeout) fails. Each check gets
-`check_timeout`; mutation testing gets `long_check_timeout`. The checks run one
-after another, and the isolated stage (`dast`, `load`, `ui`) runs before mutation
-testing, so a stage that does not come up is reported within minutes of the
-start rather than hours; the order changes no verdict, every check still runs.
+`check_timeout`; mutation testing gets `long_check_timeout`. Up to
+`limits.parallel_checks` checks run side by side, and the isolated stage (`dast`,
+`load`, `ui`) runs before mutation testing, so a stage that does not come up is
+reported within minutes of the start rather than hours; the order changes no
+verdict, every check still runs. Go branch coverage runs gobco, which runs a
+package's tests again under its own instrumentation, on up to
+`limits.parallel_packages` packages at a time.
 
 **Mutation testing** is a built-in engine with every mandatory operator:
 condition inversion, comparison and boundary changes, arithmetic and logical
@@ -461,7 +464,10 @@ the reason keeping the tail of them.
 
 **DAST.** The same isolated stage runs an OWASP ZAP full scan (or the API scan
 when the app declares an OpenAPI path) for the time budget in the policy; any
-alert of Low risk or above blocks the deploy.
+alert of Low risk or above blocks the deploy. The scan uses four threads: ZAP's
+default is twice the host's cores, and the DOM XSS rule opens a headless Firefox
+per thread, which on the 8-core EU host put about 8 GB into one CI slice while
+the stage app itself gets one or two CPUs.
 
 **Allowed files.** `allowed_files` lists exact paths (same pattern rules as
 `localized`) that an app may track although they match `forbidden_files`, for
