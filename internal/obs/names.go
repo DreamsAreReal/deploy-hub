@@ -41,6 +41,8 @@ const (
 	MetricCIQuotaUsedRatio     = "deploy_hub_ci_quota_used_ratio"
 	MetricHostSyncSuccess      = "deploy_hub_host_sync_success"
 	MetricHostFilesChanged     = "deploy_hub_host_files_changed"
+	MetricHostRestartSuccess   = "deploy_hub_host_restart_success"
+	MetricHostRestartPending   = "deploy_hub_host_restart_pending_seconds"
 	MetricSelfUpdateSuccess    = "deploy_hub_self_update_success"
 	MetricSelfUpdateInstalled  = "deploy_hub_self_update_installed"
 	MetricPreemptSuccess       = "deploy_hub_preempt_success"

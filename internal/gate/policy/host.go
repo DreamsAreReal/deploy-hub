@@ -8,44 +8,60 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
 	HostBundleDir = "/deploy-hub/host"
 	UnitDir       = "/etc/systemd/system/"
 	CaddySiteDir  = "/etc/caddy/extra/"
+	RunnerDir     = "/home/runner/runner/"
+	PrevInfix     = ".prev-"
 	suffixService = ".service"
 	suffixTimer   = ".timer"
 	maxHostMode   = 0o755
 	modeBase      = 8
 	modeBits      = 32
+
+	minRestartWait = 30 * time.Second
+	maxRestartWait = 10 * time.Minute
 )
 
-var HostRoots = []string{"/usr/local/sbin/", UnitDir, CaddySiteDir, "/var/lib/node_exporter/"}
+var HostRoots = []string{"/usr/local/sbin/", UnitDir, CaddySiteDir, "/var/lib/node_exporter/", RunnerDir}
 
 var (
 	hostAccount = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 	hostMode    = regexp.MustCompile(`^0[0-7]{3}$`)
 	hostName    = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._@-]{0,99}$`)
 	hostEnvFile = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,40}\.env$`)
+	metricName  = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,99}$`)
 )
 
 var ErrHost = errors.New("invalid host spec")
 
 type Host struct {
-	Files  []HostFile `yaml:"files"`
-	Dirs   []HostDir  `yaml:"dirs"`
-	Timers []string   `yaml:"timers"`
-	Checks []string   `yaml:"checks"`
+	Files   []HostFile   `yaml:"files"`
+	Dirs    []HostDir    `yaml:"dirs"`
+	Timers  []string     `yaml:"timers"`
+	Checks  []string     `yaml:"checks"`
+	Restart *HostRestart `yaml:"restart"`
+}
+
+type HostRestart struct {
+	Unit    string        `yaml:"unit"`
+	Busy    string        `yaml:"busy"`
+	Version string        `yaml:"version"`
+	Within  time.Duration `yaml:"within"`
 }
 
 type HostFile struct {
-	Src   string `yaml:"src"`
-	Dst   string `yaml:"dst"`
-	Owner string `yaml:"owner"`
-	Group string `yaml:"group"`
-	Mode  string `yaml:"mode"`
-	Env   string `yaml:"env"`
+	Src      string `yaml:"src"`
+	Dst      string `yaml:"dst"`
+	Owner    string `yaml:"owner"`
+	Group    string `yaml:"group"`
+	Mode     string `yaml:"mode"`
+	Env      string `yaml:"env"`
+	KeepPrev bool   `yaml:"keep_prev"`
 }
 
 type HostDir struct {
@@ -93,8 +109,34 @@ func validateHost(app string, h *Host) error {
 		errs = append(errs, d.validate(app))
 	}
 	units := h.Units()
-	errs = append(errs, validUnits(app, "timers", suffixTimer, h.Timers, units), validUnits(app, "checks", suffixService, h.Checks, units))
+	errs = append(errs, validUnits(app, "timers", suffixTimer, h.Timers, units), validUnits(app, "checks", suffixService, h.Checks, units), h.validateRestart(app))
 	return errors.Join(errs...)
+}
+
+func (h Host) Kept() []HostFile {
+	var out []HostFile
+	for _, f := range h.Files {
+		if f.KeepPrev {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+func (h Host) validateRestart(app string) error {
+	kept := len(h.Kept())
+	r := h.Restart
+	switch {
+	case r == nil && kept == 0:
+		return nil
+	case r == nil || kept == 0:
+		return fmt.Errorf("%w: app %s: host.restart and keep_prev files go together", ErrHost, app)
+	}
+	unit := hostName.MatchString(r.Unit) && strings.HasSuffix(r.Unit, suffixService)
+	if !unit || !metricName.MatchString(r.Busy) || !metricName.MatchString(r.Version) || r.Within < minRestartWait || r.Within > maxRestartWait {
+		return fmt.Errorf("%w: app %s: host.restart needs a .service unit, busy and version metric names and within %s..%s", ErrHost, app, minRestartWait, maxRestartWait)
+	}
+	return nil
 }
 
 func nonEmptyHost(app, field string, n int) error {

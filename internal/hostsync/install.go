@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/policy"
 	"github.com/DreamsAreReal/deploy-hub/internal/journal"
@@ -39,13 +40,15 @@ var ErrActivate = errors.New("host activation failed, previous files restored")
 
 func (s Syncer) install(ctx context.Context, t target, files []plannedFile) (int, error) {
 	changed := slices.DeleteFunc(slices.Clone(files), func(p plannedFile) bool { return !p.changed })
-	if err := s.backup(t, changed); err != nil {
+	st, release, err := s.restartState(ctx, t)
+	if err != nil {
 		return 0, err
 	}
-	if err := s.ensureDirs(t.spec.Dirs); err != nil {
-		return 0, err
+	defer release()
+	if perr := s.prepare(t, st, changed); perr != nil {
+		return 0, perr
 	}
-	err := s.write(changed)
+	err = s.write(changed)
 	if err == nil {
 		err = s.activate(ctx, t.spec, changed)
 	}
@@ -53,7 +56,17 @@ func (s Syncer) install(ctx context.Context, t target, files []plannedFile) (int
 		s.restore(ctx, t, changed)
 		return len(changed), fmt.Errorf("%w: %w", ErrActivate, err)
 	}
-	return len(changed), nil
+	return len(changed), s.markPending(t, st, len(changed))
+}
+
+func (s Syncer) prepare(t target, st RestartState, changed []plannedFile) error {
+	if err := s.backup(t, changed); err != nil {
+		return err
+	}
+	if err := s.ensureDirs(t.spec.Dirs); err != nil {
+		return err
+	}
+	return s.keepPrevious(t, st, changed)
 }
 
 func (s Syncer) backup(t target, changed []plannedFile) error {
@@ -111,11 +124,19 @@ func (s Syncer) ensureDirs(dirs []policy.HostDir) error {
 		if err := realDir(p); err != nil {
 			return err
 		}
-		if err := errors.Join(s.Chown(p, uid, gid), os.Chmod(p, fs.FileMode(mode))); err != nil {
+		if err := s.own(p, uid, gid, fs.FileMode(mode)); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (s Syncer) own(dir string, uid, gid int, mode fs.FileMode) error {
+	d, err := os.OpenFile(filepath.Clean(dir), os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return err
+	}
+	return errors.Join(s.Chown(d, uid, gid), d.Chmod(mode), d.Close())
 }
 
 func (s Syncer) write(changed []plannedFile) error {
@@ -129,19 +150,22 @@ func (s Syncer) write(changed []plannedFile) error {
 }
 
 func (s Syncer) writeFile(path string, want snapshot) error {
-	tmp := filepath.Join(filepath.Dir(path), tempPrefix+filepath.Base(path)+tempSuffix)
-	_ = os.Remove(tmp)
-	err := writeBody(tmp, want.body)
-	if err == nil {
-		err = errors.Join(s.Chown(tmp, want.uid, want.gid), os.Chmod(tmp, want.mode))
-	}
-	if err == nil {
-		err = os.Rename(tmp, path)
-	}
-	if err != nil {
-		_ = os.Remove(tmp)
-	}
-	return err
+	return inParent(path, func(r *os.Root, name string) error {
+		tmp := tempPrefix + name + tempSuffix
+		_ = r.Remove(tmp)
+		err := s.writeIn(r, tmp, want)
+		if err == nil {
+			err = r.Rename(tmp, name)
+		}
+		if err != nil {
+			_ = r.Remove(tmp)
+		}
+		return err
+	})
+}
+
+func removeFile(path string) error {
+	return inParent(path, func(r *os.Root, name string) error { return ignoreMissing(r.Remove(name)) })
 }
 
 func (s Syncer) activate(ctx context.Context, spec policy.Host, changed []plannedFile) error {
@@ -195,7 +219,7 @@ func (s Syncer) restore(ctx context.Context, t target, changed []plannedFile) {
 	var errs []error
 	for _, p := range changed {
 		if !p.existed {
-			errs = append(errs, ignoreMissing(os.Remove(p.path)))
+			errs = append(errs, removeFile(p.path))
 			continue
 		}
 		errs = append(errs, s.writeFile(p.path, p.old))

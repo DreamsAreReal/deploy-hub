@@ -96,6 +96,7 @@ func (h *harness) run(args ...string) int {
 		Token:        filepath.Join(h.hubDir, "github.token"),
 		CIRoot:       filepath.Join(h.hubDir, "ci"),
 		PreemptState: filepath.Join(h.hubDir, "preempt.json"),
+		Restarts:     filepath.Join(h.hubDir, "host-restart"),
 	}
 	return Run(context.Background(), args, h.lookup, IO{Stdin: strings.NewReader(""), Stdout: h.out, Stderr: h.err}, deps)
 }

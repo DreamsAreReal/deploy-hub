@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/testutil"
 )
@@ -15,6 +16,7 @@ const (
 	obsUnit    = "obs.service"
 	unitPath   = "/etc/systemd/system/obs.service"
 	timerPath  = "/etc/systemd/system/obs.timer"
+	runnerUser = "runner"
 )
 
 func goodHost() *Host {
@@ -145,4 +147,52 @@ func TestHostKindNeedsAHostSpec(t *testing.T) {
 	testutil.True(t, app.HostOnly() && app.HasImage() && !app.HasHTTP(), "a host app ships an image, has no HTTP surface")
 	bot, _ := p.App("bot")
 	testutil.True(t, !bot.HostOnly(), "a worker runs a container")
+}
+
+func runnerHost() *Host {
+	return &Host{
+		Files:   []HostFile{{Src: runnerUser, Dst: RunnerDir + runnerUser, Owner: runnerUser, Group: runnerUser, Mode: "0755", KeepPrev: true}},
+		Restart: &HostRestart{Unit: "runner.service", Busy: "tasks_runner_active_runs", Version: "tasks_runner_info", Within: 2 * time.Minute},
+	}
+}
+
+func TestRestartSpecKeepsThePreviousBinary(t *testing.T) {
+	testutil.NoErr(t, validateHost("tasks", runnerHost()))
+	testutil.Equal(t, len(runnerHost().Kept()), 1)
+	testutil.Equal(t, len(goodHost().Kept()), 0)
+}
+
+func TestRestartSpecRefusesLooseValues(t *testing.T) {
+	cases := map[string]func(h *Host){
+		"no restart":          func(h *Host) { h.Restart = nil },
+		"nothing kept":        func(h *Host) { h.Files[0].KeepPrev = false },
+		"timer unit":          func(h *Host) { h.Restart.Unit = "runner.timer" },
+		"unit path":           func(h *Host) { h.Restart.Unit = "../runner.service" },
+		"query as busy":       func(h *Host) { h.Restart.Busy = "sum(tasks_runner_active_runs)" },
+		"selector as version": func(h *Host) { h.Restart.Version = `tasks_runner_info{version="x"}` },
+		"no wait":             func(h *Host) { h.Restart.Within = 0 },
+		"endless wait":        func(h *Host) { h.Restart.Within = time.Hour },
+		"nested runner path":  func(h *Host) { h.Files[0].Dst = RunnerDir + "bin/runner" },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := runnerHost()
+			mutate(h)
+			testutil.Is(t, validateHost("tasks", h), ErrHost)
+		})
+	}
+}
+
+func TestRestartSpecParsesFromThePolicy(t *testing.T) {
+	p, err := Parse([]byte(valid + `
+    host:
+      files:
+        - {src: runner, dst: /home/runner/runner/runner, owner: runner, group: runner, mode: "0755", keep_prev: true}
+      restart: {unit: runner.service, busy: tasks_runner_active_runs, version: tasks_runner_info, within: 2m}
+`))
+	testutil.NoErr(t, err)
+	app, err := p.App("bot")
+	testutil.NoErr(t, err)
+	testutil.Equal(t, app.Host.Restart.Within, 2*time.Minute)
+	testutil.True(t, app.Host.Files[0].KeepPrev, "keep_prev parsed")
 }

@@ -26,6 +26,7 @@ const (
 	ActionHostSync     = "host-sync"
 	ActionRemoteSync   = "remote-sync"
 	ActionHostBack     = "host-restore"
+	ActionHostRestart  = "host-restart"
 	ActionSelfUpdate   = "self-update"
 	ActionHistorySweep = "history-sweep"
 

@@ -24,6 +24,7 @@ var ErrChanged = errors.New("file changed after it was checked")
 
 type body struct {
 	data  []byte
+	dir   string
 	path  string
 	limit int64
 	sum   [sha256.Size]byte
@@ -39,11 +40,17 @@ func streamed(f policy.HostFile) bool {
 }
 
 func readBody(path string, f policy.HostFile) (body, error) {
+	return readFrom(body{path: path}, f)
+}
+
+func readFrom(at body, f policy.HostFile) (body, error) {
 	if !streamed(f) {
-		data, err := readLimited(path, MaxFileSize)
-		return bytesBody(data), err
+		var buf bytes.Buffer
+		at.limit = MaxFileSize
+		err := at.stream(&buf)
+		return bytesBody(buf.Bytes()), err
 	}
-	b := body{path: path, limit: MaxBinarySize}
+	b := body{dir: at.dir, path: at.path, limit: MaxBinarySize}
 	h := sha256.New()
 	err := b.stream(h)
 	h.Sum(b.sum[:0])
@@ -56,8 +63,20 @@ func readLimited(path string, limit int64) ([]byte, error) {
 	return buf.Bytes(), err
 }
 
+func (b body) open() (*os.File, error) {
+	if b.dir == "" {
+		return os.OpenFile(filepath.Clean(b.path), os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	}
+	r, err := openParent(b.dir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = r.Close() }()
+	return r.OpenFile(b.path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+}
+
 func (b body) stream(w io.Writer) error {
-	f, err := os.OpenFile(filepath.Clean(b.path), os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	f, err := b.open()
 	if err != nil {
 		return err
 	}
@@ -94,4 +113,12 @@ func writeBody(path string, b body) error {
 		return err
 	}
 	return errors.Join(b.copyTo(f), f.Sync(), f.Close())
+}
+
+func (s Syncer) writeIn(r *os.Root, name string, want snapshot) error {
+	f, err := r.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, tempPerm)
+	if err != nil {
+		return err
+	}
+	return errors.Join(want.body.copyTo(f), s.Chown(f, want.uid, want.gid), f.Chmod(want.mode), f.Sync(), f.Close())
 }

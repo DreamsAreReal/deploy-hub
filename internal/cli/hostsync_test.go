@@ -49,3 +49,15 @@ func TestLookupAccountsResolvesNames(t *testing.T) {
 	_, _, err = LookupAccounts(me.Username, "no-such-group-x")
 	testutil.Fails(t, err)
 }
+
+func TestHostRestartTakesNoArguments(t *testing.T) {
+	h := newHarness(t)
+	testutil.Equal(t, h.run(CmdHostRestart, "tasks"), ExitUsage)
+	testutil.Contains(t, h.err.String(), usageHostRestart)
+}
+
+func TestHostRestartWithNothingPendingRestartsNothing(t *testing.T) {
+	h := newHarness(t)
+	testutil.Equal(t, h.run(CmdHostRestart), ExitOK)
+	testutil.Equal(t, len(h.exec.Lines()), 0)
+}
