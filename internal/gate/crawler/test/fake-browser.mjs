@@ -154,6 +154,7 @@ export function fakeApp(app) {
 
   const Socket = socketClass((message, current) => {
     socket = current;
+    if (app.refuse?.includes(message.method)) throw new Error('refused by the test');
     const answer = answers[message.method];
     return answer ? answer(message.params) : {};
   });

@@ -247,7 +247,7 @@ test('a full crawl survives buttons that vanish or turn dangerous, requests that
     'browser-crashed: Chrome closed its DevTools connection during the crawl',
     'server-error: {"level":"ERROR","msg":"database is locked"}',
   ]);
-  assert.deepEqual(crawl.notes.map((entry) => [entry.kind, entry.detail, entry.steps]), [['upload', 'file input is gone', ['open /ui/home', 'upload crawl-sample.md']]]);
+  assert.deepEqual(crawl.notes.map((entry) => [entry.kind, entry.detail, entry.steps]), [['upload', 'DOM.setFileInputFiles: file input is gone', ['open /ui/home', 'upload crawl-sample.md']]]);
   const logged = readFileSync(join(config.out, 'crawl.log'), 'utf8').split('\n').filter((line) => line.startsWith('  ') || line.startsWith('screen'));
   assert.deepEqual(logged, ['screen home /ui/home', '  gone: sheet-opener', '  gone: sheet-opener', '  gone: ghost', '  unsafe now: arm', 'screen tasks /ui/tasks',
     'screen last /ui/last', 'screen task /ui/tasks/9?from=list']);
@@ -284,3 +284,27 @@ test('screens without a title give no title gaps to compare', async (t) => {
   const crawl = await quickCrawl(t, { '/ui/e': `<div data-screen="e">${back}<p>Plain</p></div>` }, screensOf(['e', '/ui/e']));
   assert.deepEqual([crawl.problems, [...crawl.gaps]], [[], []]);
 });
+
+const crawlerErrors = (crawl) => found(crawl.problems.filter((entry) => entry.kind === 'crawler-error'));
+
+test('a refused CDP call becomes a crawler problem of its step and the crawl goes on to its report', async (t) => {
+  const pages = { '/ui/a': screenOf('a'), '/ui/b': screenOf('b') };
+  const { out, browser, config, launch } = crawlOf(t, { pages, refuse: ['Emulation.setEmulatedMedia'] }, { CRAWL_MODE: 'quick' }, screensOf(['a', '/ui/a'], ['b', '/ui/b']));
+  const { crawl, summary } = await pumped(t, () => run(config, launch, browser.Socket));
+  assert.deepEqual(crawlerErrors(crawl), ['crawler-error: Emulation.setEmulatedMedia: refused by the test']);
+  assert.deepEqual([...crawl.visited.values()], ['/ui/a', '/ui/b']);
+  assert.ok(existsSync(join(out, 'screens', 'a.png')) && existsSync(join(out, 'screens', 'b.png')));
+  assert.equal(readFileSync(join(out, 'crawl.md'), 'utf8'), summary);
+});
+
+test('a browser that cannot start still leaves a report that names the refused call', async (t) => {
+  const { out, browser, launched, config, launch } = crawlOf(t, { pages: { '/ui/a': screenOf('a') }, refuse: ['Browser.setPermission'] }, { CRAWL_MODE: 'quick' },
+    screensOf(['a', '/ui/a']));
+  const { crawl, summary } = await pumped(t, () => run(config, launch, browser.Socket));
+  assert.deepEqual(found(crawl.problems), ['crawler-error: Browser.setPermission: refused by the test']);
+  assert.equal(crawl.visited.size, 0);
+  assert.ok(summary.includes('| crawler-error |  | Browser.setPermission: refused by the test |'));
+  assert.equal(readFileSync(join(out, 'crawl.md'), 'utf8'), summary);
+  assert.equal(launched[0].chrome.killed, 1);
+});
+

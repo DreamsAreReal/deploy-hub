@@ -6,12 +6,14 @@ import { listen } from './network.mjs';
 import { checks, frozenClock, helpers } from './page.mjs';
 
 export async function start(crawl, launch = spawn, Socket = WebSocket) {
+  const origin = new URL(crawl.config.base).origin;
   const netLog = crawl.config.netLog ? [`--log-net-log=${crawl.config.netLog}`, '--net-log-capture-mode=Default'] : [];
-  const chrome = launch(crawl.config.chromium, [...chromeFlags, ...netLog, `--user-data-dir=${join(crawl.out, 'profile')}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
+  const secure = `--unsafely-treat-insecure-origin-as-secure=${origin}`;
+  const chrome = launch(crawl.config.chromium, [...chromeFlags, secure, ...netLog, `--user-data-dir=${join(crawl.out, 'profile')}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
   try {
     crawl.cdp = await connect(await within(endpointOf(chrome), limits.hang, 'chrome start'), Socket);
     await call(crawl, 'Browser.setDownloadBehavior', { behavior: 'deny' });
-    for (const name of ['notifications', 'microphone']) await call(crawl, 'Browser.setPermission', { permission: { name }, setting: 'denied', origin: new URL(crawl.config.base).origin });
+    for (const name of ['notifications', 'microphone']) await call(crawl, 'Browser.setPermission', { permission: { name }, setting: 'denied', origin });
     const { targetId } = await call(crawl, 'Target.createTarget', { url: 'about:blank' });
     crawl.cdp.session = (await call(crawl, 'Target.attachToTarget', { targetId, flatten: true })).sessionId;
     listen(crawl);

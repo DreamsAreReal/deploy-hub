@@ -38,14 +38,14 @@ test('a promise that answers in time is passed through, a late one fails by name
 test('a message answers its call or reaches the handler of its event', async () => {
   const seen = [];
   const cdp = { calls: new Map(), handlers: new Map([['Page.loadEventFired', (params) => seen.push(params)]]) };
-  const answered = new Promise((resolve, reject) => cdp.calls.set(1, { resolve, reject }));
-  const refused = new Promise((resolve, reject) => cdp.calls.set(2, { resolve, reject }));
+  const answered = new Promise((resolve, reject) => cdp.calls.set(1, { resolve, reject, method: 'Page.navigate' }));
+  const refused = new Promise((resolve, reject) => cdp.calls.set(2, { resolve, reject, method: 'DOM.getDocument' }));
   deliver(cdp, { id: 1, result: { frameId: 'F' } });
   deliver(cdp, { id: 2, error: { message: 'No node' } });
   deliver(cdp, { method: 'Page.loadEventFired', params: { timestamp: 1 } });
   assert.equal(deliver(cdp, { method: 'Unknown.event', params: {} }), undefined);
   assert.deepEqual(await answered, { frameId: 'F' });
-  await assert.rejects(refused, { message: 'No node' });
+  await assert.rejects(refused, { message: 'DOM.getDocument: No node' });
   assert.deepEqual(seen, [{ timestamp: 1 }]);
   assert.equal(cdp.calls.size, 0);
 });
