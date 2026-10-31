@@ -94,11 +94,6 @@ dependencies:
   - "npm:undici-types"
   - "npm:whatwg-mimetype"
   - "npm:ws"
-  - "pypi:flatbuffers"
-  - "pypi:numpy"
-  - "pypi:onnxruntime"
-  - "pypi:packaging"
-  - "pypi:protobuf"
 forbidden_files:
   - "*state*.md"
   - "*.bak"
