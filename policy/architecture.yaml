@@ -195,6 +195,14 @@ services:
         why: daily at 05:30 UTC, the checks of the vulnerability runbook; new advisories come without an event on the server
       - name: preview-sweep.timer
         why: hourly, removes expired previews whose own one-off timer was lost, for example in a reboot
+      - name: runner-obs-ship.timer
+        why: every minute, ships the Claude Code pipeline telemetry of the agent runner to the observability ingest; the runner has no push of its own
+      - name: runner-tmp-trim.timer
+        why: hourly, removes test and build leftovers older than 3 hours from the agent runner's private /tmp, which an interrupted agent never cleans
+      - name: runner-cache-trim.timer
+        why: hourly, trims the agents' Go build cache past 20 GiB; Go never shrinks it on its own
+      - name: router-backup.timer
+        why: Sunday 03:00 UTC, saves the home router configuration; a router change sends no event to the server
   router:
     owner: DreamsAreReal
     critical: high
