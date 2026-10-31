@@ -624,6 +624,23 @@ puts them into one directory for `PATH`. Archives that ship a whole tree (node,
 the .NET SDK, bats, shellcheck) are unpacked under `trees.d` with links to their
 executables. Bash itself comes from the CI runner (4.1 or newer).
 
+Downloads are cached by SHA-256, so a slow or unreachable upstream (busybox.net
+once broke gates with TLS handshake timeouts) does not fail a gate or a deploy.
+`make toolchain` looks for every archive and source tarball first in the shared
+cache `/var/cache/deploy-hub/tools/<sha256>` on the EU server, then in the
+job user's own cache (`$RUNNER_TOOL_CACHE/deploy-hub-tools`), and only then
+downloads it (three tries) into the own cache. Every file, from a cache or the
+network, is hashed again before use: a file whose content does not match its
+name is ignored (`cached tool ignored` in the log), and with no matching file the
+step fails; there is no fallback to another version. The shared cache belongs to
+root (directory 0755, files 0644), so a `ci-<repo>` user can read it but cannot
+plant a file; only `self-update` (root, every 10 minutes) fills it from the
+`policy/tools.yaml` embedded in the installed binary, downloading what is
+missing or does not match. A failed fill is logged (`tool cache not filled`) and
+does not fail the self-update. Files of older pins stay, so apps that pin an
+older hub keep their hits. The Go tools of the `go` section come from the Go
+module cache of the job user.
+
 `jsonfilter`, the JSON tool of OpenWrt that the router agent of router-bot
 calls, has no release binary, so `make toolchain` builds it. The `sources`
 section of `policy/tools.yaml` pins json-c, libubox and jsonpath by archive URL
@@ -886,6 +903,8 @@ that passed the full gate on `main`:
    `ci-runner-sync` must install the binary's CI runner files. If any of them
    fails, it copies `deploy-hub.prev` back and runs its `sudoers-sync` and
    `ci-runner-sync`.
+   Every run, whether it installed a release or not, also fills the shared
+   toolchain cache `/var/cache/deploy-hub/tools` (see Toolchains).
 5. `ci-runner-sync`: the binary embeds `server/ci-runner` of its commit (hooks
    `ci-job-started`, `ci-runner-clean`, units, `ci-runner-setup`), so the runner
    files ship in the same gated release. When `/opt/deploy-hub/ci-runner`

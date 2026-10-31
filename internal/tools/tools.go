@@ -32,6 +32,7 @@ const (
 	downloadTries   = 3
 	maxDownload     = 512 << 20
 	binPerm         = 0o700
+	cachePerm       = 0o600
 	dirPerm         = 0o700
 	firstBadStatus  = 300
 	gobinEnv        = "GOBIN="
@@ -83,13 +84,17 @@ func LoadManifest(path string) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
+	return ParseManifest(data, filepath.Dir(path))
+}
+
+func ParseManifest(data []byte, dir string) (Manifest, error) {
 	var m Manifest
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	if err := dec.Decode(&m); err != nil {
 		return Manifest{}, fmt.Errorf("%w: %w", ErrManifest, err)
 	}
-	m.dir = filepath.Dir(path)
+	m.dir = dir
 	return m, m.Validate()
 }
 
@@ -147,6 +152,7 @@ func inside(member string) bool {
 type Installer struct {
 	Client *http.Client
 	Dir    string
+	Shared string
 	Cache  string
 	Retry  time.Duration
 	Exec   procexec.Runner
@@ -202,9 +208,19 @@ func (i Installer) buildSources(ctx context.Context, m Manifest) error {
 }
 
 func (i Installer) verified(ctx context.Context, url, want string) ([]byte, error) {
-	if data, ok := i.cached(want); ok {
+	if data, dir, ok := i.cached(want); ok {
+		i.Log.Info("tool taken from the cache", "dir", dir, "sha256", want)
 		return data, nil
 	}
+	data, err := i.downloaded(ctx, url, want)
+	if err != nil {
+		return nil, err
+	}
+	i.keep(want, data)
+	return data, nil
+}
+
+func (i Installer) downloaded(ctx context.Context, url, want string) ([]byte, error) {
 	data, err := i.checked(ctx, url, want)
 	for try := 2; err != nil && try <= downloadTries; try++ {
 		i.Log.Warn("tool download failed, trying again", "url", url, "try", try, "error", err.Error())
@@ -212,11 +228,7 @@ func (i Installer) verified(ctx context.Context, url, want string) ([]byte, erro
 			data, err = i.checked(ctx, url, want)
 		}
 	}
-	if err != nil {
-		return nil, err
-	}
-	i.keep(want, data)
-	return data, nil
+	return data, err
 }
 
 func (i Installer) checked(ctx context.Context, url, want string) ([]byte, error) {
@@ -230,42 +242,64 @@ func (i Installer) checked(ctx context.Context, url, want string) ([]byte, error
 	return data, nil
 }
 
-func (i Installer) cached(want string) ([]byte, bool) {
-	if i.Cache == "" {
-		return nil, false
+func (i Installer) cached(want string) ([]byte, string, bool) {
+	for _, dir := range []string{i.Shared, i.Cache} {
+		data, err := readCached(dir, want)
+		if err == nil {
+			return data, dir, true
+		}
+		if errors.Is(err, ErrChecksum) {
+			i.Log.Warn("cached tool ignored", "dir", dir, "sha256", want, "error", err.Error())
+		}
 	}
-	root, err := os.OpenRoot(i.Cache)
+	return nil, "", false
+}
+
+func readCached(dir, want string) ([]byte, error) {
+	if dir == "" {
+		return nil, os.ErrNotExist
+	}
+	root, err := os.OpenRoot(dir)
 	if err != nil {
-		return nil, false
+		return nil, err
 	}
 	defer func() { _ = root.Close() }()
 	data, err := root.ReadFile(want)
-	return data, err == nil && digestOf(data) == want
+	if err != nil {
+		return nil, err
+	}
+	if got := digestOf(data); got != want {
+		return nil, fmt.Errorf("%w: got %s", ErrChecksum, got)
+	}
+	return data, nil
 }
 
 func (i Installer) keep(want string, data []byte) {
 	if i.Cache == "" {
 		return
 	}
-	if err := i.store(want, data); err != nil {
+	if err := store(i.Cache, want, data, cachePerm); err != nil {
 		i.Log.Warn("tool cache not written", "dir", i.Cache, "error", err.Error())
 	}
 }
 
-func (i Installer) store(want string, data []byte) error {
-	if err := os.MkdirAll(i.Cache, dirPerm); err != nil {
+func store(dir, want string, data []byte, perm os.FileMode) error {
+	if err := os.MkdirAll(dir, dirPerm); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(i.Cache, stagePattern)
+	tmp, err := os.CreateTemp(dir, stagePattern)
 	if err != nil {
 		return err
 	}
 	_, err = tmp.Write(data)
+	if err == nil {
+		err = tmp.Chmod(perm)
+	}
 	if cerr := tmp.Close(); err == nil {
 		err = cerr
 	}
 	if err == nil {
-		err = os.Rename(tmp.Name(), filepath.Join(i.Cache, want))
+		err = os.Rename(tmp.Name(), filepath.Join(dir, want))
 	}
 	if err != nil {
 		_ = os.Remove(tmp.Name())

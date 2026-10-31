@@ -43,6 +43,7 @@ type Updater struct {
 	Exec    procexec.Runner
 	Sudo    Sudoers
 	Runner  RunnerFiles
+	Tools   ToolCache
 	Journal journal.Journal
 	Metrics obs.Pusher
 	Now     func() time.Time
@@ -53,6 +54,7 @@ type Updater struct {
 func (u Updater) Run(ctx context.Context, tag string) error {
 	started := u.Now()
 	r, changed, err := u.update(ctx, tag)
+	u.cacheTools(ctx)
 	sha7 := journal.NoValue
 	if r.Commit != "" {
 		sha7 = registry.Sha7(r.Commit)
@@ -73,6 +75,21 @@ func (u Updater) Run(ctx context.Context, tag string) error {
 	u.Out.Printf("self-update: installed %s\n", r.Tag)
 	u.Log.Info("self-update installed", "release", r.Tag, "previous", u.Current)
 	return nil
+}
+
+// ToolCache keeps the downloads of the gate toolchain on the host, so CI jobs
+// do not depend on every upstream site being reachable.
+type ToolCache interface {
+	Fill(ctx context.Context) error
+}
+
+func (u Updater) cacheTools(ctx context.Context) {
+	if u.Tools == nil {
+		return
+	}
+	if err := u.Tools.Fill(ctx); err != nil {
+		u.Log.Warn("tool cache not filled", "error", err.Error())
+	}
 }
 
 func (u Updater) record(sha7 string, ok bool, started time.Time, extra string) {

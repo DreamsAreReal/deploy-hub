@@ -3,12 +3,14 @@ package cli
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"os"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/policy"
 	"github.com/DreamsAreReal/deploy-hub/internal/procexec"
 	"github.com/DreamsAreReal/deploy-hub/internal/selfupdate"
+	"github.com/DreamsAreReal/deploy-hub/internal/tools"
 	embedded "github.com/DreamsAreReal/deploy-hub/policy"
 	cirunner "github.com/DreamsAreReal/deploy-hub/server/ci-runner"
 )
@@ -70,6 +72,7 @@ func runSelfUpdate(ctx context.Context, a *App, ex procexec.Runner, args []strin
 	u := selfupdate.Updater{
 		Source: selfupdate.Source{API: selfupdate.DefaultAPI, Repo: defaultHubRepo, Token: token, Client: &http.Client{}},
 		Binary: selfupdate.DefaultBinary, Current: Commit, Exec: ex, Sudo: sudo, Runner: a.runnerFiles(ex),
+		Tools:   toolCache{Log: a.Log, Dir: tools.SharedCache},
 		Journal: a.journal(), Metrics: a.metrics(), Now: a.Now, Out: a.Out, Log: a.Log,
 	}
 	if err := u.Run(ctx, tag); err != nil {
@@ -118,4 +121,19 @@ func runBootstrap(ctx context.Context, a *App, ex procexec.Runner, args []string
 	}
 	a.Out.Printf("bootstrap: installed %s on %s\n", r.Tag, a.Config.HostAlias)
 	return ExitOK
+}
+
+type toolCache struct {
+	Log *slog.Logger
+	Dir string
+}
+
+func (c toolCache) Fill(ctx context.Context) error {
+	m, err := tools.ParseManifest(embedded.Tools(), "")
+	if err != nil {
+		return err
+	}
+	inst := tools.Installer{Client: toolsClient(), Retry: toolsRetry, Log: c.Log}
+	_, err = inst.Fill(ctx, m, c.Dir)
+	return err
 }

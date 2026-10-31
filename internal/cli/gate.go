@@ -249,7 +249,7 @@ func runTools(ctx context.Context, a *App, ex procexec.Runner, args []string) in
 	if err := os.Setenv(pathEnv, *dir+string(os.PathListSeparator)+os.Getenv(pathEnv)); err != nil {
 		return a.failWith(toolsPrefix, err)
 	}
-	inst := tools.Installer{Client: toolsClient(), Dir: *dir, Cache: toolsCache(), Retry: toolsRetry, Exec: ex, Log: a.Log}
+	inst := tools.Installer{Client: toolsClient(), Dir: *dir, Shared: tools.SharedCache, Cache: toolsCache(), Retry: toolsRetry, Exec: ex, Log: a.Log}
 	if err := inst.Install(ctx, m); err != nil {
 		return a.failWith(toolsPrefix, err)
 	}

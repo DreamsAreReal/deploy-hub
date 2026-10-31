@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"context"
+	"log/slog"
 	"net/http"
 	"path/filepath"
 	"testing"
@@ -19,4 +21,14 @@ func TestToolsCacheFollowsTheRunner(t *testing.T) {
 	testutil.Equal(t, toolsCache(), "")
 	tr, ok := toolsClient().Transport.(*http.Transport)
 	testutil.True(t, ok && tr.TLSHandshakeTimeout == toolsTLSHandshake, "slow mirrors get a longer TLS handshake")
+}
+
+func TestToolCacheFillsFromTheEmbeddedManifest(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "tools")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := toolCache{Log: slog.New(slog.DiscardHandler), Dir: dir}.Fill(ctx)
+	testutil.Is(t, err, context.Canceled)
+	testutil.Contains(t, err.Error(), "busybox", "golangci-lint", "dotnet")
+	testutil.Perm(t, dir, 0o755)
 }

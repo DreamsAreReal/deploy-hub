@@ -529,3 +529,26 @@ func TestFilesKeepTheirModeUnderAStrictUmask(t *testing.T) {
 	testutil.NoErr(t, f.u.Sudo.Sync(context.Background()))
 	testutil.Perm(t, f.u.Sudo.Path, sudoersPerm)
 }
+
+type toolCache struct {
+	calls int
+	err   error
+}
+
+func (c *toolCache) Fill(context.Context) error {
+	c.calls++
+	return c.err
+}
+
+func TestEveryRunFillsTheToolCacheAndSurvivesItsFailure(t *testing.T) {
+	f := newFixture(t)
+	tc := &toolCache{err: errors.New("busybox.net: TLS handshake timeout")}
+	var logs bytes.Buffer
+	f.u.Tools, f.u.Log = tc, slog.New(slog.NewJSONHandler(&logs, nil))
+	testutil.NoErr(t, f.u.Run(context.Background(), ""))
+	testutil.Equal(t, testutil.Read(t, f.u.Binary), newBinary)
+	f.u.Current = newCommit
+	testutil.NoErr(t, f.u.Run(context.Background(), ""))
+	testutil.Equal(t, tc.calls, 2)
+	testutil.Contains(t, logs.String(), `"msg":"tool cache not filled"`, "TLS handshake timeout")
+}

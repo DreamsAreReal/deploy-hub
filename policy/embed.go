@@ -8,10 +8,17 @@ var gate []byte
 //go:embed architecture.yaml
 var architecture []byte
 
+//go:embed tools.yaml
+var tools []byte
+
 func Gate() []byte {
 	return gate
 }
 
 func Architecture() []byte {
 	return architecture
+}
+
+func Tools() []byte {
+	return tools
 }
