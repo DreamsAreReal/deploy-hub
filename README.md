@@ -766,9 +766,8 @@ root SSH to. `<vps>` is the server address.
 
    `hub.conf` also accepts `acme_email=` (default `admin@<host-slug>.sslip.io`);
    the environment variables `HOST_SLUG`/`ACME_EMAIL` override it.
-   Optional `delivery_url=<tracker>/api/deliveries/<secret>` reports every
-   gate verdict, deploy and rollback to the task tracker as delivery steps
-   (see [Delivery steps](#delivery-steps)); `DEPLOY_HUB_DELIVERY_URL` overrides it.
+   Gate verdicts, deploys and rollbacks are written as delivery steps to the
+   logs (see [Delivery steps](#delivery-steps)); the hub needs no tracker address.
 
 6. **sudoers rule** — the runner (user `deploy`) may run only the root
    commands listed under `hub:` in `policy/gate.yaml` (`caddy-sync`,
@@ -1344,7 +1343,7 @@ that folder for node-exporter (see «Metrics», tasks #792).
 | Path | What |
 |---|---|
 | `/opt/deploy-hub/bin/deploy-hub` | the binary (root-owned, 755) |
-| `/opt/deploy-hub/hub.conf` | `host_slug=`, optional `acme_email=`, `delivery_url=` |
+| `/opt/deploy-hub/hub.conf` | `host_slug=`, optional `acme_email=` (an old `delivery_url=` line is ignored) |
 | `/opt/deploy-hub/apps.list` | allowlist: `<app> [dir]` per line; unknown apps are refused |
 | `/opt/deploy-hub/deploys.log` | append-only journal: `[ISO] app@sha7 action result Ns [smoke=ok\|skip\|fail]` |
 | `/opt/deploy-hub/logs/<command>.log` | structured JSON logs (rotated at 10 MiB) |
@@ -1588,8 +1587,8 @@ metrics show which step broke.
 
 ### Delivery steps
 
-With `delivery_url=` set, every command also posts what it proved to the task
-tracker as a JSON array of steps `{repo, target, sha, step, state}`
+Every command also writes what it proved as one JSON log line per step,
+`{"msg":"delivery step","event":"delivery_step","repo","target","sha","step","state","detail"}`
 (`repo` = `github.com/<app repo>`, `target` = `prod`, `sha` = the journal sha7):
 
 | Journal entry | Steps |
@@ -1599,8 +1598,11 @@ tracker as a JSON array of steps `{repo, target, sha, step, state}`
 | `deploy fail` | `deploy fail` |
 | `rollback ok` | `live ok` for the restored sha |
 
-A failed post is logged and never fails the deploy. The tracker matches the sha
-to the tasks whose commits it contains and draws their path to prod.
+The hub knows nothing about the task tracker: Vector ships the line to
+VictoriaLogs and the tracker pulls `event:delivery_step` records itself
+(tasks `DELIVERY_LOGS_URL`), matches the sha to the tasks whose commits it
+contains and draws their path to prod. While the tracker is down nothing is
+lost: it catches up from its cursor.
 
 Metrics — pushed to VictoriaMetrics after every command
 (`DEPLOY_HUB_METRICS_URL`, default
@@ -1661,7 +1663,6 @@ their own time. This is the first step of moving the hub from push to textfile
 | `deploy_hub_mutation_cache_intact` | app | 1 when the stored mutation cache matched its recorded sha256 on read, 0 when it did not |
 | `deploy_hub_arch_live_drift` | app | from `status` (every minute): environment variables the running container got beyond its image and published ports that the app's entry in `policy/architecture.yaml` does not declare, every other app whose containers share a docker network with it while the catalog has no call between the two (either way; `observability` may reach an app that `gives` it something), an `.env` that group or others can read, and the public site the hub serves for the app (`app.conf` without `site=off`) when `exposes` has no `site` of the app's name (an app missing from the catalog counts one more); each item is logged as `live drift` |
 | `deploy_hub_arch_host_drift` | — | from `status` (every minute): timers in `/etc/systemd/system` and caddy files in `/etc/caddy/extra` that no service in `policy/architecture.yaml` declares in `timers` or as a `site` in `exposes` (hidden files and units masked to `/dev/null` are skipped, as systemd skips them), ports open beyond loopback without a `public` expose, users who can act as root without an entry in `admins`, `isolated` units outside their network namespace, and calls of the server to its own sites by a caller the catalog does not name or link (see the catalog section above); everything is read as the `deploy` user, without root; each item is logged as `host drift` |
-| `deploy_hub_delivery_success` | — | 1/0 for the tracker post of the run (absent when delivery is off or there was nothing to post) |
 | `deploy_hub_journal_readable` | — | 0 when `deploys.log` could not be read; the journal counters are then not pushed |
 
 ### Alerts
