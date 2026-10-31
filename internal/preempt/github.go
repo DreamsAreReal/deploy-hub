@@ -88,3 +88,7 @@ func (g GitHub) Cancel(ctx context.Context, repo string, id int64) error {
 func (g GitHub) Rerun(ctx context.Context, repo string, id int64) error {
 	return g.do(ctx, http.MethodPost, g.runsPath(repo)+"/"+strconv.FormatInt(id, 10)+"/rerun", http.StatusCreated, nil)
 }
+
+func (g GitHub) Repo(ctx context.Context, repo, path string, out any) error {
+	return g.do(ctx, http.MethodGet, "/repos/"+g.Owner+"/"+repo+path, http.StatusOK, out)
+}

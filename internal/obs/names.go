@@ -44,6 +44,8 @@ const (
 	MetricSelfUpdateSuccess    = "deploy_hub_self_update_success"
 	MetricSelfUpdateInstalled  = "deploy_hub_self_update_installed"
 	MetricPreemptSuccess       = "deploy_hub_preempt_success"
+	MetricMainGuardOK          = "deploy_hub_main_guard_ok"
+	MetricMainGuardSuccess     = "deploy_hub_main_guard_success"
 	MetricPreemptCancelled     = "deploy_hub_preempt_cancelled"
 	MetricPreemptRerun         = "deploy_hub_preempt_rerun"
 	MetricPreemptRerunsMax     = "deploy_hub_preempt_reruns_max"

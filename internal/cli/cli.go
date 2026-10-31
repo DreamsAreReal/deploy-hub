@@ -66,6 +66,7 @@ const (
 	CmdRunnerSync = "ci-runner-sync"
 	CmdBootstrap  = "bootstrap"
 	CmdPreempt    = "preempt"
+	CmdMainGuard  = "main-guard"
 	CmdScaffold   = "scaffold"
 
 	binDocker    = "docker"
@@ -87,6 +88,7 @@ commands:
   ci-runner-sync                   install the CI runner host files of this build (root)
   bootstrap [sha-<commit>]         install the first gated build on a fresh hub (run on the operator machine)
   preempt                          let main deploys overtake pull request gates on the runner (root, timer)
+  main-guard                       alert on a main that moved without a green pull request (root, timer)
   version                          print the commit this binary was built from
   prune                            delete old app images (keep running + 2 previous)
   provision --app NAME ...         prepare /opt/<app> on the VPS (root)
@@ -155,6 +157,7 @@ var handlers = map[string]handler{
 	CmdVersion:    {run: runVersion},
 	CmdBootstrap:  {run: runBootstrap, binaries: []string{selfupdate.SSHBinary}},
 	CmdPreempt:    {run: runPreempt, onServer: true},
+	CmdMainGuard:  {run: runMainGuard, onServer: true},
 	CmdHostSync:   {run: runHostSync, binaries: []string{hostsync.DockerBinary, hostsync.SystemctlBinary, hostsync.AnalyzeBinary, hostsync.CaddyBinary}, onServer: true},
 	CmdEngine:     {run: runEngineVersion, binaries: []string{tools.GoBinary}},
 	CmdDispatch:   {run: runMutationDispatch, onServer: true},
