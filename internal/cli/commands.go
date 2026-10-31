@@ -53,9 +53,9 @@ func (a *App) journal() journal.Journal {
 }
 
 func runRunner(ctx context.Context, a *App, ex procexec.Runner, args []string) int {
-	only := ""
+	var only []string
 	if len(args) > 1 && args[0] == flagOnly {
-		only, args = args[1], args[2:]
+		only, args = strings.Split(args[1], ","), args[2:]
 	}
 	raw := a.Config.SSHCommand
 	if raw == "" {

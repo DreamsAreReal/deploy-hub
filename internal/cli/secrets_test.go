@@ -2,6 +2,7 @@ package cli
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/DreamsAreReal/deploy-hub/internal/secrets"
@@ -12,6 +13,8 @@ const (
 	storePath = "/srv/server-ops/secrets/values.json.age"
 	keyPath   = "/run/k"
 	agePath   = "/opt/age"
+	appOther  = "other"
+	msgBound  = "bound to another app"
 )
 
 func TestSecretsStoreIsUsedOnlyWhenConfigured(t *testing.T) {
@@ -28,16 +31,27 @@ func TestSecretsStoreIsUsedOnlyWhenConfigured(t *testing.T) {
 	testutil.Equal(t, []string{layer.File, layer.KeyFile, layer.Age}, []string{storePath, keyPath, agePath})
 }
 
-func TestRunnerKeyBoundToOneApp(t *testing.T) {
+func runBound(t *testing.T, only string) (*harness, int) {
 	h := newHarness(t)
 	h.write(filepath.Join(h.hubDir, "apps.list"), appWeb+"\n")
 	h.env[envSSHOriginal] = "history " + appWeb
-	if code := h.run(CmdRunner, flagOnly, "other"); code != ExitFail {
+	return h, h.run(CmdRunner, flagOnly, only)
+}
+
+func TestRunnerKeyBoundToOneApp(t *testing.T) {
+	h, code := runBound(t, appOther)
+	if code != ExitFail {
 		t.Fatalf("a key bound to another app was let through: %s", h.out)
 	}
-	testutil.Contains(t, h.err.String(), "bound to another app")
-	own := newHarness(t)
-	own.write(filepath.Join(own.hubDir, "apps.list"), appWeb+"\n")
-	own.env[envSSHOriginal] = "history " + appWeb
-	testutil.Equal(t, own.run(CmdRunner, flagOnly, appWeb), ExitOK)
+	testutil.Contains(t, h.err.String(), msgBound)
+	_, code = runBound(t, appWeb)
+	testutil.Equal(t, code, ExitOK)
+}
+
+func TestRunnerKeyBoundToTheAppsOfOneRepository(t *testing.T) {
+	for only, refused := range map[string]bool{appOther + "," + appWeb: false, "": true} {
+		h, code := runBound(t, only)
+		testutil.Equal(t, code == ExitFail, refused)
+		testutil.Equal(t, strings.Contains(h.err.String(), msgBound), refused)
+	}
 }

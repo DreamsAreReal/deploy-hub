@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -65,7 +66,7 @@ type Service struct {
 	WorkflowRef string
 	Delivery    delivery.Notifier
 	Secrets     SecretLayer
-	Only        string
+	Only        []string
 	Host        HostSyncer
 	HostApps    []string
 	Catalog     *arch.Catalog
@@ -96,7 +97,7 @@ func (s *Service) Dispatch(ctx context.Context, raw string, stdin io.Reader) int
 		s.requested(req.Verb, journal.NoValue)
 		return s.status(ctx)
 	}
-	if s.Only != "" && req.App != s.Only {
+	if !s.boundTo(req.App) {
 		return s.refuse(raw, msgOtherApp)
 	}
 	entry, err := s.Apps.Lookup(req.App)
@@ -122,6 +123,10 @@ func (s *Service) Dispatch(ctx context.Context, raw string, stdin io.Reader) int
 	default:
 		return s.rollback(ctx, raw, entry, req.Tag)
 	}
+}
+
+func (s *Service) boundTo(app string) bool {
+	return s.Only == nil || slices.Contains(s.Only, app)
 }
 
 func (s *Service) requested(verb, app string) {
