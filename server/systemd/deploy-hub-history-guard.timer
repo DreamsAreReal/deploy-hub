@@ -1,5 +1,5 @@
 [Unit]
-Description=deploy-hub: dispatch history-guard every 5 minutes
+Description=deploy-hub: run history-sweep every 5 minutes
 
 [Timer]
 OnBootSec=2min

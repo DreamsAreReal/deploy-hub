@@ -49,6 +49,8 @@ const (
 	MetricPreemptRerunsMax     = "deploy_hub_preempt_reruns_max"
 	MetricMutationCacheIntact  = "deploy_hub_mutation_cache_intact"
 	MetricTextfileWritten      = "deploy_hub_textfile_written_timestamp_seconds"
+	MetricHistorySweepSuccess  = "deploy_hub_history_sweep_success"
+	MetricHistorySweepDeleted  = "deploy_hub_history_sweep_deleted_refs"
 
 	LabelApp     = "app"
 	LabelAction  = "action"

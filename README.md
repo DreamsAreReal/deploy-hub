@@ -682,6 +682,8 @@ commands:
 | `self-update [sha-<commit>]` | root (systemd timer every 10 minutes) | replaces the binary with the newest gated release of this repo (see [Releases and self-update](#releases-and-self-update)) |
 | `sudoers-sync` | root (called by `self-update`) | writes `/etc/sudoers.d/deploy-hub` from `hub:` in the policy |
 | `ci-runner-sync` | root (called by `self-update`) | installs the embedded `server/ci-runner` into `/opt/deploy-hub/ci-runner` and runs `ci-runner-setup host` when it changed; restarts the idle runners after a change and the busy ones after their job |
+| `systemd-sync` | root (called by `self-update`) | installs the embedded `server/systemd` units into `/etc/systemd/system`, verifies them, reloads systemd and enables the changed timers |
+| `history-sweep` | root (systemd timer every 5 minutes) | deletes the branches and tags of the `history_sweep` repos whose root is not their public snapshot (see Bootstrap, step 8) |
 | `version` | anyone | prints the commit the binary was built from |
 | `prune` | root (systemd timer) | keeps the running image + 2 previous per app |
 | `provision --app … ` | root (from `onboard`) | prepares `/opt/<app>/` and the allowlist line |
@@ -795,34 +797,54 @@ root SSH to. `<vps>` is the server address.
 7. **Timers**: daily prune, the per-minute status refresh (keeps the metrics
    continuous, see Observability) and the self-update every 10 minutes. Copy
    the unit files of `server/systemd/` from the same commit as the release you
-   installed in step 5:
+   installed in step 5 (only this once: from then on every `self-update` runs
+   `systemd-sync`, see [Releases and self-update](#releases-and-self-update)):
 
    ```
-   tar -C server/systemd -cf - . | ssh vpn 'tar -C /etc/systemd/system -xf - --no-same-owner'
+   tar -C server/systemd --exclude='*.go' -cf - . | ssh vpn 'tar -C /etc/systemd/system -xf - --no-same-owner'
    ssh vpn 'systemctl daemon-reload && systemctl enable --now deploy-hub-prune.timer deploy-hub-status.timer deploy-hub-self-update.timer deploy-hub-preempt.timer'
    ```
 
-8. **history-guard timer** — the `history-guard` workflow deletes every branch
-   and tag whose root is not the public snapshot. Its `push` trigger runs the
-   workflow file from the pushed commit, so it fires at once only for refs that
-   already carry the file; refs built purely on the old history are caught by
-   the other triggers. GitHub's `schedule` trigger is best-effort and may
-   never fire, so the VPS dispatches the `history-guard` workflow of
-   `deploy-hub` and `tasks` every 5 minutes. It needs a fine-grained PAT limited
-   to those two repos with only **Actions: Read and write**:
+8. **History sweep** — the repos were recreated on a public snapshot, and no
+   branch or tag may bring back the history from before it. Every 5 minutes
+   `deploy-hub-history-guard.timer` runs `deploy-hub history-sweep` as root on
+   the server (nothing runs on GitHub's machines). For every repo listed in
+   `history_sweep=` of `/opt/deploy-hub/hub.conf` (`owner/name@<root commit of
+   the snapshot>`, separated by spaces) it makes a bare blob-less clone into a
+   private temp dir, takes the root commits of every branch and tag (`git
+   rev-list --max-parents=0`) and deletes through the GitHub API each ref whose
+   roots are not exactly that one commit (each path segment of the ref name is
+   percent-encoded). Kept refs are not touched; a failed clone or API call fails
+   that repo, the other repos still run, and the command exits 1.
 
    ```
-   printf 'Authorization: Bearer %s\n' '<github_pat_…>' \
-     | ssh vpn 'install -d -m 700 /etc/deploy-hub && install -m 600 /dev/stdin /etc/deploy-hub/history-guard.header'
+   ssh vpn 'echo "history_sweep=DreamsAreReal/tasks@3696523d4b36b39b44a372b621d2cf205ed93d30 DreamsAreReal/deploy-hub@6a9fc8af3fb3c88150e2706bb6a3fef8a53f935b" >> /opt/deploy-hub/hub.conf'
+   ```
+
+   It needs one fine-grained PAT, resource owner `DreamsAreReal`, only the
+   repos `tasks` and `deploy-hub`, repository permissions **Contents: Read and
+   write** and **Actions: Read** (for self-update to read the CI runs of a
+   private hub repo),
+   expiry 1 year. Store it without putting it in argv or shell history:
+
+   ```
+   ssh -t vpn 'install -d -m 700 /etc/deploy-hub && read -rsp "token: " t && printf "%s\n" "$t" | install -m 600 /dev/stdin /etc/deploy-hub/github.token'
    ssh vpn 'systemctl enable --now deploy-hub-history-guard.timer'
    ```
 
-   (The unit files arrived with step 7.)
+   (The unit files arrived with step 7.) The token goes to git in the
+   environment (`http.extraHeader`) and to the API in a header, never in argv
+   or logs.
 
    Check: `ssh vpn 'systemctl start deploy-hub-history-guard.service'` exits 0
-   and `gh run list -R DreamsAreReal/deploy-hub -w history-guard.yml -L 1`
-   shows a fresh `workflow_dispatch` run. When the PAT expires, rewrite the
-   header file the same way.
+   and `/opt/deploy-hub/logs/history-sweep.log` shows `history sweep clean` (or
+   `ref deleted`) for every repo. A run that deleted refs or failed is journaled
+   (`deploy-hub@- history-sweep ok|fail … repo=<repo> deleted=<n>`). Metrics
+   `deploy_hub_history_sweep_success{repo}` and
+   `deploy_hub_history_sweep_deleted_refs{repo}`; the alerts
+   `DeployHubHistorySweepFailed` (no successful run of a repo for 30 minutes)
+   and `DeployHubHistorySweepSilent` (no result at all for 30 minutes). When
+   the PAT expires, write the token file the same way.
 
 9. **Observability** (recommended): the shared logs/metrics stack lives in its
    own repo, [DreamsAreReal/observability](https://github.com/DreamsAreReal/observability).
@@ -882,10 +904,11 @@ that passed the full gate on `main`:
      from `version`.
 4. It keeps the current binary as `deploy-hub.prev`, renames the candidate into
    place, then checks the installed binary: `version` must print the commit,
-   `sudoers-sync` (from the new binary's policy) must pass `visudo -cf` and
-   `ci-runner-sync` must install the binary's CI runner files. If any of them
-   fails, it copies `deploy-hub.prev` back and runs its `sudoers-sync` and
-   `ci-runner-sync`.
+   `sudoers-sync` (from the new binary's policy) must pass `visudo -cf`,
+   `ci-runner-sync` must install the binary's CI runner files and
+   `systemd-sync` its systemd units. If any of them fails, it copies
+   `deploy-hub.prev` back and runs its `sudoers-sync`, `ci-runner-sync` and
+   `systemd-sync`.
 5. `ci-runner-sync`: the binary embeds `server/ci-runner` of its commit (hooks
    `ci-job-started`, `ci-runner-clean`, units, `ci-runner-setup`), so the runner
    files ship in the same gated release. When `/opt/deploy-hub/ci-runner`
@@ -907,16 +930,24 @@ that passed the full gate on `main`:
    runner picks up in the instant between the check and the restart can still
    fail. A rollback runs `host` of the previous tree, and trees older than this
    change restart every runner.
+6. `systemd-sync`: the binary embeds the units of `server/systemd` of its
+   commit (the prune, status, self-update, preempt and history-guard services
+   and timers). It touches only those names in `/etc/systemd/system`: when one
+   differs (content, mode 0644, a symlink), it writes the changed units
+   atomically, runs `systemd-analyze verify` on them, `systemctl daemon-reload`
+   and `systemctl enable --now` for the changed timers. If a step fails, it puts
+   the previous units back (removes the new ones) and reloads systemd again.
 
 Every installed or refused release is journaled (`deploy-hub@<sha7> self-update
 ok|fail`, a restore adds `restored=ok|fail`); a run that finds the installed
-commit only rewrites the sudoers rule and the CI runner files if they drifted
-(an installed runner tree is journaled like a release). Metrics:
+commit only rewrites the sudoers rule, the CI runner files and the systemd
+units if they drifted (an installed runner tree or unit is journaled like a
+release). Metrics:
 `deploy_hub_self_update_success` and `deploy_hub_self_update_installed`; the
 alert `DeployHubSelfUpdateFailed` fires when no run succeeded for 40 minutes.
 To pin an older gated release, run `sudo /opt/deploy-hub/bin/deploy-hub
 self-update sha-<commit>`; the next timer run moves back to the latest one.
-A release older than `ci-runner-sync` cannot be pinned: its binary fails that
+A release older than `systemd-sync` cannot be pinned: its binary fails that
 check and the current one is restored.
 After a deliberate rewrite of `main`, the timer refuses the new releases
 (`release commit does not descend from the installed one`) until an operator

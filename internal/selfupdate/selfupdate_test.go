@@ -66,6 +66,7 @@ const (
 	candidate       = CandidateCommand + " version"
 	syncCmd         = InstalledCommand + " sudoers-sync"
 	runnerCmd       = InstalledCommand + " ci-runner-sync"
+	unitCmd         = InstalledCommand + " systemd-sync"
 	setupCmd        = SetupCommand + " host"
 )
 
@@ -183,12 +184,17 @@ func newFixture(t *testing.T) *fixture {
 	h.routes[zipPath] = zipOf(t, BuiltEntry, newBinary)
 	dir := t.TempDir()
 	testutil.Write(t, filepath.Join(dir, "deploy-hub"), oldBinary)
+	testutil.Mkdir(t, filepath.Join(dir, "system"))
 	f := &fixture{hub: h, metrics: &capture{}, out: &bytes.Buffer{}}
 	f.script = procexectest.Script{
 		candidate: {Res: procexec.Result{Stdout: newCommit + "\n"}},
 		version:   {Res: procexec.Result{Stdout: newCommit + "\n"}},
 		syncCmd:   {},
 		runnerCmd: {},
+		unitCmd:   {},
+		analyze:   {},
+		reload:    {},
+		enable:    {},
 		setupCmd:  {},
 		verify:    {},
 	}
@@ -202,6 +208,7 @@ func newFixture(t *testing.T) *fixture {
 		Sudo: Sudoers{Path: filepath.Join(dir, "sudoers"), Binary: DefaultBinary, Exec: f.exec,
 			Hub: policy.Hub{SudoUser: "deploy", SudoCommands: []string{policy.SudoCaddySync, policy.SudoHostSync, policy.SudoSelfUpdate}}},
 		Runner:  RunnerFiles{Files: runnerTree(), Dir: filepath.Join(dir, "ci-runner"), Exec: f.exec, Runners: idleHost(t, f.exec)},
+		Units:   UnitFiles{Files: unitTree(), Dir: filepath.Join(dir, "system"), Exec: f.exec},
 		Journal: journal.Journal{Path: filepath.Join(dir, "deploys.log"), Now: now},
 		Metrics: f.metrics, Now: now, Out: console.New(f.out), Log: slog.New(slog.DiscardHandler),
 	}
@@ -221,7 +228,7 @@ func TestInstallsTheLatestGatedRelease(t *testing.T) {
 	testutil.Equal(t, testutil.Read(t, f.u.Binary+previousSuffix), oldBinary)
 	testutil.Perm(t, f.u.Binary, binaryPerm)
 	testutil.Missing(t, f.u.Binary+candidateSuffix)
-	testutil.Equal(t, strings.Join(f.exec.Lines(), "\n"), strings.Join([]string{candidate, version, syncCmd, runnerCmd}, "\n"))
+	testutil.Equal(t, strings.Join(f.exec.Lines(), "\n"), strings.Join([]string{candidate, version, syncCmd, runnerCmd, unitCmd}, "\n"))
 	testutil.Contains(t, f.journal(t), "deploy-hub@2222222 self-update ok")
 	testutil.Contains(t, f.out.String(), "self-update: installed "+newTag)
 	testutil.Equal(t, f.metrics.value(obs.MetricSelfUpdateSuccess), 1.0)
@@ -236,12 +243,15 @@ func TestUpToDateKeepsTheSudoersRuleAndTheRunnerFiles(t *testing.T) {
 	testutil.Contains(t, f.journal(t), "deploy-hub@2222222 self-update ok")
 	testutil.Equal(t, f.metrics.value(obs.MetricSelfUpdateInstalled), 1.0)
 	testutil.Equal(t, f.exec.Count(setupCmd), 1)
+	testutil.Equal(t, f.exec.Count(reload), 1)
+	testutil.Equal(t, testutil.Read(t, filepath.Join(f.u.Units.Dir, timerName)), timerBody)
 	testutil.NoErr(t, os.Remove(f.u.Journal.Path))
 	f.metrics.samples = nil
 	f.out.Reset()
 	testutil.NoErr(t, f.u.Run(context.Background(), ""))
 	testutil.Equal(t, f.exec.Count(setupCmd), 1)
 	testutil.Equal(t, testutil.Read(t, f.u.Binary), oldBinary)
+	testutil.Equal(t, f.exec.Count(reload), 1)
 	testutil.Equal(t, testutil.Read(t, f.u.Sudo.Path), f.u.Sudo.Render())
 	testutil.Equal(t, f.journal(t), "")
 	testutil.Contains(t, f.out.String(), "self-update: 2222222 is up to date")

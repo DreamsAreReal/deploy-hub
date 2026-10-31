@@ -26,6 +26,7 @@ import (
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/scan"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/shell"
 	"github.com/DreamsAreReal/deploy-hub/internal/gate/source"
+	"github.com/DreamsAreReal/deploy-hub/internal/historysweep"
 	"github.com/DreamsAreReal/deploy-hub/internal/hostsync"
 	"github.com/DreamsAreReal/deploy-hub/internal/obs"
 	"github.com/DreamsAreReal/deploy-hub/internal/onboard"
@@ -44,29 +45,31 @@ const (
 	ExitFail  = 1
 	ExitUsage = 2
 
-	CmdRunner     = "runner"
-	CmdRender     = "render"
-	CmdArchReport = "arch-report"
-	CmdCaddySync  = "caddy-sync"
-	CmdPrune      = "prune"
-	CmdProvision  = "provision"
-	CmdFacts      = "facts"
-	CmdOnboard    = "onboard"
-	CmdGate       = "gate"
-	CmdTools      = "tools"
-	CmdMCP        = "mcp"
-	CmdHostSync   = "host-sync"
-	CmdSelfUpdate = "self-update"
-	CmdSudoers    = "sudoers-sync"
-	CmdVersion    = "version"
-	CmdEngine     = "engine-version"
-	CmdDispatch   = "mutation-dispatch"
-	CmdImport     = "mutation-import"
-	CmdChunk      = "mutation-run"
-	CmdRunnerSync = "ci-runner-sync"
-	CmdBootstrap  = "bootstrap"
-	CmdPreempt    = "preempt"
-	CmdScaffold   = "scaffold"
+	CmdRunner       = "runner"
+	CmdRender       = "render"
+	CmdArchReport   = "arch-report"
+	CmdCaddySync    = "caddy-sync"
+	CmdPrune        = "prune"
+	CmdProvision    = "provision"
+	CmdFacts        = "facts"
+	CmdOnboard      = "onboard"
+	CmdGate         = "gate"
+	CmdTools        = "tools"
+	CmdMCP          = "mcp"
+	CmdHostSync     = "host-sync"
+	CmdSelfUpdate   = "self-update"
+	CmdSudoers      = "sudoers-sync"
+	CmdHistorySweep = "history-sweep"
+	CmdVersion      = "version"
+	CmdEngine       = "engine-version"
+	CmdDispatch     = "mutation-dispatch"
+	CmdImport       = "mutation-import"
+	CmdChunk        = "mutation-run"
+	CmdRunnerSync   = "ci-runner-sync"
+	CmdUnitSync     = "systemd-sync"
+	CmdBootstrap    = "bootstrap"
+	CmdPreempt      = "preempt"
+	CmdScaffold     = "scaffold"
 
 	binDocker    = "docker"
 	binSudo      = "sudo"
@@ -84,9 +87,11 @@ commands:
   host-sync <app> <tag>            install the app's gated host files as root (policy host spec)
   self-update [sha-<commit>]       replace this binary with a released, gated build (root)
   sudoers-sync                     write the sudoers rule of the runner from the policy (root)
+  history-sweep                    delete refs of hub.conf history_sweep repos not rooted at their snapshot (root)
   ci-runner-sync                   install the CI runner host files of this build (root)
   bootstrap [sha-<commit>]         install the first gated build on a fresh hub (run on the operator machine)
   preempt                          let main deploys overtake pull request gates on the runner (root, timer)
+  systemd-sync                     install the hub systemd units of this build (root)
   version                          print the commit this binary was built from
   prune                            delete old app images (keep running + 2 previous)
   provision --app NAME ...         prepare /opt/<app> on the VPS (root)
@@ -137,29 +142,31 @@ type handler struct {
 var sourceWord = regexp.MustCompile(`^[a-z][a-z-]{0,39}$`)
 
 var handlers = map[string]handler{
-	CmdRunner:     {run: runRunner, binaries: []string{binDocker, binSudo}, onServer: true},
-	CmdRender:     {run: runRender},
-	CmdArchReport: {run: runArchReport},
-	CmdCaddySync:  {run: runCaddySync, binaries: []string{binCaddy, binSystemctl}, onServer: true},
-	CmdPrune:      {run: runPrune, binaries: []string{binDocker}, onServer: true},
-	CmdProvision:  {run: runProvision, binaries: []string{binCaddy, binSystemctl}, onServer: true},
-	CmdFacts:      {run: runFacts, onServer: true},
-	CmdOnboard:    {run: runOnboard, binaries: []string{binGH, binGit, binSSH, onboard.SSHKeygen}},
-	CmdScaffold:   {run: runScaffold},
-	CmdGate:       {run: runGate, binaries: gateBinaries, verbose: true},
-	CmdTools:      {run: runTools, binaries: []string{tools.GoBinary, tools.TarBinary, tools.CmakeBinary, tools.CCBinary, tools.LemonBinary, tools.MakeBinary}, verbose: true},
-	CmdMCP:        {run: runMCP, binaries: []string{binSSH}},
-	CmdSelfUpdate: {run: runSelfUpdate, binaries: []string{selfupdate.InstalledCommand, selfupdate.CandidateCommand, selfupdate.VisudoCommand, selfupdate.SetupCommand, procexec.CIRunnerSystemctl}, onServer: true},
-	CmdRunnerSync: {run: runRunnerSync, binaries: []string{selfupdate.SetupCommand, procexec.CIRunnerSystemctl}, onServer: true},
-	CmdSudoers:    {run: runSudoersSync, binaries: []string{selfupdate.VisudoCommand}, onServer: true},
-	CmdVersion:    {run: runVersion},
-	CmdBootstrap:  {run: runBootstrap, binaries: []string{selfupdate.SSHBinary}},
-	CmdPreempt:    {run: runPreempt, onServer: true},
-	CmdHostSync:   {run: runHostSync, binaries: []string{hostsync.DockerBinary, hostsync.SystemctlBinary, hostsync.AnalyzeBinary, hostsync.CaddyBinary}, onServer: true},
-	CmdEngine:     {run: runEngineVersion, binaries: []string{tools.GoBinary}},
-	CmdDispatch:   {run: runMutationDispatch, onServer: true},
-	CmdImport:     {run: runMutationImport, onServer: true},
-	CmdChunk:      {run: runMutationRun, binaries: chunkBinaries, verbose: true},
+	CmdRunner:       {run: runRunner, binaries: []string{binDocker, binSudo}, onServer: true},
+	CmdRender:       {run: runRender},
+	CmdArchReport:   {run: runArchReport},
+	CmdCaddySync:    {run: runCaddySync, binaries: []string{binCaddy, binSystemctl}, onServer: true},
+	CmdPrune:        {run: runPrune, binaries: []string{binDocker}, onServer: true},
+	CmdProvision:    {run: runProvision, binaries: []string{binCaddy, binSystemctl}, onServer: true},
+	CmdFacts:        {run: runFacts, onServer: true},
+	CmdOnboard:      {run: runOnboard, binaries: []string{binGH, binGit, binSSH, onboard.SSHKeygen}},
+	CmdScaffold:     {run: runScaffold},
+	CmdGate:         {run: runGate, binaries: gateBinaries, verbose: true},
+	CmdTools:        {run: runTools, binaries: []string{tools.GoBinary, tools.TarBinary, tools.CmakeBinary, tools.CCBinary, tools.LemonBinary, tools.MakeBinary}, verbose: true},
+	CmdMCP:          {run: runMCP, binaries: []string{binSSH}},
+	CmdSelfUpdate:   {run: runSelfUpdate, binaries: []string{selfupdate.InstalledCommand, selfupdate.CandidateCommand, selfupdate.VisudoCommand, selfupdate.SetupCommand, procexec.CIRunnerSystemctl, selfupdate.AnalyzeCommand, selfupdate.SystemctlCommand}, onServer: true},
+	CmdRunnerSync:   {run: runRunnerSync, binaries: []string{selfupdate.SetupCommand, procexec.CIRunnerSystemctl}, onServer: true},
+	CmdSudoers:      {run: runSudoersSync, binaries: []string{selfupdate.VisudoCommand}, onServer: true},
+	CmdUnitSync:     {run: runUnitSync, binaries: []string{selfupdate.AnalyzeCommand, selfupdate.SystemctlCommand}, onServer: true},
+	CmdHistorySweep: {run: runHistorySweep, binaries: []string{historysweep.GitBinary}, onServer: true},
+	CmdVersion:      {run: runVersion},
+	CmdBootstrap:    {run: runBootstrap, binaries: []string{selfupdate.SSHBinary}},
+	CmdPreempt:      {run: runPreempt, onServer: true},
+	CmdHostSync:     {run: runHostSync, binaries: []string{hostsync.DockerBinary, hostsync.SystemctlBinary, hostsync.AnalyzeBinary, hostsync.CaddyBinary}, onServer: true},
+	CmdEngine:       {run: runEngineVersion, binaries: []string{tools.GoBinary}},
+	CmdDispatch:     {run: runMutationDispatch, onServer: true},
+	CmdImport:       {run: runMutationImport, onServer: true},
+	CmdChunk:        {run: runMutationRun, binaries: chunkBinaries, verbose: true},
 }
 
 var gateBinaries = []string{

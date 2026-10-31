@@ -1,10 +1,16 @@
 package cli
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/DreamsAreReal/deploy-hub/internal/console"
+	"github.com/DreamsAreReal/deploy-hub/internal/hub"
 	"github.com/DreamsAreReal/deploy-hub/internal/testutil"
 )
 
@@ -68,4 +74,25 @@ func TestBootstrapTakesOneTag(t *testing.T) {
 	h := newHarness(t)
 	testutil.Equal(t, h.run(CmdBootstrap, "sha-0123456789abcdef0123456789abcdef01234567"), ExitFail)
 	testutil.Excludes(t, h.err.String(), usageBootstrap)
+}
+
+func TestSyncInstalledReportsWhatTheInstalledBinaryChanged(t *testing.T) {
+	out, errOut := &bytes.Buffer{}, &bytes.Buffer{}
+	a := &App{Config: Config{Paths: hub.Paths{Dir: hub.DefaultDir}}, Out: console.New(out), Err: console.New(errOut), Log: slog.New(slog.DiscardHandler)}
+	changed := func(context.Context) (bool, error) { return true, nil }
+	same := func(context.Context) (bool, error) { return false, nil }
+	broken := func(context.Context) (bool, error) { return false, errors.New("disk full") }
+	testutil.Equal(t, a.syncInstalled(context.Background(), unitSyncPrefix, "/etc/systemd/system", changed), ExitOK)
+	testutil.Equal(t, out.String(), "systemd-sync: installed /etc/systemd/system\n")
+	testutil.Equal(t, a.syncInstalled(context.Background(), unitSyncPrefix, "/etc/systemd/system", same), ExitOK)
+	testutil.Equal(t, out.String(), "systemd-sync: installed /etc/systemd/system\n")
+	testutil.Equal(t, a.syncInstalled(context.Background(), unitSyncPrefix, "/etc/systemd/system", broken), ExitFail)
+	testutil.Equal(t, errOut.String(), "systemd-sync: disk full\n")
+}
+
+func TestUnitSyncRunsOnlyFromTheInstalledBinary(t *testing.T) {
+	h := newHarness(t)
+	testutil.Equal(t, h.run(CmdUnitSync), ExitFail)
+	testutil.Contains(t, h.err.String(), "systemd-sync: "+ErrNotInstalled.Error())
+	testutil.Equal(t, len(h.exec.Lines()), 0)
 }
