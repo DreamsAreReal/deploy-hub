@@ -44,12 +44,12 @@ func TestDeployWaitsWhenTheSecretsStoreIsLocked(t *testing.T) {
 
 func TestKeyBoundToOneAppCannotTouchAnother(t *testing.T) {
 	e := newEnv(t)
-	e.svc.Only = appOther
+	e.svc.Only = []string{appOther}
 	testutil.Equal(t, e.dispatch("deploy web "+goodTag, meta()), ExitFail)
 	e.expectOut(e.err, msgOtherApp)
 	testutil.Equal(t, e.exec.Count("docker pull"), 0)
 	bound := newEnv(t)
-	bound.svc.Only = appName
+	bound.svc.Only = []string{appOther, appName}
 	testutil.Equal(t, bound.dispatch("deploy web "+goodTag, meta()), ExitOK)
 	testutil.Equal(t, refusalReason(msgOtherApp), reasonOtherApp)
 }
