@@ -32,6 +32,8 @@ services:
         why: daily at 04:10 UTC, removes app images beyond the running one and the two previous, so no deploy waits for it
       - name: deploy-hub-preempt.timer
         why: every 30 seconds, cancels pull request gates that a main deploy waits behind; the GitHub queue sends no event to the server
+      - name: deploy-hub-main-guard.timer
+        why: every 5 minutes, checks that main of every runner repo moved only through a merged pull request with green checks; private repos on the free plan have no branch protection and GitHub sends no event to the server
       - name: ci-runner-status.timer
         why: every minute, pushes the CI runner connection state and the CI disk fill; a runner that drops off sends no event
       - name: ci-mutation@.timer

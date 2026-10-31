@@ -174,6 +174,11 @@ apps:
           secrets; deploy-hub preempt on the host cancels it for a main deploy and re-runs it after, #679).
           This is the only accepted workflow finding.
     scenarios:
+      - id: main-guard-flags-a-main-that-skipped-the-gate
+        category: security
+        tests:
+          - internal/mainguard.TestUnguardedChangesOfMainAreFlagged
+          - internal/mainguard.TestAMergedGreenPullRequestIsFine
       - id: nothing-reaches-production-before-the-gate
         category: security
         tests:

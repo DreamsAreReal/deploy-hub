@@ -1830,6 +1830,20 @@ rulesets or required checks: anyone with write access can merge or push to
   at that moment: a change to `deploy.yml` that reaches `main` before its own
   gate applies to the next app deploy. Review changes to `deploy.yml` with that
   in mind.
+- **Watching main.** `deploy-hub-main-guard.timer` runs `deploy-hub main-guard`
+  as root every 5 minutes for every repo with a runner on this host. It keeps
+  the last seen head of `main` in `/var/lib/deploy-hub/main-guard.json` and
+  checks every new commit: `main` must have moved forward (GitHub compare
+  `ahead`; otherwise `rewrite`, a force push or reset), the commit must belong
+  to a pull request merged into `main` (otherwise `no-pull-request`, a direct
+  push), and every check run on that pull request's head must have finished
+  without failure with at least one success (otherwise `checks-not-green`).
+  A violation is logged and sets `deploy_hub_main_guard_ok{repo}` to 0 for
+  24 h (alert `DeployHubMainUnguarded` in the observability repo);
+  `deploy_hub_main_guard_success` is 0 while the run itself fails. It uses
+  `/etc/deploy-hub/github.token` and needs Contents and Pull requests read.
+  It reports, it does not revert: a bad commit is already gated again on the
+  push before anything ships.
 
 ## Development
 

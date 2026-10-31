@@ -1,0 +1,11 @@
+[Unit]
+Description=deploy-hub: alert on a main that moved without a green pull request
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/deploy-hub/bin/deploy-hub main-guard
+StateDirectory=deploy-hub
+StateDirectoryMode=0700
+TimeoutStartSec=5min
