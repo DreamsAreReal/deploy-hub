@@ -125,7 +125,7 @@ func newFixture(t *testing.T) *fixture {
 	f.syncer = Syncer{
 		Policy: pol, Exec: f.exec, Root: f.root, Backups: filepath.Join(base, "backups"),
 		Accounts: func(string, string) (int, int, error) { return os.Getuid(), os.Getgid(), nil },
-		Chown:    os.Chown,
+		Chown:    (*os.File).Chown,
 		Now:      func() time.Time { return time.Date(2026, 10, 23, 1, 0, 0, 0, time.UTC) },
 		Out:      console.New(&bytes.Buffer{}), Log: slog.New(slog.DiscardHandler), Metrics: f.metrics,
 	}
@@ -215,7 +215,7 @@ func TestChangedOwnershipOrModeIsReinstalled(t *testing.T) {
 	testutil.Contains(t, f.journal(t), "changed=1")
 	other := false
 	f.syncer.Accounts = func(string, string) (int, int, error) { return os.Getuid(), os.Getgid() + 1, nil }
-	f.syncer.Chown = func(string, int, int) error { other = true; return nil }
+	f.syncer.Chown = func(*os.File, int, int) error { other = true; return nil }
 	testutil.NoErr(t, f.run(t))
 	testutil.True(t, other, "a different group must be applied")
 	testutil.Contains(t, f.journal(t), "changed=4")
@@ -479,12 +479,12 @@ func TestUnwritableBackupStopsBeforeAnyChange(t *testing.T) {
 func TestFailedWriteRestoresWhatWasWritten(t *testing.T) {
 	f := newFixture(t)
 	calls := 0
-	f.syncer.Chown = func(p string, uid, gid int) error {
+	f.syncer.Chown = func(fd *os.File, uid, gid int) error {
 		calls++
-		if strings.HasSuffix(p, tempSuffix) && calls > 2 {
+		if strings.HasSuffix(fd.Name(), tempSuffix) && calls > 2 {
 			return errors.New("chown refused")
 		}
-		return os.Chown(p, uid, gid)
+		return fd.Chown(uid, gid)
 	}
 	testutil.Is(t, f.run(t), ErrActivate)
 	testutil.Missing(t, f.host(script))

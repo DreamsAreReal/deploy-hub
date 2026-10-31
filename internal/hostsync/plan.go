@@ -115,7 +115,26 @@ func realDir(dir string) error {
 }
 
 func current(path string, f policy.HostFile) (snapshot, bool, error) {
-	info, err := os.Lstat(path)
+	var (
+		snap    snapshot
+		existed bool
+	)
+	err := inParent(path, func(r *os.Root, name string) error {
+		var err error
+		snap, existed, err = currentIn(r, name)
+		return err
+	})
+	if err != nil {
+		return snapshot{}, false, fmt.Errorf("%w: %s", err, path)
+	}
+	if existed {
+		snap.body, err = readFrom(body{dir: filepath.Dir(path), path: filepath.Base(path)}, f)
+	}
+	return snap, existed, err
+}
+
+func currentIn(r *os.Root, name string) (snapshot, bool, error) {
+	info, err := r.Lstat(name)
 	if errors.Is(err, fs.ErrNotExist) {
 		return snapshot{}, false, nil
 	}
@@ -123,15 +142,11 @@ func current(path string, f policy.HostFile) (snapshot, bool, error) {
 		return snapshot{}, false, err
 	}
 	if info.Mode()&fs.ModeSymlink != 0 {
-		return snapshot{}, false, fmt.Errorf("%w: %s", ErrSymlink, path)
+		return snapshot{}, false, ErrSymlink
 	}
 	if !info.Mode().IsRegular() {
-		return snapshot{}, false, fmt.Errorf("%w: %s", ErrNotRegular, path)
-	}
-	content, err := readBody(path, f)
-	if err != nil {
-		return snapshot{}, false, err
+		return snapshot{}, false, ErrNotRegular
 	}
 	st, _ := info.Sys().(*syscall.Stat_t)
-	return snapshot{body: content, mode: info.Mode().Perm(), uid: int(st.Uid), gid: int(st.Gid)}, true, nil
+	return snapshot{mode: info.Mode().Perm(), uid: int(st.Uid), gid: int(st.Gid)}, true, nil
 }

@@ -168,6 +168,27 @@ by hand, then `systemctl daemon-reload` / `systemctl reload caddy`. Re-run for
 the live tag after a fix: `ssh vpn 'sudo /opt/deploy-hub/bin/deploy-hub
 host-sync <app> sha-<sha>'`. Do not copy host files to the server any other way.
 
+## Host restart (host-restart failed or pending)
+
+`DeployHubHostRestartFailed`: the unit of a `restart:` spec (the tasks agent
+runner) was restarted for a new tag, the new version did not report within
+`within`, and the previous binary `<dst>.prev-<sha7>` was put back and the unit
+restarted on it. Find why:
+
+    ssh eu "grep host-restart /opt/deploy-hub/deploys.log | tail"
+    ssh eu "journalctl -u deploy-hub-host-restart -n 50; tail -n 50 /opt/deploy-hub/logs/host-restart.log"
+    ssh eu "journalctl -u runner -n 100"
+
+Fix the app and deploy a new commit; the next deploy records a new pending
+restart. Do not copy the binary by hand.
+
+`DeployHubHostRestartPending`: a restart has waited more than 24 hours because
+the busy metric never read 0 for two minutes (agents keep running), or
+VictoriaMetrics does not answer. The hub never restarts over running agents.
+Check `cat /var/lib/deploy-hub/host-restart/<app>.json` and the busy metric in
+VictoriaMetrics; let the agents finish (or pause new work in the app) and the
+timer restarts the unit within a minute of the idle window.
+
 ## Disk / images
 
 Prune runs daily (`deploy-hub-prune.timer`) and keeps running + 2 previous

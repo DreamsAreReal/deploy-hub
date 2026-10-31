@@ -57,6 +57,7 @@ const (
 	CmdTools        = "tools"
 	CmdMCP          = "mcp"
 	CmdHostSync     = "host-sync"
+	CmdHostRestart  = "host-restart"
 	CmdRemoteSync   = "remote-sync"
 	CmdDeliver      = "remote-deliver"
 	CmdSelfUpdate   = "self-update"
@@ -87,6 +88,7 @@ commands:
   render <app> <in> <out>          render a repo compose into a deploy-ready one
   caddy-sync                       regenerate the Caddyfile from apps.list
   host-sync <app> <tag>            install the app's gated host files as root (policy host spec)
+  host-restart                     restart units of host-synced files once they are idle, verify, roll back (root, timer)
   remote-sync <app> <tag>          send the app's gated remote files to its target (policy remote spec)
   remote-deliver <target> <sha7> <engine>  apply a bundle on stdin to the target over SSH (as dh-remote)
   self-update [sha-<commit>]       replace this binary with a released, gated build (root)
@@ -132,6 +134,7 @@ type App struct {
 	Token        string
 	CIRoot       string
 	PreemptState string
+	Restarts     string
 	source       string
 	textfile     *obs.Textfile
 }
@@ -166,6 +169,7 @@ var handlers = map[string]handler{
 	CmdVersion:      {run: runVersion},
 	CmdBootstrap:    {run: runBootstrap, binaries: []string{selfupdate.SSHBinary}},
 	CmdPreempt:      {run: runPreempt, onServer: true},
+	CmdHostRestart:  {run: runHostRestart, binaries: []string{hostsync.SystemctlBinary}, onServer: true},
 	CmdHostSync:     {run: runHostSync, binaries: []string{hostsync.DockerBinary, hostsync.SystemctlBinary, hostsync.AnalyzeBinary, hostsync.CaddyBinary}, onServer: true},
 	CmdRemoteSync:   {run: runRemoteSync, binaries: []string{binDocker, binSudo}, onServer: true},
 	CmdDeliver:      {run: runRemoteDeliver, binaries: []string{binSSH}, onServer: true},
@@ -192,12 +196,13 @@ type Deps struct {
 	Token        string
 	CIRoot       string
 	PreemptState string
+	Restarts     string
 }
 
 func OSDeps() Deps {
 	return Deps{Exec: func(names ...string) procexec.Runner { return procexec.NewOS(names...) }, Owner: ChownTo, Group: GroupTo, Now: time.Now, Checks: catalog.Checks,
 		Sudoers: selfupdate.DefaultSudoers, Token: selfupdate.DefaultPATFile,
-		CIRoot: preempt.DefaultCIRoot, PreemptState: preempt.DefaultState}
+		CIRoot: preempt.DefaultCIRoot, PreemptState: preempt.DefaultState, Restarts: hostsync.DefaultRestarts}
 }
 
 func Main(ctx context.Context, args []string, env Env, stdio IO) int {
@@ -223,7 +228,7 @@ func Run(ctx context.Context, args []string, env Env, stdio IO, deps Deps) int {
 	counts := &obs.LevelCounts{}
 	log, closeLog := openLogger(cfg, args[0], h, stdio.Stderr, counts)
 	defer closeLog()
-	a := &App{Config: cfg, IO: stdio, Out: stdout, Err: stderr, Now: deps.Now, Log: log, Owner: deps.Owner, Group: deps.Group, Exec: deps.Exec, Checks: deps.Checks, Sudoers: deps.Sudoers, Token: deps.Token, CIRoot: deps.CIRoot, PreemptState: deps.PreemptState,
+	a := &App{Config: cfg, IO: stdio, Out: stdout, Err: stderr, Now: deps.Now, Log: log, Owner: deps.Owner, Group: deps.Group, Exec: deps.Exec, Checks: deps.Checks, Sudoers: deps.Sudoers, Token: deps.Token, CIRoot: deps.CIRoot, PreemptState: deps.PreemptState, Restarts: deps.Restarts,
 		source: textfileSource(args[0], cfg.SSHCommand)}
 	started := time.Now()
 	log.Info("command started", "args", len(args)-1)

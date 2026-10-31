@@ -319,6 +319,8 @@ apps:
         tests:
           - internal/hostsync.TestRefusesSymlinkedOrIrregularDestinations
           - internal/hostsync.TestEnvFileMustNotBeASymlink
+          - internal/hostsync.TestSymlinkedRunnerDirectoryIsRefused
+          - internal/hostsync.TestWritesThroughASwappedDirectoryAreRefused
       - id: host-sync-installs-only-gated-digests
         category: security
         tests:
@@ -334,6 +336,13 @@ apps:
           - internal/hostsync.TestEveryActivationStepFailureRestores
           - internal/runner.TestHostSyncFailureRollsTheContainersBack
           - internal/runner.TestRollbackReinstallsTheTargetsHostFiles
+      - id: host-restart-waits-for-idle-and-rolls-back
+        category: business
+        tests:
+          - internal/hostsync.TestBusyUnitIsNotRestartedHoweverLongItWaits
+          - internal/hostsync.TestIdleUnitIsRestartedAndTheNewVersionConfirmed
+          - internal/hostsync.TestSilentNewVersionRollsBackToThePreviousBinary
+          - internal/hostsync.TestReplacedBinaryKeepsThePreviousCopyAndWaitsForARestart
       - id: self-update-installs-only-gated-releases
         category: security
         tests:

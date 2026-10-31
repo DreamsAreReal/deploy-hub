@@ -679,6 +679,7 @@ commands:
 | `mutation-import <app>` | root (`ci-mutation@<app>`) | takes the chunk's verdicts into the hub |
 | `caddy-sync` | root (via a narrow sudoers rule) | regenerates the Caddyfile from `apps.list` |
 | `host-sync <app> <tag>` | root (via a narrow sudoers rule, called by `runner`) | installs the host files of an app's gated image, as listed in the policy (see [Host files](#host-files-host-sync)) |
+| `host-restart` | root (`deploy-hub-host-restart.timer`, every minute) | restarts the unit of a `restart:` spec once it is idle, verifies the new version, rolls back to `<dst>.prev-<sha7>` (see [Host files](#host-files-host-sync)) |
 | `remote-sync <app> <tag>` | `deploy` (called by `runner`) | packs the remote files of an app's gated image and hands them to `remote-deliver` (see [Delivery to the router](#delivery-to-the-router-remote-sync)) |
 | `remote-deliver <target> <sha7> <engine>` | `dh-remote` (via a narrow sudoers rule) | backs the target up and applies the bundle on stdin there over SSH, with rollback on the target |
 | `self-update [sha-<commit>]` | root (systemd timer every 10 minutes) | replaces the binary with the newest gated release of this repo (see [Releases and self-update](#releases-and-self-update)) |
@@ -1132,8 +1133,9 @@ apps:
   if it changes between the check and the write, the sync is refused. Text
   files and `env:` templates are limited to 1 MiB.
 - `dst` must be a file name directly inside one of `/usr/local/sbin/`,
-  `/etc/systemd/system/`, `/etc/caddy/extra/` or `/var/lib/node_exporter/`
-  (the list is in code, `policy.HostRoots`); `mode` is four octal digits
+  `/etc/systemd/system/`, `/etc/caddy/extra/`, `/var/lib/node_exporter/` or
+  `/home/runner/runner/` (the tasks agent runner; the list is in code,
+  `policy.HostRoots`); `mode` is four octal digits
   without setuid/setgid/sticky bits and without group or other write.
   `timers` and `checks` may only name units the same spec installs. The
   policy loader rejects anything else, so the app repo cannot widen it.
@@ -1156,7 +1158,10 @@ apps that have a `host:` spec in the policy compiled into the server binary.
    `/var/lib/deploy-hub/host-backup/<app>/<UTC stamp>-<sha7>/` (`manifest`
    lists mode, uid, gid and path; the newest 5 copies are kept);
 4. writes each file next to its destination (`O_EXCL|O_NOFOLLOW`), sets owner
-   and mode, and renames it into place;
+   and mode, and renames it into place. Reads and writes go through a handle
+   of the destination directory (`os.Root`) whose inode is compared with the
+   path after opening, so a directory owned by a non-root user (the runner's)
+   cannot be swapped for a symlink to send root's write elsewhere;
 5. activates: `systemd-analyze verify` and `systemctl daemon-reload` when a
    unit changed, `caddy validate` and `systemctl reload caddy` when a Caddy
    site changed, `systemctl enable --now <timers>`, then `systemctl start
@@ -1186,6 +1191,45 @@ an earlier tag that passed a deploy. `status` reports such an app as
 
 The host spec ships with the binary (`policy/gate.yaml` is embedded), so a
 change to it reaches the server only with a new binary release.
+
+**Restarting a long-running unit (host-restart).** A host file can belong to a
+unit that must not be cut off mid-work, like the tasks agent runner
+(`runner.service`): its agents run for hours. Such a spec marks the binary
+`keep_prev: true` and adds `restart:`:
+
+```yaml
+    host:
+      files:
+        - {src: runner, dst: /home/runner/runner/runner, owner: runner, group: runner, mode: "0755", keep_prev: true}
+      restart: {unit: runner.service, busy: tasks_runner_active_runs, version: tasks_runner_info, within: 2m}
+```
+
+- `host-sync` copies the file it replaces to `<dst>.prev-<sha7>` (sha7 of the
+  tag that installed it; `.prev-unknown` the first time) and removes older
+  `<dst>.prev-*` copies, then records a pending restart in
+  `/var/lib/deploy-hub/host-restart/<app>.json` instead of restarting
+  anything. A second deploy before the restart keeps the copy, the rollback
+  target and the start of the wait. The state file is locked
+  (`<app>.lock`) while host-sync or host-restart works on it.
+- `deploy-hub-host-restart.timer` (root, every minute) runs `deploy-hub
+  host-restart`. For every app with a pending restart it asks VictoriaMetrics
+  (the query endpoint next to `DEPLOY_HUB_METRICS_URL`) for
+  `max(max_over_time(<busy>[2m]))`. Only `0` restarts the unit; a busy value,
+  no answer or an error waits for the next minute, however long it takes.
+  There is no forced restart.
+- After `systemctl restart <unit>` it waits up to `within` for
+  `max(<version>{version=~"<sha7>.*"}) == 1`, the unit reporting the new
+  commit. If that does not come (or the restart fails), it puts
+  `<dst>.prev-<sha7>` back, restarts the unit again and checks the previous
+  version the same way.
+- Every restart writes `<app>@<sha7> host-restart ok|fail Ns unit=<unit>` and
+  pushes `deploy_hub_host_restart_success{app}`. Every run pushes
+  `deploy_hub_host_restart_pending_seconds{app}`, how long the restart has
+  waited for an idle unit (0 when nothing waits).
+- The busy metric comes from a scrape, so a run that starts in the seconds
+  between the last scrape and the restart is stopped by SIGTERM; the unit must
+  hand such work back on shutdown (the tasks runner returns the task to the
+  queue with the reason "runner stopped").
 
 ### Delivery to the router (remote-sync)
 
@@ -1483,6 +1527,7 @@ that folder for node-exporter (see «Metrics», tasks #792).
 | `/opt/<app>/.env` (and other `*.env` files of the app) | app secrets (600), referenced by compose, never in git; with a secrets store the hub writes the stored keys into them on every deploy |
 | `/opt/<app>/.deploy-state` | `current=`/`previous=` sha tags — rollback source of truth |
 | `/var/lib/deploy-hub/host-backup/<app>/` | root, 700: previous host files replaced by `host-sync`, newest 5 runs |
+| `/var/lib/deploy-hub/host-restart/<app>.json` | root, 700 directory: installed tag and the pending restart of a `restart:` spec, with its lock `<app>.lock` |
 
 ## Runner interface
 
@@ -1778,6 +1823,8 @@ their own time. This is the first step of moving the hub from push to textfile
 | `deploy_hub_caddy_routes`, `deploy_hub_caddy_sync_success`, `deploy_hub_caddy_reload` | — | last route sync |
 | `deploy_hub_provision_created_resources` | app | files/lines created by the last provision |
 | `deploy_hub_host_sync_success`, `deploy_hub_host_files_changed` | app | 1/0 and the number of replaced files for every `host-sync` run |
+| `deploy_hub_host_restart_success` | app | 1/0 for every `host-restart` of a unit (0: the new version did not report and the previous file was put back) |
+| `deploy_hub_host_restart_pending_seconds` | app | how long a pending restart has waited for its unit to be idle, every minute; 0 when nothing waits |
 | `deploy_hub_self_update_success`, `deploy_hub_self_update_installed` | — | 1/0 for every `self-update` run, and whether it installed a new binary |
 | `deploy_hub_command_exit_code` | command | exit code of a server command run (`runner`, `caddy-sync`, `host-sync`, `prune`, `provision`, `facts`); one sample per run |
 | `deploy_hub_command_duration_seconds` | command, result | run time; result `ok`, `fail`, `usage` or `panic` |

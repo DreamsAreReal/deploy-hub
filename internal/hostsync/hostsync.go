@@ -43,8 +43,9 @@ type Syncer struct {
 	Exec     procexec.Runner
 	Root     string
 	Backups  string
+	Restarts string
 	Accounts func(owner, group string) (int, int, error)
-	Chown    func(path string, uid, gid int) error
+	Chown    func(f *os.File, uid, gid int) error
 	Now      func() time.Time
 	Out      *console.Printer
 	Log      *slog.Logger

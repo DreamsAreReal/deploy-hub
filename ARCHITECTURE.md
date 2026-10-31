@@ -37,7 +37,7 @@ programs that subcommand may execute.
 | GitHub Actions runner of an **app** repo | `.github/workflows/deploy.yml` (reusable workflow from this repo) | `tools`, `render`, `gate` | install pinned scanners, render the app's compose file, run the quality gate |
 | EU runner `eu-deploy-hub` of **this** repo | `.github/workflows/ci.yml` → `deploy.yml` | `tools`, `gate` | the same gate, run on deploy-hub itself |
 | **VPS**, user `deploy` | SSH forced command | `runner` | `deploy`, `report`, `rollback`, `status`, `history` |
-| **VPS**, root | sudo (narrow rules), systemd timers, `onboard` over root SSH | `caddy-sync`, `host-sync`, `self-update`, `sudoers-sync`, `prune`, `provision`, `facts` | HTTPS routes, host files from a gated image, image cleanup, preparing `/opt/<app>/` |
+| **VPS**, root | sudo (narrow rules), systemd timers, `onboard` over root SSH | `caddy-sync`, `host-sync`, `host-restart`, `self-update`, `sudoers-sync`, `prune`, `provision`, `facts` | HTTPS routes, host files from a gated image, image cleanup, preparing `/opt/<app>/` |
 | **Operator machine** | you | `onboard` | connect a new app repo end to end |
 | **Operator machine**, under an MCP client | Claude Code, Claude Desktop or any MCP client | `mcp` | MCP server on stdio: `status`, `history`, `rollback` tools, each one SSH request to the runner with the deploy key |
 
@@ -234,6 +234,19 @@ restored the files, so only the journal records the failed deploy. A rollback
 or redeploy runs host-sync for the earlier tag instead of a blue-green swap,
 and `status` derives up and healthy from the last `host-sync` journal line.
 
+A host file can belong to a unit that must not be cut off mid-work: the tasks
+agent runner runs agents for hours. For a spec with `restart:` host-sync does
+not restart anything. It keeps the replaced binary as `<dst>.prev-<sha7>` and
+records a pending restart in `/var/lib/deploy-hub/host-restart/<app>.json`.
+The deploy finishes at once. `deploy-hub-host-restart.timer` (root, every
+minute, `hostsync.Restarter`) restarts the unit only after its busy metric has
+read 0 for two minutes in VictoriaMetrics, then waits for the unit to report the
+new commit and otherwise puts the previous copy back. Why a timer and not a
+wait inside the deploy: the deploy holds the app lock and the CI job, and the
+idle moment can come hours later. Why metrics and not a socket into the unit:
+the runner lives in its own network namespace, and its busy and version
+metrics already reach VictoriaMetrics through the tasks server.
+
 `report` (`report.go`) runs the same identity check, decodes the verdict,
 checks it belongs to this app and commit, and records `gate ok|fail` plus
 per-check metrics. `rollback` (`rollback.go`) needs no OIDC but only accepts
@@ -286,7 +299,7 @@ internal/caddy/     Caddyfile rendering and sync, standby port rule
 internal/smoke/     ports from smoke.conf that a deploy must not break
 internal/compose/   `render`: repo compose -> server compose (BYOC)
 internal/provision/ `provision` and `facts`: prepare /opt/<app>/ as root
-internal/hostsync/  `host-sync`: install an app's host files from its gated image as root
+internal/hostsync/  `host-sync`: install an app's host files from its gated image as root; `host-restart`: restart their unit when idle
 internal/selfupdate/ `self-update`, `sudoers-sync`, `ci-runner-sync`, `systemd-sync`: install a gated release of the hub, its sudoers rule, CI runner files and units
 internal/historysweep/ `history-sweep`: delete refs of a repo not rooted at its public snapshot
 internal/onboard/   `onboard` on the operator machine: stub, secrets, provision
